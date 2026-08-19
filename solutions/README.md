@@ -64,7 +64,17 @@ pnpm --dir core dev:agent-worker
 
 ### 方式二：Solution Pack 安装（发布/测试门禁）
 
-把 `solutions/customer-support/` 的 pack（manifest + lock + signature + artifacts）通过平台 Console 的解决方案页或 weflowctl 安装；安装后 Execution Profile 绑定 strategyRef，Agent 轮次按 profile 选择策略与技能。
+把 `solutions/customer-support/` 的 pack 打成 zip（manifest + lock + signature + artifacts + backend），通过平台 Console 的解决方案页或 `POST /api/v1/admin/solutions/import` 上传安装。安装成功后平台自动：
+- 记录 `solution.installations`（observed_state=installed）
+- **同步 manifest 声明的 Execution Profile 到 `agent.execution_profiles`**（status=active），Agent Turn 准入与按 `profile.strategyRef` 精确选策略立即可用
+
+随后用带 profile 的门禁验证：
+
+```bash
+node scripts/e2e-gate.mjs --profile weflow.customer-support/customer-support-v1
+```
+
+（`--profile` 参数让测试 Turn 绑定安装产生的 Execution Profile，验证"按 profile 选策略"而非回退首个策略。）
 
 ## 门禁流程（dev → platform）
 

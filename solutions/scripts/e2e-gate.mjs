@@ -29,6 +29,9 @@ const message =
 const expect = args.expect ?? "reply";
 const timeoutMs = (args.timeout ?? 90) * 1000;
 const keep = args.keep ?? false;
+/** Execution Profile id：安装 Solution 后由平台写入 agent.execution_profiles，
+ *  传此参数可验证按 profile.strategyRef 精确选择 Execution Strategy。 */
+const profileId = typeof args.profile === "string" ? args.profile : undefined;
 
 const databaseUrl =
   process.env.DATABASE_URL ?? "postgresql://weflow:weflow@127.0.0.1:5432/weflow";
@@ -53,7 +56,7 @@ const client = new Client({ connectionString: databaseUrl });
 await client.connect();
 
 console.log(`[e2e-gate] message: ${message.slice(0, 80)}`);
-console.log(`[e2e-gate] expect: ${expect}`);
+console.log(`[e2e-gate] expect: ${expect}${profileId ? ` | profile: ${profileId}` : ""}`);
 
 try {
   await client.query("BEGIN");
@@ -74,9 +77,11 @@ try {
     [messageId, conversationId, message, `e2e-msg-${suffix}`, traceId],
   );
   await client.query(
-    `INSERT INTO agent.turns (turn_id, trigger_message_id, conversation_id, status, trace_id)
-     VALUES ($1, $2, $3, 'queued', $4)`,
-    [turnId, messageId, conversationId, traceId],
+    `INSERT INTO agent.turns (turn_id, trigger_message_id, conversation_id, status, execution_profile_id, trace_id)
+     VALUES ($1, $2, $3, 'queued', $4, $5)`,
+    profileId
+      ? [turnId, messageId, conversationId, profileId, traceId]
+      : [turnId, messageId, conversationId, null, traceId],
   );
   await client.query("COMMIT");
 } catch (error) {
