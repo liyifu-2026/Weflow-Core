@@ -1,6 +1,6 @@
 # Weflow Solutions
 
-业务插件与 Solution Pack 仓库。**平台核心仓库（Weflow-Core）不包含任何业务代码**，本仓库是唯一业务来源：在这里开发、构建、发布业务插件，然后在任意 Weflow 平台实例（如 Weflow-Core 的 `release/platform-core`）上安装运行。
+业务插件与 Solution Pack 仓库。**平台核心仓库（Weflow-Core）不包含任何业务代码**，本仓库是唯一业务来源：在这里开发、构建、发布业务插件，然后在任意 Weflow 平台实例（如 Weflow-Core 的 `main` 分支）上安装运行。
 
 ## Repository shape
 
