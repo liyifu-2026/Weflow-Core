@@ -69,8 +69,21 @@ pnpm --dir core dev:agent-worker
 ## 门禁流程（dev → platform）
 
 1. 在本仓库开发/修改插件 → `pnpm build` → 方式一注入平台实例快速验证
-2. 验证通过 → 重新打包 Solution Pack → `pnpm verify` 通过
-3. 在平台实例用方式二安装 pack → 端到端测试 → 过关即发布该版本
+2. **自动化门禁**：`pnpm e2e:gate`（见下）对运行中的平台实例跑一轮真实 Agent 轮次
+3. 验证通过 → 重新打包 Solution Pack → `pnpm verify` 通过
+4. 在平台实例用方式二安装 pack → 端到端测试 → 过关即发布该版本
+
+### e2e:gate 门禁脚本
+
+`pnpm e2e:gate` 连接运行中的平台 Core（需已启动 api + agent-worker，且 worker 注入本仓库插件与 `MODEL_API_KEY`），自动完成：造一条入站消息 + queued Agent Turn → 入队 → 等待 worker 处理 → 打印回复与事件 → 清理测试数据。
+
+```bash
+node scripts/e2e-gate.mjs                          # 默认：设备故障消息，期望 reply
+node scripts/e2e-gate.mjs --message "我要退款" --expect handoff
+node scripts/e2e-gate.mjs --expect any --keep      # 保留测试数据便于排查
+```
+
+退出码：`0` 过关（completed 且符合期望）、`2` 完成但结果与 `--expect` 不符、`1` 失败/超时/异常。环境变量 `DATABASE_URL` / `REDIS_URL` 默认指向本地 127.0.0.1。
 
 ## Signing
 
