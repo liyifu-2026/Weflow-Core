@@ -1,0 +1,80 @@
+# Weflow Solutions
+
+业务插件与 Solution Pack 仓库。**平台核心仓库（Weflow-Core）不包含任何业务代码**，本仓库是唯一业务来源：在这里开发、构建、发布业务插件，然后在任意 Weflow 平台实例（如 Weflow-Core 的 `release/platform-core`）上安装运行。
+
+## Repository shape
+
+```text
+weflow-solutions/
+├─ packages/
+│  ├─ contracts/        # vendor: @weflow/contracts（平台契约类型，编译期依赖）
+│  ├─ plugin-sdk/       # vendor: @weflow/plugin-sdk（插件注册契约）
+│  └─ solution-sdk/     # vendor: @weflow/solution-sdk（Solution Pack 校验/打包）
+├─ solutions/
+│  └─ customer-support/ # 业务 Solution：manifest + lock + signature + backend + plugins
+├─ scripts/
+│  └─ verify-solution.mjs
+├─ package.json         # install:all / build / verify
+└─ README.md
+```
+
+> `packages/*` 是从平台核心复制的 vendor 副本（SDK 版本与平台 `compatibility.pluginSdk` 声明对齐）。SDK 升级时同步复制并重新构建。
+
+## 插件开发契约（平台加载器约定）
+
+平台 Agent Worker 通过环境变量注入插件，**约定固定导出名**：
+
+| 环境变量 | 加载对象 | 插件导出名 | 契约类型 |
+|---|---|---|---|
+| `SKILL_PLUGIN_PATH` | Skill | `skill` | `{ id, version, beforeKnowledge?, afterKnowledge?, execute? }` |
+| `STRATEGY_PLUGIN_PATH` | Execution Strategy | `strategy` | `AgentExecutionStrategy`（buildModelRequest / parseModelResponse / validateAction） |
+
+插件构建产物（`dist/index.js`）必须包含对应的具名导出，否则平台加载器无法注册。**保持导出名稳定**，这是"一个产物插入任何平台实例"的前提。
+
+## 构建
+
+```bash
+pnpm install:all          # 安装 vendor SDK 与全部插件依赖
+pnpm build                # 按序构建：contracts → plugin-sdk → solution-sdk → 插件
+pnpm verify               # SDK 级校验 solutions/customer-support（manifest/lock/digest）
+```
+
+构建顺序有依赖：插件 `tsconfig.json` 的 `paths` 指向 `packages/*/dist/index.d.ts`，因此 vendor SDK 必须先构建。
+
+## 发布（Solution Pack）
+
+`solutions/customer-support/` 是完整 Solution Pack（`solution.manifest.json` + `solution.lock.json` + `signature.json` + `artifacts/*.tgz` + `backend/`）。改动插件源码后需要**重新打包**：
+
+1. `pnpm build` 产出插件 `dist/`
+2. 重新生成 `artifacts/*.tgz`（`npm pack` 或 tar）
+3. 重新计算 digest 并更新 `solution.lock.json`
+4. 更新 `signature.json`（正式发布用平台公钥验签的私钥签名；开发期可用 dev-unsigned 占位）
+
+## 插入平台实例（两种方式）
+
+### 方式一：开发期快捷注入（推荐日常迭代）
+
+在平台 Core 的 Agent Worker 启动时注入本仓库构建产物（无需拷贝）：
+
+```bash
+SKILL_PLUGIN_PATH=/path/to/weflow-solutions/solutions/customer-support/plugins/product-troubleshooting/dist/index.js \
+STRATEGY_PLUGIN_PATH=/path/to/weflow-solutions/solutions/customer-support/plugins/customer-support-strategy/dist/index.js \
+pnpm --dir core dev:agent-worker
+```
+
+### 方式二：Solution Pack 安装（发布/测试门禁）
+
+把 `solutions/customer-support/` 的 pack（manifest + lock + signature + artifacts）通过平台 Console 的解决方案页或 weflowctl 安装；安装后 Execution Profile 绑定 strategyRef，Agent 轮次按 profile 选择策略与技能。
+
+## 门禁流程（dev → platform）
+
+1. 在本仓库开发/修改插件 → `pnpm build` → 方式一注入平台实例快速验证
+2. 验证通过 → 重新打包 Solution Pack → `pnpm verify` 通过
+3. 在平台实例用方式二安装 pack → 端到端测试 → 过关即发布该版本
+
+## Signing
+
+`signature.json` 当前为 dev-unsigned 占位（`keyId: dev-key`），`verify` 脚本对占位签名跳过验签。正式发布前需：
+- 生成 Ed25519 签名密钥对，私钥离线保管
+- 用平台公钥（部署在平台侧）验签的私钥对 manifest digest 签名，更新 `signature.json`
+- 平台侧配置对应公钥后可启用强制验签

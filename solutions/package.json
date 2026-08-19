@@ -1,0 +1,15 @@
+{
+  "name": "weflow-solutions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "install:all": "pnpm --dir packages/contracts install --config.confirmModulesPurge=false && pnpm --dir packages/plugin-sdk install --config.confirmModulesPurge=false && pnpm --dir packages/solution-sdk install --config.confirmModulesPurge=false && pnpm --dir solutions/customer-support/plugins/customer-support-strategy install --config.confirmModulesPurge=false && pnpm --dir solutions/customer-support/plugins/product-troubleshooting install --config.confirmModulesPurge=false",
+    "build": "pnpm --dir packages/contracts build && pnpm --dir packages/plugin-sdk build && pnpm --dir packages/solution-sdk build && pnpm --dir solutions/customer-support/plugins/customer-support-strategy build && pnpm --dir solutions/customer-support/plugins/product-troubleshooting build",
+    "verify": "node scripts/verify-solution.mjs solutions/customer-support"
+  }
+}

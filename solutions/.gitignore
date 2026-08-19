@@ -1,0 +1,21 @@
+# Shared workspace artifacts
+.env
+.env.*
+!.env.example
+.data/
+*.log
+
+# Node / TypeScript
+node_modules/
+dist/
+dist-test/
+.pnpm-store/
+.npm-cache/
+coverage/
+.turbo/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

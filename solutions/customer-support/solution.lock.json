@@ -1,0 +1,56 @@
+{
+  "apiVersion": "weflow.io/v1",
+  "kind": "SolutionLock",
+  "solutionId": "weflow.customer-support",
+  "solutionVersion": "1.0.0",
+  "manifestDigest": "sha256:b1263c2050cad9c4058e1c853e7da6a037fa7316d4b2c720e17f0c63ef64b4fa",
+  "dependencies": [],
+  "artifacts": [
+    {
+      "id": "customer-support-strategy",
+      "ref": "artifacts/customer-support-strategy.tgz",
+      "registry": "file",
+      "digest": "sha256:28ea964c918247c54d163e1c26eae2b58ce5b11cb85a52fe79ef0b4e4b4c81b1",
+      "size": 37,
+      "platform": "linux",
+      "architecture": "x64"
+    },
+    {
+      "id": "product-troubleshooting",
+      "ref": "artifacts/product-troubleshooting.tgz",
+      "registry": "file",
+      "digest": "sha256:f279e0e3c3e2ea185bd392e378d24876800d82620776f6cd7f133dd89e03091e",
+      "size": 35,
+      "platform": "linux",
+      "architecture": "x64"
+    },
+    {
+      "id": "support-web",
+      "ref": "artifacts/support-web.tgz",
+      "registry": "file",
+      "digest": "sha256:264288a8ef93f981dcd4b98fc4c43cf4601ef73352f2782bd0567d3e2057af13",
+      "size": 23,
+      "platform": "linux",
+      "architecture": "x64"
+    },
+    {
+      "id": "support-schema",
+      "ref": "artifacts/support-schema.sql",
+      "registry": "file",
+      "digest": "sha256:dee984ba08817582027f97dacb1199c4d99009abc6fbb1d7dca11cca0bb5983c",
+      "size": 29
+    },
+    {
+      "id": "mobile",
+      "ref": "artifacts/mobile.tgz",
+      "registry": "file",
+      "digest": "sha256:180915c25febe89ab3dc8312bcf3fa39e1299b86e860650afb86246c7af135ee",
+      "size": 18,
+      "platform": "android",
+      "architecture": "universal"
+    }
+  ],
+  "targetPlatform": "linux",
+  "targetArchitecture": "x64",
+  "sbom": "sbom.json"
+}

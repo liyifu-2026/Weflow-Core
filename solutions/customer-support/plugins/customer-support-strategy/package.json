@@ -1,0 +1,20 @@
+{
+  "name": "@weflow/customer-support-strategy",
+  "version": "1.0.0",
+  "description": "Customer Support Execution Strategy plugin for Weflow.",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
+  },
+  "dependencies": {
+    "@weflow/contracts": "link:../../../../packages/contracts"
+  },
+  "devDependencies": {
+    "@types/node": "24.1.0",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,192 @@
+{
+  "apiVersion": "weflow.io/v1",
+  "kind": "Solution",
+  "metadata": {
+    "id": "weflow.customer-support",
+    "name": "Customer Support Solution",
+    "version": "1.0.0",
+    "publisher": "weflow"
+  },
+  "compatibility": {
+    "platform": ">=1.0.0 <2.0.0",
+    "pluginSdk": "^1.0.0"
+  },
+  "dependencies": {
+    "capabilities": ["knowledge.retrieval"],
+    "solutions": []
+  },
+  "artifacts": [
+    {
+      "id": "customer-support-strategy",
+      "type": "plugin",
+      "ref": "npm:@weflow/customer-support-strategy",
+      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "product-troubleshooting",
+      "type": "plugin",
+      "ref": "npm:@weflow/product-troubleshooting",
+      "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    {
+      "id": "support-web",
+      "type": "app",
+      "ref": "npm:@weflow/support-web",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    {
+      "id": "mobile",
+      "type": "app",
+      "ref": "artifacts/mobile.tgz",
+      "digest": "sha256:180915c25febe89ab3dc8312bcf3fa39e1299b86e860650afb86246c7af135ee"
+    }
+  ],
+  "permissions": [
+    {
+      "id": "read-conversations",
+      "resource": "conversations",
+      "action": "read"
+    },
+    {
+      "id": "reply-conversations",
+      "resource": "conversations",
+      "action": "write"
+    }
+  ],
+  "configuration": {},
+  "secretSlots": [
+    {
+      "name": "support_bff_api_key",
+      "kind": "env",
+      "required": true
+    }
+  ],
+  "resources": [
+    {
+      "id": "support-schema",
+      "type": "schema",
+      "ref": "support"
+    }
+  ],
+  "executionProfiles": [
+    {
+      "id": "customer-support-v1",
+      "strategyRef": "weflow.customer-support/structured-v1",
+      "maxModelCalls": 2,
+      "maxToolCalls": 1,
+      "timeoutSeconds": 60,
+      "allowedTools": ["query_contact_profile", "retrieve_knowledge"],
+      "skills": [
+        {
+          "id": "weflow.customer-support/product-troubleshooting",
+          "version": "1.0.0"
+        }
+      ]
+    }
+  ],
+  "applications": [
+    {
+      "id": "support-web",
+      "type": "web",
+      "entry": "/support"
+    },
+    {
+      "id": "mobile",
+      "type": "mobile",
+      "entry": "/mobile"
+    }
+  ],
+  "healthChecks": [
+    {
+      "id": "support-web-health",
+      "type": "http",
+      "target": "/healthz",
+      "timeoutSeconds": 5
+    }
+  ],
+  "backend": {
+    "entry": "backend/customer-support/index.js"
+  },
+  "consoleExtensions": [
+    {
+      "id": "support-console",
+      "title": "客服工作台",
+      "entry": "http://localhost:5174/support/",
+      "nav": {
+        "group": "业务",
+        "label": "客服工作台",
+        "icon": "conversations",
+        "order": 10
+      },
+      "settings": true,
+      "settingsContributions": [
+        {
+          "id": "bff-api-key",
+          "category": "security",
+          "label": "Support BFF API Key",
+          "order": 10,
+          "schema": [
+            {
+              "key": "support_bff_api_key",
+              "label": "Support BFF API Key",
+              "type": "secret",
+              "required": true
+            }
+          ]
+        },
+        {
+          "id": "handoff-notice",
+          "category": "general",
+          "label": "转人工提示语",
+          "order": 20,
+          "schema": [
+            {
+              "key": "handoff_notice",
+              "label": "转人工提示语",
+              "type": "text",
+              "default": "已为您转接人工客服"
+            }
+          ]
+        }
+      ],
+      "dashboardContributions": [
+        {
+          "id": "today-consultations",
+          "title": "今日咨询量",
+          "defaultPosition": { "x": 0, "y": 0, "w": 3, "h": 2 },
+          "refreshInterval": 30000
+        },
+        {
+          "id": "pending-handoffs",
+          "title": "待处理人工会话",
+          "defaultPosition": { "x": 3, "y": 0, "w": 3, "h": 2 },
+          "refreshInterval": 30000
+        },
+        {
+          "id": "solution-status",
+          "title": "客服方案状态",
+          "defaultPosition": { "x": 6, "y": 0, "w": 3, "h": 2 },
+          "refreshInterval": 30000
+        }
+      ],
+      "apiRoutes": [
+        {
+          "prefix": "/customer-support",
+          "target": "http://127.0.0.1:3200/customer-support"
+        }
+      ],
+      "eventSubscriptions": ["customer_message", "handoff_created"]
+    },
+    {
+      "id": "console-demo",
+      "title": "远程组件演示",
+      "entry": "/console/src/remote-demo.ts",
+      "nav": {
+        "group": "业务",
+        "label": "组件演示",
+        "icon": "engine",
+        "order": 20
+      }
+    }
+  ]
+}
