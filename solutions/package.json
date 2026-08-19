@@ -12,7 +12,8 @@
     "build": "pnpm --dir packages/contracts build && pnpm --dir packages/plugin-sdk build && pnpm --dir packages/solution-sdk build && pnpm --dir solutions/customer-support/plugins/customer-support-strategy build && pnpm --dir solutions/customer-support/plugins/product-troubleshooting build",
     "pack:solution": "node scripts/pack-solution.mjs solutions/customer-support",
     "verify": "node scripts/verify-solution.mjs solutions/customer-support",
-    "e2e:gate": "node scripts/e2e-gate.mjs"
+    "e2e:gate": "node scripts/e2e-gate.mjs",
+    "flow:dev": "node scripts/dev-flow.mjs"
   },
   "devDependencies": {
     "bullmq": "5.81.2",

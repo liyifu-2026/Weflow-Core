@@ -78,6 +78,28 @@ node scripts/e2e-gate.mjs --profile weflow.customer-support/customer-support-v1
 
 ## 门禁流程（dev → platform）
 
+### 一键流程（推荐）
+
+`pnpm flow:dev` 把完整开发 → 门禁流水线固定为一条命令：
+
+```bash
+# 平台版 api(3100) + agent-worker(3101) + solution-runner 在线，且 worker 已注入本仓库插件
+ADMIN_USER=gate-admin ADMIN_PASSWORD='<密码>' pnpm flow:dev
+```
+
+流水线（任一步失败即中断，退出码非 0）：环境检查 → `pnpm build` → `pack:solution`（打真实 tgz + 更新 lock digest + dev 签名）→ `verify` → **快捷门禁**（e2e-gate，worker 注入的插件）→ **安装**（登录平台 → zip 打包 → import API → 轮询 operation 成功 → Execution Profile 自动落库）→ **正式门禁**（e2e-gate `--profile`，Turn 绑定安装产生的 Execution Profile，按 `strategyRef` 精确选策略）。
+
+常用变体：
+
+```bash
+pnpm flow:dev --skip-quick          # 跳过快捷门禁（只走正式安装路径）
+pnpm flow:dev --skip-install        # 只做 build/pack/verify + 快捷门禁
+pnpm flow:dev --expect handoff      # 期望转人工结果
+pnpm flow:dev --solution knowledge  # 其他 Solution（需先补全其插件结构）
+```
+
+### 分步执行
+
 1. 在本仓库开发/修改插件 → `pnpm build` → 方式一注入平台实例快速验证
 2. **自动化门禁**：`pnpm e2e:gate`（见下）对运行中的平台实例跑一轮真实 Agent 轮次
 3. 验证通过 → 重新打包 Solution Pack → `pnpm verify` 通过
