@@ -1,0 +1,62 @@
+name: Phase 7 Verify
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: weflow
+          POSTGRES_PASSWORD: weflow
+          POSTGRES_DB: weflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U weflow -d weflow_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgresql://weflow:weflow@localhost:5432/weflow_test
+      DATABASE_URL: postgresql://weflow:weflow@localhost:5432/weflow_test
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install all package workspaces
+        run: pnpm install:all
+
+      - name: Migrate test database
+        run: pnpm --dir core migrate
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+
+      - name: Platform verify (CI)
+        run: pnpm platform:verify:ci
+        env:
+          TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+
+      - name: Solution verify
+        run: pnpm solution:verify

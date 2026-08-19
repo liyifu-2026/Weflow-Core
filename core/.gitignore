@@ -1,0 +1,15 @@
+node_modules/
+.npm-cache/
+.corepack/
+.pnpm-store/
+dist/
+.dist.previous/
+.dist-root-owned-backup/
+coverage/
+.env
+.env.*
+!.env.example
+.data/
+.mimocode/
+*.log
+*.tsbuildinfo

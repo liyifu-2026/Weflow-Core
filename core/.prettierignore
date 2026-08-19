@@ -1,0 +1,7 @@
+dist/
+node_modules/
+.corepack/
+.npm-cache/
+.pnpm-store/
+.data/
+pnpm-lock.yaml

@@ -1,0 +1,73 @@
+{
+  "apiVersion": "weflow.io/v1",
+  "kind": "Solution",
+  "metadata": {
+    "id": "weflow.memory",
+    "name": "Memory Solution",
+    "version": "1.0.0",
+    "publisher": "weflow"
+  },
+  "compatibility": {
+    "platform": ">=1.0.0 <2.0.0",
+    "pluginSdk": "^1.0.0"
+  },
+  "dependencies": {
+    "capabilities": [],
+    "solutions": []
+  },
+  "artifacts": [],
+  "permissions": [],
+  "configuration": {},
+  "secretSlots": [],
+  "resources": [],
+  "executionProfiles": [],
+  "applications": [
+    {
+      "id": "memory-console",
+      "type": "web",
+      "entry": "/memory"
+    }
+  ],
+  "healthChecks": [],
+  "backend": {
+    "entry": "backend/memory/index.js"
+  },
+  "consoleExtensions": [
+    {
+      "id": "memory-console",
+      "title": "记忆库",
+      "settings": true,
+      "apiRoutes": [
+        {
+          "prefix": "/memory",
+          "target": "http://127.0.0.1:3200/memory"
+        }
+      ],
+      "settingsContributions": [
+        {
+          "id": "memory-enabled",
+          "category": "general",
+          "label": "客户记忆",
+          "order": 10,
+          "schema": [
+            {
+              "key": "memory_enabled",
+              "label": "启用客户记忆",
+              "type": "boolean",
+              "default": true
+            }
+          ]
+        }
+      ],
+      "dashboardContributions": [
+        {
+          "id": "memory-status",
+          "title": "记忆统计",
+          "defaultPosition": { "x": 3, "y": 1, "w": 3, "h": 2 },
+          "refreshInterval": 30000,
+          "api": "/memory/status"
+        }
+      ]
+    }
+  ]
+}

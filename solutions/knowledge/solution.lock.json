@@ -1,0 +1,12 @@
+{
+  "apiVersion": "weflow.io/v1",
+  "kind": "SolutionLock",
+  "solutionId": "weflow.knowledge",
+  "solutionVersion": "1.0.0",
+  "manifestDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "dependencies": [],
+  "artifacts": [],
+  "targetPlatform": "linux",
+  "targetArchitecture": "x64",
+  "sbom": "sbom.json"
+}

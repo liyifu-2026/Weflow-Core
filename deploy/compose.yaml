@@ -1,0 +1,42 @@
+# Weflow 本地开发环境（PostgreSQL + Redis）
+#
+# 用法：
+#   docker compose -f deploy/compose.yaml up -d
+#
+# 与 core/.env.example 的默认值匹配：
+#   DATABASE_URL=postgresql://weflow:weflow@127.0.0.1:5432/weflow
+#   REDIS_URL=redis://127.0.0.1:6379
+services:
+  postgres:
+    image: postgres:16
+    container_name: weflow-postgres
+    environment:
+      POSTGRES_USER: weflow
+      POSTGRES_PASSWORD: weflow
+      POSTGRES_DB: weflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - weflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weflow -d weflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: weflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - weflow-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  weflow-postgres-data:
+  weflow-redis-data:

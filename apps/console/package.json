@@ -1,0 +1,37 @@
+{
+  "name": "@weflow/console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=20.19 <25"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --build && vite build",
+    "build-only": "vite build",
+    "preview": "vite preview",
+    "type-check": "vue-tsc --build",
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "check:knowledge-boundary": "node scripts/check-knowledge-boundary.mjs",
+    "check": "node scripts/check-knowledge-boundary.mjs && vue-tsc --build && vite build"
+  },
+  "dependencies": {
+    "@weflow/solution-sdk": "link:../../packages/solution-sdk",
+    "@weflow/ui": "link:../../packages/ui",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.34",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@tsconfig/node22": "^22.0.5",
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-vue": "6.0.6",
+    "@vue/tsconfig": "^0.9.1",
+    "tsx": "4.23.12",
+    "typescript": "~6.0.3",
+    "vite": "^7.3.5",
+    "vue-tsc": "^3.2.8"
+  }
+}

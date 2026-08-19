@@ -1,0 +1,370 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785349492705,
+      "tag": "0000_phase0",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1785351278730,
+      "tag": "0001_phase1_conversation_ingress",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785352559518,
+      "tag": "0002_phase1_agent_turn",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785353864000,
+      "tag": "0003_phase1_outbound_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785381375397,
+      "tag": "0004_phase2_identity_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785391750278,
+      "tag": "0005_phase2_handoff",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785393079737,
+      "tag": "0006_phase3_knowledge_upload",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785394267405,
+      "tag": "0007_phase3_ingestion_chunks",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785398123212,
+      "tag": "0008_phase4_contact_profile_agent_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785399598265,
+      "tag": "0009_phase4_automatic_memory_capture",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785399943057,
+      "tag": "0010_phase4_memory_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785402288188,
+      "tag": "0011_phase4_inbound_image_media",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785403746773,
+      "tag": "0012_phase4_media_description",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1785416797141,
+      "tag": "0013_phase4_agent_case_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1785416999719,
+      "tag": "0014_phase4_agent_case_state_cascade",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1785419008148,
+      "tag": "0015_loving_mojo",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1785420000000,
+      "tag": "0016_reply_policy_and_batches",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1785434674550,
+      "tag": "0017_phase5_handoff_cycles",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1785435600000,
+      "tag": "0018_phase5_conversation_read_states",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1785436800000,
+      "tag": "0019_phase6_notification_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1785437400000,
+      "tag": "0020_phase6_notification_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1785523200000,
+      "tag": "0021_retire_local_knowledge_ingestion",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1785526800000,
+      "tag": "0022_client1_collaboration",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1785527400000,
+      "tag": "0023_client1_knowledge_assist",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1785528000000,
+      "tag": "0024_client1_claim_summary",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1785773400000,
+      "tag": "0025_contact_identity_and_shared_alias",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1785774000000,
+      "tag": "0026_handoff_transfer_target",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1785777600000,
+      "tag": "0027_handoff_structured_briefing",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1785781200000,
+      "tag": "0028_client1_conversation_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1785784800000,
+      "tag": "0029_client1_knowledge_threads",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1785788400000,
+      "tag": "0030_client1_knowledge_cockpit",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1785792000000,
+      "tag": "0031_client1_knowledge_thread_metadata",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1786381200000,
+      "tag": "0032_agent_trace_and_evaluation",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1786384800000,
+      "tag": "0033_client2_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1786388400000,
+      "tag": "0034_evaluation_runner",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1786474800000,
+      "tag": "0035_mobile_handoff_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1786531200000,
+      "tag": "0036_agent_case_facts_and_asked_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1786534800000,
+      "tag": "0037_agent_action_history",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1786534801000,
+      "tag": "0038_operator_runtime_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1786700000000,
+      "tag": "0039_contact_conversations_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1786800000000,
+      "tag": "0040_media_original_image",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1787100000000,
+      "tag": "0041_users_avatar",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1787390000000,
+      "tag": "0042_agent_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1787500000000,
+      "tag": "0043_knora_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1787600000000,
+      "tag": "0044_channel_media_ref",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1786987865375,
+      "tag": "0045_agent_tool_execution_recovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1788000000000,
+      "tag": "0048_solution_manager",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1788000000001,
+      "tag": "0049_agent_execution_profile_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1788000000002,
+      "tag": "0050_seed_platform_execution_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1788000000003,
+      "tag": "0051_solution_operation_payloads",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1788100000000,
+      "tag": "0052_solution_secret_assignments",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1788200000000,
+      "tag": "0053_solution_extension_settings",
+      "breakpoints": true
+    }
+  ]
+}

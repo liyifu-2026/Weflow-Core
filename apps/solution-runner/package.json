@@ -1,0 +1,25 @@
+{
+  "name": "weflow-solution-runner",
+  "version": "0.1.0",
+  "description": "Weflow Solution Runner: claims Solution Operations from Core, validates payloads, executes checkpointed simulated install/deploy/health, and reports back.",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "start": "node dist/main.js",
+    "create:operation": "node scripts/create-operation.mjs"
+  },
+  "dependencies": {
+    "@weflow/solution-sdk": "link:../../packages/solution-sdk"
+  },
+  "devDependencies": {
+    "pg": "8.22.0",
+    "typescript": "5.9.3"
+  }
+}

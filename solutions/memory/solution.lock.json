@@ -1,0 +1,12 @@
+{
+  "apiVersion": "weflow.io/v1",
+  "kind": "SolutionLock",
+  "solutionId": "weflow.memory",
+  "solutionVersion": "1.0.0",
+  "manifestDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "dependencies": [],
+  "artifacts": [],
+  "targetPlatform": "linux",
+  "targetArchitecture": "x64",
+  "sbom": "sbom.json"
+}

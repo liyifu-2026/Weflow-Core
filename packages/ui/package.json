@@ -1,0 +1,32 @@
+{
+  "name": "@weflow/ui",
+  "version": "0.1.0",
+  "description": "Shared Weflow UI utilities and components (extracted incrementally from Console).",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=20.19 <25"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:test": "tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "npm run build:test \u0026\u0026 node dist-test/tests/status-tone.test.js \u0026\u0026 node dist-test/tests/labels.test.js",
+    "check": "pnpm typecheck \u0026\u0026 pnpm test"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

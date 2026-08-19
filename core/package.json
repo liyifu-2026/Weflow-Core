@@ -1,0 +1,57 @@
+{
+  "name": "@weflow/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
+    "create-user": "tsx scripts/create-user.ts",
+    "promote-admin": "tsx scripts/promote-admin.ts",
+    "dev:api": "tsx watch apps/api/main.ts",
+    "dev:core": "pnpm dev:api",
+    "dev:agent-worker": "tsx watch apps/agent-worker/main.ts",
+    "dev:ingestion-worker": "tsx watch apps/ingestion-worker/main.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "migrate": "tsx infrastructure/postgres/migrate.ts",
+    "migrate:prod": "node dist/infrastructure/postgres/migrate.js",
+    "converge:legacy-media": "tsx scripts/converge-legacy-media.ts",
+    "start:api": "node dist/apps/api/main.js",
+    "start:core": "pnpm start:api",
+    "start:agent-worker": "node dist/apps/agent-worker/main.js",
+    "start:ingestion-worker": "node dist/apps/ingestion-worker/main.js",
+    "test": "vitest run --no-file-parallelism",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/multipart": "10.1.0",
+    "adm-zip": "0.5.16",
+    "argon2": "0.45.1",
+    "bullmq": "5.81.2",
+    "drizzle-orm": "0.45.2",
+    "fastify": "5.10.0",
+    "ioredis": "5.11.1",
+    "pg": "8.22.0",
+    "pino": "10.3.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/adm-zip": "0.5.7",
+    "@types/node": "24.1.0",
+    "@types/pg": "8.15.5",
+    "drizzle-kit": "0.31.10",
+    "eslint": "10.0.1",
+    "prettier": "3.9.6",
+    "tsx": "4.20.3",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.65.0",
+    "vitest": "4.1.10"
+  }
+}

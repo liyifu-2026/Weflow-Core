@@ -1,0 +1,73 @@
+{
+  "apiVersion": "weflow.io/v1",
+  "kind": "Solution",
+  "metadata": {
+    "id": "weflow.knowledge",
+    "name": "Knowledge Solution",
+    "version": "1.0.0",
+    "publisher": "weflow"
+  },
+  "compatibility": {
+    "platform": ">=1.0.0 <2.0.0",
+    "pluginSdk": "^1.0.0"
+  },
+  "dependencies": {
+    "capabilities": [],
+    "solutions": []
+  },
+  "artifacts": [],
+  "permissions": [],
+  "configuration": {},
+  "secretSlots": [],
+  "resources": [],
+  "executionProfiles": [],
+  "applications": [
+    {
+      "id": "knowledge-console",
+      "type": "web",
+      "entry": "/knowledge"
+    }
+  ],
+  "healthChecks": [],
+  "backend": {
+    "entry": "backend/knowledge/index.js"
+  },
+  "consoleExtensions": [
+    {
+      "id": "knowledge-console",
+      "title": "知识库",
+      "settings": true,
+      "apiRoutes": [
+        {
+          "prefix": "/knowledge",
+          "target": "http://127.0.0.1:3200/knowledge"
+        }
+      ],
+      "settingsContributions": [
+        {
+          "id": "retrieval-enabled",
+          "category": "general",
+          "label": "知识检索",
+          "order": 10,
+          "schema": [
+            {
+              "key": "retrieval_enabled",
+              "label": "启用知识检索",
+              "type": "boolean",
+              "default": true
+            }
+          ]
+        }
+      ],
+      "dashboardContributions": [
+        {
+          "id": "today-retrievals",
+          "title": "今日知识检索",
+          "defaultPosition": { "x": 0, "y": 1, "w": 3, "h": 2 },
+          "refreshInterval": 30000,
+          "api": "/knowledge/status"
+        }
+      ]
+    }
+  ]
+}

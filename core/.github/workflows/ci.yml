@@ -1,0 +1,57 @@
+name: Linux CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: weflow
+          POSTGRES_USER: weflow
+          POSTGRES_PASSWORD: weflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U weflow -d weflow"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql://weflow:weflow@127.0.0.1:5432/weflow
+      # 集成测试只允许连库名含 "test" 的专用库（tests/setup.ts 双重护栏）
+      TEST_DATABASE_URL: postgresql://weflow:weflow@127.0.0.1:5432/weflow_test
+      REDIS_URL: redis://127.0.0.1:6379
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm migrate
+      - name: Migrate test database
+        run: pnpm migrate
+        env:
+          DATABASE_URL: postgresql://weflow:weflow@127.0.0.1:5432/weflow_test
+      - run: pnpm check
+      - run: pnpm build
+      - run: bash scripts/health-smoke.sh

@@ -1,0 +1,47 @@
+# Shared workspace artifacts
+.env
+.env.*
+!.env.example
+.data/
+*.log
+
+# Business solutions live in the standalone Weflow-Solutions repo; never
+# commit local copies or install-time staging leftovers.
+solutions/customer-support/
+
+# Node / TypeScript
+node_modules/
+dist/
+dist-test/
+.pnpm-store/
+.npm-cache/
+coverage/
+.turbo/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+build/
+
+# Mobile / native build output
+.mimocode/
+android/.gradle/
+android/.cxx/
+android/build/
+android/app/build/
+android/local.properties
+ios/Pods/
+ios/build/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

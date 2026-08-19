@@ -1,0 +1,24 @@
+{
+  "name": "@weflow/consumer-fixture",
+  "version": "0.1.0",
+  "description": "External consumer fixture proving Weflow SDKs can be consumed through public entry points.",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build:test": "tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build:test && node dist-test/tests/consumer.test.js"
+  },
+  "dependencies": {
+    "@weflow/admin-sdk": "link:../admin-sdk",
+    "@weflow/contracts": "link:../contracts",
+    "@weflow/plugin-sdk": "link:../plugin-sdk"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

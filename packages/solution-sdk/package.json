@@ -1,0 +1,36 @@
+{
+  "name": "@weflow/solution-sdk",
+  "version": "0.1.0",
+  "description": "Weflow Solution Pack contract types, strict validators, canonical digest and pure planner foundation.",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:test": "tsc -p tsconfig.test.json",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "npm run build:test \u0026\u0026 node dist-test/tests/manifest.test.js \u0026\u0026 node dist-test/tests/lock.test.js \u0026\u0026 node dist-test/tests/signature.test.js \u0026\u0026 node dist-test/tests/planner.test.js",
+    "check": "pnpm typecheck \u0026\u0026 pnpm test"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
