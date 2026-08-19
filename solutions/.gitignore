@@ -4,6 +4,8 @@
 !.env.example
 .data/
 *.log
+/*.tgz
+.dev-secrets/
 
 # Node / TypeScript
 node_modules/

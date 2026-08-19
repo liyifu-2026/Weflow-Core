@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const solutionDir = resolve(root, process.argv[2] ?? "solutions/customer-support");
 
-const { validateSolutionManifest, validateSolutionLock } = await import(
+const { validateSolutionManifest, validateSolutionLock, manifestDigest } = await import(
   pathToFileURL(resolve(root, "packages/solution-sdk/dist/index.js")).href
 );
 
@@ -52,6 +52,15 @@ if (lock.solutionId !== manifest.metadata.id) {
   process.exit(1);
 }
 console.log(`PASS ${solutionDir}: manifest/lock id consistency`);
+
+const expectedManifestDigest = manifestDigest(manifest);
+if (lock.manifestDigest !== expectedManifestDigest) {
+  console.error(
+    `FAIL ${solutionDir}: lock.manifestDigest ${lock.manifestDigest} != canonical manifest digest ${expectedManifestDigest}`,
+  );
+  process.exit(1);
+}
+console.log(`PASS ${solutionDir}: lock.manifestDigest matches manifest`);
 
 // Artifact digest check for file-registry artifacts.
 for (const artifact of lock.artifacts ?? []) {
