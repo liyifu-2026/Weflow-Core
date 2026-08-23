@@ -1,7 +1,7 @@
 {
   "name": "weflowctl",
   "version": "0.1.0",
-  "description": "Weflow command line tool for Solution Pack validation, planning and installation commands.",
+  "description": "Weflow command line tool for npm-style Solution package management (publish / install / activate / update / rollback / registry).",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.5",
@@ -9,15 +9,18 @@
     "node": ">=24 <25"
   },
   "bin": {
-    "weflowctl": "./dist/cli.js"
+    "weflowctl": "./dist/tooling/weflowctl/src/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "start": "node dist/cli.js"
+    "start": "node dist/tooling/weflowctl/src/cli.js"
   },
   "dependencies": {
-    "@weflow/solution-sdk": "link:../../packages/solution-sdk"
+    "@weflow/solution-sdk": "link:../../packages/solution-sdk",
+    "esbuild": "0.25.6",
+    "semver": "7.7.2",
+    "tar": "7.4.3"
   },
   "devDependencies": {
     "typescript": "5.9.3"
