@@ -16,7 +16,11 @@
     "sourceMap": true,
     "skipLibCheck": true,
     "outDir": "dist",
-    "types": ["node"]
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@weflow/solution-sdk": ["../packages/solution-sdk/src/index.ts"]
+    }
   },
   "include": [
     "apps/**/*.ts",

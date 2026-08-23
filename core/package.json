@@ -31,14 +31,18 @@
   },
   "dependencies": {
     "@fastify/multipart": "10.1.0",
+    "@weflow/solution-sdk": "link:../../packages/solution-sdk",
     "adm-zip": "0.5.16",
     "argon2": "0.45.1",
     "bullmq": "5.81.2",
     "drizzle-orm": "0.45.2",
+    "esbuild": "0.25.6",
     "fastify": "5.10.0",
     "ioredis": "5.11.1",
     "pg": "8.22.0",
     "pino": "10.3.1",
+    "semver": "7.7.2",
+    "tar": "7.4.3",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -46,6 +50,7 @@
     "@types/adm-zip": "0.5.7",
     "@types/node": "24.1.0",
     "@types/pg": "8.15.5",
+    "@types/semver": "^7.8.0",
     "drizzle-kit": "0.31.10",
     "eslint": "10.0.1",
     "prettier": "3.9.6",
