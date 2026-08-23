@@ -51,6 +51,8 @@ const hostEventSchema = z
     kind: z.string().min(1),
     content: z.string(),
     mediaRef: z.string().nullable().optional(),
+    fileName: z.string().nullable().optional(),
+    mimeType: z.string().nullable().optional(),
     occurredAt: z.string().nullable().optional(),
     observedAt: z.string().min(1),
     isSelf: z.boolean(),
@@ -236,6 +238,29 @@ export class HttpChannelProvider
   }
 
   public async resolveImage(mediaRef: string): Promise<ChannelMediaResult> {
+    return this.#resolveMedia(mediaRef, {
+      allowedMimeTypes: ["image/jpeg", "image/png", "image/gif"],
+    });
+  }
+
+  public async resolveFile(mediaRef: string): Promise<ChannelMediaResult> {
+    // 文件附件可以是任意 MIME（PDF、Office、压缩包……），
+    // 只要求 Host 返回了明确的 Content-Type。
+    return this.#resolveMedia(mediaRef, {});
+  }
+
+  public async resolveAudio(mediaRef: string): Promise<ChannelMediaResult> {
+    // 语音只接受 Host 明确声明的 SILK 格式（Core 侧二次把关；
+    // 其余音频格式由对应 Channel Host 扩展白名单后再放开）。
+    return this.#resolveMedia(mediaRef, {
+      allowedMimeTypes: ["audio/x-silk"],
+    });
+  }
+
+  async #resolveMedia(
+    mediaRef: string,
+    options: { allowedMimeTypes?: string[] },
+  ): Promise<ChannelMediaResult> {
     let response: Response;
     try {
       response = await this.#fetch(
@@ -271,15 +296,24 @@ export class HttpChannelProvider
       );
     }
     const mimeType = response.headers.get("content-type")?.split(";")[0];
+    if (!mimeType) {
+      await response.body.cancel();
+      return { state: "failed", errorCode: "media_mime_unsupported" };
+    }
     if (
-      mimeType !== "image/jpeg" &&
-      mimeType !== "image/png" &&
-      mimeType !== "image/gif"
+      options.allowedMimeTypes &&
+      !options.allowedMimeTypes.includes(mimeType)
     ) {
       await response.body.cancel();
       return { state: "failed", errorCode: "media_mime_unsupported" };
     }
-    return { state: "ready", body: response.body, mimeType };
+    // X-Media-Variant: thumbnail 表示 Host 以缩略图回退（如微信 AES 密钥
+    // 缺失），Core 落盘为展示层并在密钥就绪后升级原图；其余值按 original。
+    const variant =
+      response.headers.get("x-media-variant") === "thumbnail"
+        ? ("thumbnail" as const)
+        : ("original" as const);
+    return { state: "ready", body: response.body, mimeType, variant };
   }
 
   public async get(
@@ -380,6 +414,8 @@ function toChannelEvent(event: z.infer<typeof hostEventSchema>): ChannelEvent {
     kind: event.kind,
     content: event.content,
     mediaRef: event.mediaRef ?? null,
+    fileName: event.fileName ?? null,
+    mimeType: event.mimeType ?? null,
     occurredAt: event.occurredAt ?? null,
     observedAt: event.observedAt,
     isSelf: event.isSelf,

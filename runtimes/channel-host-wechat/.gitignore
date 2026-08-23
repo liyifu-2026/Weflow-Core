@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Runtime logs
+wxauto_logs/
+@AutomationLog.txt
+*.log
+.data/
+
+# WeChat image AES keys (secrets) — never commit
+image_keys.json
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+COMMIT_MSG.txt
+
+# sibling repo
+WeChatBot-new/

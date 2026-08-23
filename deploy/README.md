@@ -9,7 +9,7 @@
   pnpm --dir core migrate
   ```
 - `core` 提供 `core-api`、`agent-worker`、`ingestion-worker` 三个进程。
-- Channel Host 是平台级通道入口适配层，不由 Core 隐式启动；具体通道实现由外部适配器提供。
+- Channel Host 是平台级通道入口适配层，不由 Core 隐式启动；本仓库的参考实现位于 `runtimes/channel-host-wechat`（Python/微信本地自动化），生产环境可按同一契约部署外部适配器。
 - `apps/console` 按前端工作台工具链发布；业务 Solution App 由各自 Solution Pack 发布。
 - ZhiNanKB/WeKnora 作为外部 Provider 部署，不被复制到本仓库。
 - 部署监控脚本（watchdog/backup）属私有运维资产，不随仓库发布。

@@ -5,10 +5,10 @@
  * 支持指数退避重试（最多3次）
  *
  * P0 稳定性职责（Phase 2：修复图片消息静默死亡）：
- * - 视觉能力未配置时，将图片视觉阶段媒体短路标记为失败（vision_not_configured），
- *   避免图片消息在无 Worker 的情况下永久排队
- * - 视觉阶段停滞媒体超时恢复（stale_timeout），覆盖 Worker 死亡等场景
- * - 为 terminal failed 的媒体自动创建"降级 Turn"（无图片描述），
+ * - 视觉/转写能力未配置时，将对应处理阶段媒体短路标记为失败
+ *   （vision_not_configured / asr_not_configured），避免消息永久排队
+ * - 处理阶段停滞媒体超时恢复（stale_timeout），覆盖 Worker 死亡等场景
+ * - 为 terminal failed 的媒体自动创建"降级 Turn"（无派生描述），
  *   保证任何客户消息都不会无声消失
  */
 import { and, asc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
@@ -28,7 +28,7 @@ export type MediaDispatcherDependencies = {
     agentEnabled: boolean;
     visionEnabled: boolean;
   }>;
-  /** 把被运营关闭视觉的媒体幂等路由到人工路径 */
+  /** 把被运营关闭多模态的媒体幂等路由到人工路径 */
   routeToHuman: (input: {
     messageId: string;
     conversationId: string;
@@ -38,55 +38,17 @@ export type MediaDispatcherDependencies = {
 /** 媒体处理队列名称 */
 export const MEDIA_PROCESSING_QUEUE = "media-processing";
 
-/** 视觉阶段状态：进入该状态后只依赖 Ingestion Worker 的视觉能力 */
-const VISION_STAGE_STATUSES = ["processing_queued", "processing"] as const;
+/** 多模态处理阶段状态：进入该状态后只依赖 Ingestion Worker 的处理能力 */
+const MULTIMODAL_STAGE_STATUSES = ["processing_queued", "processing"] as const;
 
-/** 视觉阶段停滞阈值：超过该时长未完成即视为卡死 */
+/** 处理阶段停滞阈值：超过该时长未完成即视为卡死 */
 const STALE_AFTER_MS = 15 * 60_000;
 
 /** 降级 Turn 每次扫描批量上限 */
 const DEGRADED_TURN_BATCH = 50;
-const ACTIVE_MEDIA_STATUSES = [
-  "queued",
-  "downloading",
-  "processing_queued",
-  "processing",
-] as const;
 
 /**
- * Voice was part of the historical media pipeline, but the formal Channel
- * seam currently guarantees text and image only. Mark legacy voice rows as a
- * terminal, auditable outcome instead of leaving them in a fake pending state.
- */
-export async function failUnsupportedLegacyVoiceMedia(
-  db: NodePgDatabase<typeof schema>,
-  logger: Logger,
-): Promise<number> {
-  const rows = await db
-    .update(schema.mediaAssets)
-    .set({
-      status: "failed",
-      errorCode: "legacy_voice_unsupported",
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(schema.mediaAssets.kind, "voice"),
-        inArray(schema.mediaAssets.status, ACTIVE_MEDIA_STATUSES),
-      ),
-    )
-    .returning({ mediaId: schema.mediaAssets.mediaId });
-  if (rows.length > 0) {
-    logger.warn(
-      { count: rows.length },
-      "Legacy voice media marked unavailable",
-    );
-  }
-  return rows.length;
-}
-
-/**
- * 多模态能力未配置时：把图片处理阶段媒体标记为失败。
+ * 多模态能力未配置时：把图片视觉阶段媒体标记为失败。
  * 注意只处理 processing_queued/processing（处理阶段）；
  * queued/downloading（历史通道下载阶段）保留，人工仍可查看文件。
  */
@@ -104,12 +66,41 @@ export async function failMediaWithoutVision(
     .where(
       and(
         eq(schema.mediaAssets.kind, "image"),
-        inArray(schema.mediaAssets.status, VISION_STAGE_STATUSES),
+        inArray(schema.mediaAssets.status, MULTIMODAL_STAGE_STATUSES),
       ),
     )
     .returning({ mediaId: schema.mediaAssets.mediaId });
   if (rows.length > 0) {
     logger.warn({ count: rows.length }, "Media failed: vision not configured");
+  }
+  return rows.length;
+}
+
+/**
+ * ASR 能力未配置时：把语音转写阶段媒体短路失败。
+ * 重试无意义（配置缺失不会自愈），直接终态；降级 Turn 由扫描兜底，
+ * 消息不静默。queued/downloading（下载阶段）保留给媒体同步完成落盘。
+ */
+export async function failMediaVoiceWithoutAsr(
+  db: NodePgDatabase<typeof schema>,
+  logger: Logger,
+): Promise<number> {
+  const rows = await db
+    .update(schema.mediaAssets)
+    .set({
+      status: "failed",
+      errorCode: "asr_not_configured",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(schema.mediaAssets.kind, "voice"),
+        inArray(schema.mediaAssets.status, MULTIMODAL_STAGE_STATUSES),
+      ),
+    )
+    .returning({ mediaId: schema.mediaAssets.mediaId });
+  if (rows.length > 0) {
+    logger.warn({ count: rows.length }, "Media failed: ASR not configured");
   }
   return rows.length;
 }
@@ -146,8 +137,9 @@ export async function recoverStaleMedia(
 }
 
 /**
- * 视觉能力被运营关闭（vision_enabled=false）时：视觉阶段媒体标记失败，
- * 且图片消息幂等进入人工路径（一次通知，不洪泛）——图片不静默、也不交给 Agent。
+ * 多模态能力被运营关闭（vision_enabled=false）时：图片与语音处理阶段媒体
+ * 标记失败，且对应消息幂等进入人工路径（一次通知，不洪泛）——
+ * 媒体不静默、也不交给 Agent。
  */
 export async function failMediaVisionDisabled(
   db: NodePgDatabase<typeof schema>,
@@ -163,8 +155,8 @@ export async function failMediaVisionDisabled(
     })
     .where(
       and(
-        eq(schema.mediaAssets.kind, "image"),
-        inArray(schema.mediaAssets.status, VISION_STAGE_STATUSES),
+        inArray(schema.mediaAssets.kind, ["image", "voice"]),
+        inArray(schema.mediaAssets.status, MULTIMODAL_STAGE_STATUSES),
       ),
     )
     .returning({
@@ -238,10 +230,6 @@ export async function createDegradedTurns(
           isNull(schema.mediaAssets.errorCode),
           ne(schema.mediaAssets.errorCode, "vision_disabled"),
         ),
-        or(
-          isNull(schema.mediaAssets.errorCode),
-          ne(schema.mediaAssets.errorCode, "legacy_voice_unsupported"),
-        ),
         isNull(schema.agentTurns.turnId),
       ),
     )
@@ -286,9 +274,12 @@ export function startMediaProcessingDispatcher(options: {
   redisUrl: string;
   logger: Logger;
   visionConfigured: boolean;
+  /** ASR（语音转写）运行时是否可用：MiMo 端点 + 转码工具链 */
+  asrConfigured?: boolean;
   dependencies: MediaDispatcherDependencies;
 }): () => void {
   const { dependencies } = options;
+  const asrConfigured = options.asrConfigured ?? options.visionConfigured;
   const queue = createJobQueue(MEDIA_PROCESSING_QUEUE, options.redisUrl);
   const abortController = new AbortController();
   // 记录上一次 visionEnabled 状态：短路处理只在状态翻转时执行一次，
@@ -298,9 +289,8 @@ export function startMediaProcessingDispatcher(options: {
     while (!abortController.signal.aborted) {
       try {
         // vision_enabled=false（运营关闭）优先于配置探测：
-        // 图片进人工路径；未配置但未关闭 → 短路失败 + 降级 Turn
+        // 图片/语音进人工路径；未配置但未关闭 → 短路失败 + 降级 Turn
         const runtime = await dependencies.readSettings(options.db);
-        await failUnsupportedLegacyVoiceMedia(options.db, options.logger);
         if (!runtime.visionEnabled) {
           if (visionEnabledBefore !== false) {
             await failMediaVisionDisabled(
@@ -309,36 +299,51 @@ export function startMediaProcessingDispatcher(options: {
               dependencies.routeToHuman,
             );
           }
-        } else if (options.visionConfigured) {
-          const assets = await options.db
-            .select()
-            .from(schema.mediaAssets)
-            .where(inArray(schema.mediaAssets.status, VISION_STAGE_STATUSES))
-            .orderBy(asc(schema.mediaAssets.createdAt))
-            .limit(100);
-          for (const asset of assets) {
-            // 正式 Channel 当前只承诺图片视觉处理；语音已延期。
-            if (asset.kind !== "image") continue;
-            const jobType = "media.describe_image";
-            const envelope: JobEnvelope = {
-              jobId: `media_${asset.mediaId.replace(/^media:/, "")}`,
-              jobType,
-              ownerModule: "media",
-              businessEntityId: asset.mediaId,
-              idempotencyKey: asset.mediaId,
-              attempt: asset.attempt,
-              traceId: `media:${asset.mediaId}`,
-              createdAt: asset.createdAt.toISOString(),
-            };
-            await queue.add(jobType, envelope, {
-              jobId: envelope.jobId,
-              attempts: 3,
-              backoff: { type: "exponential", delay: 2_000 },
-            });
-          }
         } else {
-          // 无视觉能力：短路失败，避免图片消息永久排队
-          await failMediaWithoutVision(options.db, options.logger);
+          const visionReady = options.visionConfigured;
+          const asrReady = asrConfigured;
+          if (!visionReady) {
+            // 视觉未配置：图片短路失败，避免图片消息永久排队
+            await failMediaWithoutVision(options.db, options.logger);
+          }
+          if (!asrReady) {
+            // ASR 未配置：语音短路失败，降级 Turn 兜底
+            await failMediaVoiceWithoutAsr(options.db, options.logger);
+          }
+          if (visionReady || asrReady) {
+            const assets = await options.db
+              .select()
+              .from(schema.mediaAssets)
+              .where(
+                inArray(schema.mediaAssets.status, MULTIMODAL_STAGE_STATUSES),
+              )
+              .orderBy(asc(schema.mediaAssets.createdAt))
+              .limit(100);
+            for (const asset of assets) {
+              const jobType =
+                asset.kind === "image" && visionReady
+                  ? "media.describe_image"
+                  : asset.kind === "voice" && asrReady
+                    ? "media.transcribe_voice"
+                    : null;
+              if (!jobType) continue;
+              const envelope: JobEnvelope = {
+                jobId: `media_${asset.mediaId.replace(/^media:/, "")}`,
+                jobType,
+                ownerModule: "media",
+                businessEntityId: asset.mediaId,
+                idempotencyKey: asset.mediaId,
+                attempt: asset.attempt,
+                traceId: `media:${asset.mediaId}`,
+                createdAt: asset.createdAt.toISOString(),
+              };
+              await queue.add(jobType, envelope, {
+                jobId: envelope.jobId,
+                attempts: 3,
+                backoff: { type: "exponential", delay: 2_000 },
+              });
+            }
+          }
         }
         visionEnabledBefore = runtime.visionEnabled;
         // 停滞恢复 + 降级 Turn（两种情况都执行）

@@ -5,6 +5,8 @@ import { api } from "../api";
 import { statusTone } from "../components/status-tone";
 import { healthLabel } from "../labels";
 import WfIcon from "../components/WfIcon.vue";
+import PageHeader from "../components/PageHeader.vue";
+import StatusStrip from "../components/StatusStrip.vue";
 
 type Installation = {
   solutionId: string;
@@ -49,6 +51,8 @@ const layoutKey = "wf-dashboard-layout";
 const savedLayout = ref<string[]>(
   JSON.parse(localStorage.getItem(layoutKey) || "[]"),
 );
+const dragOverId = ref<string | null>(null);
+
 const orderedCards = computed(() => {
   const byId = new Map(dashboardCards.value.map((card) => [card.id, card]));
   const ordered = savedLayout.value
@@ -65,7 +69,12 @@ function persistLayout() {
 function onCardDragStart(event: DragEvent, id: string) {
   if (event.dataTransfer) event.dataTransfer.setData("text/plain", id);
 }
+function onCardDragOver(event: DragEvent, id: string) {
+  event.preventDefault();
+  dragOverId.value = id;
+}
 function onCardDrop(event: DragEvent, targetId: string) {
+  dragOverId.value = null;
   const draggedId = event.dataTransfer?.getData("text/plain");
   if (!draggedId || draggedId === targetId) return;
   const list = orderedCards.value.map((card) => card.id);
@@ -74,6 +83,16 @@ function onCardDrop(event: DragEvent, targetId: string) {
   if (from < 0 || to < 0) return;
   list.splice(from, 1);
   list.splice(to, 0, draggedId);
+  savedLayout.value = list;
+  persistLayout();
+}
+function moveCard(id: string, direction: -1 | 1) {
+  const list = orderedCards.value.map((card) => card.id);
+  const from = list.indexOf(id);
+  const to = from + direction;
+  if (from < 0 || to < 0 || to >= list.length) return;
+  list.splice(from, 1);
+  list.splice(to, 0, id);
   savedLayout.value = list;
   persistLayout();
 }
@@ -106,6 +125,14 @@ const systemOverallLabel = computed(() => {
   if (states.includes("degraded")) return "降级";
   if (states.includes("healthy")) return "健康";
   return "未监测";
+});
+
+const systemTone = computed(() => {
+  const states = systemStatus.value?.services.map((item) => item.health.status) ?? [];
+  if (states.includes("unreachable")) return "bad";
+  if (states.includes("degraded")) return "warn";
+  if (states.includes("healthy")) return "good";
+  return "inactive";
 });
 
 function stateLabel(value: string | null | undefined): string {
@@ -173,352 +200,377 @@ onBeforeUnmount(stopAutoRefresh);
 </script>
 
 <template>
-  <div class="wf-page wf-action-center">
-    <header class="wf-page-head">
-      <div>
-        <h1>平台总览</h1>
-        <p class="wf-page-subtitle">查看已接入业务套装的生命状态与安装情况</p>
-      </div>
-      <button class="wf-button" title="刷新" @click="load">
-        <WfIcon name="refresh" :size="15" />
-        刷新
-      </button>
-    </header>
+  <div class="wf-page wf-overview">
+    <PageHeader title="平台总览" />
 
-    <section class="wf-stat-grid" aria-label="方案概览">
-      <div class="wf-stat-card">
-        <WfIcon name="engine" :size="20" />
-        <span class="wf-stat-value">{{ totalCount }}</span>
-        <span class="wf-stat-label">已接入方案</span>
-      </div>
-      <div class="wf-stat-card">
-        <WfIcon name="check" :size="20" />
-        <span class="wf-stat-value">{{ activeCount }}</span>
-        <span class="wf-stat-label">运行中</span>
-      </div>
-      <div
-        class="wf-stat-card"
-        :class="{ danger: degradedCount > 0 }"
-      >
-        <WfIcon name="alert" :size="20" />
-        <span class="wf-stat-value">{{ degradedCount }}</span>
-        <span class="wf-stat-label">异常方案</span>
-      </div>
-      <div class="wf-stat-card">
-        <WfIcon name="runtime" :size="20" />
-        <span class="wf-stat-value wf-stat-value-small">{{ lastUpdated }}</span>
-        <span class="wf-stat-label">最近更新</span>
-      </div>
-    </section>
+    <div v-if="error" class="wf-error" role="alert">
+      <span>{{ error }}</span>
+      <button class="wf-button compact" @click="load">重试</button>
+    </div>
 
-    <section class="wf-panel wf-system-summary">
-      <div class="wf-action-heading">
-        <h2>系统状态</h2>
-        <router-link class="wf-link" :to="{ path: '/system/status' }">
-          查看详情 →
-        </router-link>
-      </div>
-      <div v-if="systemAttentionServices.length" class="wf-system-issues">
-        <div
-          v-for="service in systemAttentionServices"
-          :key="service.key"
-          class="wf-system-issue"
-        >
-          <strong>{{ service.name }}</strong>
-          <span>{{ service.health.summary }}</span>
-          <span class="wf-status" :class="statusTone(service.health.status)">
-            {{ healthLabel(service.health.status).text }}
-          </span>
-        </div>
-      </div>
-      <p v-else class="wf-run-quiet">系统服务正常 · {{ systemOverallLabel }}</p>
-    </section>
+    <!-- 系统信号条：整机状态一条主线 -->
+    <StatusStrip
+      :tone="systemTone"
+      label="系统状态"
+      :value="loading ? '检测中…' : systemOverallLabel"
+      :meta="
+        systemStatus
+          ? `检查于 ${new Date(systemStatus.checkedAt).toLocaleString()}`
+          : '正在读取最新状态'
+      "
+      :chips="systemAttentionServices.map((service) => service.name)"
+      to="/system/status"
+    />
 
-    <section class="wf-dashboard-section">
-      <div class="wf-action-heading">
-        <h2>业务状态卡片</h2>
-        <span v-if="dashboardError" class="wf-error">{{ dashboardError }}</span>
-      </div>
-      <div v-if="dashboardLoading" class="wf-dashboard-grid">
-        <div v-for="i in 3" :key="i" class="wf-dashboard-card">
-          <span class="wf-skeleton">正在加载业务数据</span>
-        </div>
-      </div>
-      <div v-else-if="dashboardCards.length === 0" class="wf-empty">
-        <div>
-          <strong>暂无业务卡片</strong>
-          <p>安装并激活声明了 dashboardContributions 的业务方案后，这里会显示状态卡片。</p>
-        </div>
-      </div>
-      <div v-else class="wf-dashboard-grid">
-        <article
-          v-for="card in orderedCards"
-          :key="card.id"
-          class="wf-dashboard-card"
-          :class="{ empty: card.status === 'empty' }"
-          draggable="true"
-          @dragstart="onCardDragStart($event, card.id)"
-          @dragover.prevent
-          @drop="onCardDrop($event, card.id)"
-        >
-          <header>
-            <span class="wf-drag-handle" title="拖拽排序">⠿</span>
-            <strong>{{ card.title }}</strong>
-            <span class="wf-muted">{{ card.id }}</span>
-          </header>
-          <div v-if="card.status === 'ready' && card.data" class="wf-dashboard-body">
-            <template v-if="card.data.value !== undefined">
-              <span class="wf-dashboard-value">{{ card.data.value }}</span>
-              <span class="wf-dashboard-unit">{{ card.data.unit ?? "" }}</span>
-            </template>
-            <template v-else-if="card.data.observedState">
-              <span class="wf-dashboard-state">{{ stateLabel(card.data.observedState) }}</span>
-              <span class="wf-dashboard-unit">{{
-                card.data.healthState
-                  ? healthLabel(card.data.healthState).text
-                  : ""
-              }}</span>
-            </template>
-            <span v-else>—</span>
-          </div>
-          <div v-else-if="card.error" class="wf-dashboard-error">
-            {{ card.error }}
-          </div>
-          <div v-else class="wf-dashboard-empty">服务暂不可用或暂无数据</div>
+    <!-- 仪表盘读数：方案生命周期 -->
+    <section class="wf-panel wf-instruments-panel">
+      <div class="wf-instruments">
+        <article class="wf-instrument">
+          <span class="wf-instrument-label">已接入方案</span>
+          <strong class="wf-instrument-value">{{ totalCount }}</strong>
+          <span class="wf-instrument-note">全部已安装方案</span>
+        </article>
+        <article class="wf-instrument">
+          <span class="wf-instrument-label">运行中</span>
+          <strong class="wf-instrument-value good">{{ activeCount }}</strong>
+          <span class="wf-instrument-note">已激活方案</span>
+        </article>
+        <article class="wf-instrument" :class="{ alert: degradedCount > 0 }">
+          <span class="wf-instrument-label">异常方案</span>
+          <strong class="wf-instrument-value" :class="{ bad: degradedCount > 0, good: degradedCount === 0 }">{{ degradedCount }}</strong>
+          <span class="wf-instrument-note">降级或失败</span>
+        </article>
+        <article class="wf-instrument">
+          <span class="wf-instrument-label">最近更新</span>
+          <strong class="wf-instrument-value small">{{ lastUpdated }}</strong>
         </article>
       </div>
     </section>
 
-    <section class="wf-action-section">
-      <div class="wf-action-heading">
-        <h2>已接入业务方案</h2>
+    <!-- 业务信息 -->
+    <section class="wf-panel">
+      <div class="wf-panel-head">
+        <div>
+          <h2>业务信息</h2>
+          <span class="wf-panel-caption">由业务方案提供</span>
+        </div>
+        <span v-if="dashboardError" class="wf-error wf-error-inline">{{ dashboardError }}</span>
+      </div>
+
+      <div v-if="dashboardLoading" class="wf-panel-body">
+        <span class="wf-skeleton">正在加载业务数据</span>
+      </div>
+      <div v-else-if="dashboardCards.length === 0" class="wf-panel-body">
+        <div class="wf-empty wf-empty-compact">
+          <div>
+            <strong>暂无业务信息</strong>
+            <p>安装并激活声明了 dashboardContributions 的业务方案后，这里会显示相关信息。</p>
+          </div>
+        </div>
+      </div>
+      <div v-else class="wf-info-list">
+        <div v-for="card in orderedCards" :key="card.id" class="wf-info-row">
+          <div class="wf-info-label">
+            <strong>{{ card.title }}</strong>
+            <span class="wf-muted">{{ card.id }}</span>
+          </div>
+          <div class="wf-info-value">
+            <template v-if="card.status === 'ready' && card.data">
+              <template v-if="card.data.value !== undefined">
+                <strong>{{ card.data.value }}</strong>
+                <span class="wf-muted">{{ card.data.unit ?? "" }}</span>
+              </template>
+              <template v-else-if="card.data.observedState">
+                <strong>{{ stateLabel(card.data.observedState) }}</strong>
+                <span class="wf-muted">{{ card.data.healthState ? healthLabel(card.data.healthState).text : "" }}</span>
+              </template>
+              <span v-else>—</span>
+            </template>
+            <span v-else-if="card.error">{{ card.error }}</span>
+            <span v-else class="wf-muted">暂无数据</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 已接入业务方案 -->
+    <section class="wf-panel wf-solutions-panel">
+      <div class="wf-panel-head">
+        <div>
+          <h2>已接入业务方案</h2>
+          <span class="wf-panel-caption">安装、激活与健康状态</span>
+        </div>
         <router-link class="wf-link" :to="{ path: '/platform/solutions' }">
           进入方案管理 →
         </router-link>
       </div>
-
-      <div v-if="error" class="wf-error">
-        <span>{{ error }}</span>
-        <button class="wf-button compact" @click="load">重试</button>
-      </div>
-
-      <div class="wf-panel" style="margin-top: 12px">
-        <div class="wf-table-wrap">
-          <table class="wf-table">
-            <thead>
-              <tr>
-                <th>方案</th>
-                <th>版本</th>
-                <th>期望状态</th>
-                <th>实际状态</th>
-                <th>健康</th>
-                <th>更新时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="loading">
-                <td colspan="6">
-                  <span class="wf-skeleton">正在读取方案状态</span>
-                </td>
-              </tr>
-              <tr
-                v-for="item in installations"
-                :key="item.solutionId"
-                class="wf-solution-row"
-                @click="router.push('/platform/solutions')"
-              >
-                <td>{{ item.solutionId }}</td>
-                <td>{{ item.version }}</td>
-                <td>
-                  <i class="wf-health-mark" :class="statusTone(item.desiredState)"></i>
-                  {{ stateLabel(item.desiredState) }}
-                </td>
-                <td>
-                  <i class="wf-health-mark" :class="statusTone(item.observedState)"></i>
-                  {{ stateLabel(item.observedState) }}
-                </td>
-                <td>
-                  <i class="wf-health-mark" :class="statusTone(item.healthState)"></i>
-                  {{ healthLabel(item.healthState).text }}
-                </td>
-                <td>{{ new Date(item.updatedAt).toLocaleString() }}</td>
-              </tr>
-              <tr v-if="!loading && installations.length === 0">
-                <td colspan="6" class="wf-empty">还没有安装任何业务方案</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+      <div class="wf-table-wrap">
+        <table class="wf-table">
+          <thead>
+            <tr>
+              <th>方案</th>
+              <th>版本</th>
+              <th>期望状态</th>
+              <th>实际状态</th>
+              <th>健康</th>
+              <th>更新时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="loading">
+              <td colspan="6">
+                <span class="wf-skeleton">正在读取方案状态</span>
+              </td>
+            </tr>
+            <tr
+              v-for="item in installations"
+              :key="item.solutionId"
+              class="wf-solution-row"
+              @click="router.push('/platform/solutions')"
+            >
+              <td><strong class="wf-mono">{{ item.solutionId }}</strong></td>
+              <td class="wf-mono">{{ item.version }}</td>
+              <td>
+                <i class="wf-health-mark" :class="statusTone(item.desiredState)"></i>
+                {{ stateLabel(item.desiredState) }}
+              </td>
+              <td>
+                <i class="wf-health-mark" :class="statusTone(item.observedState)"></i>
+                {{ stateLabel(item.observedState) }}
+              </td>
+              <td>
+                <i class="wf-health-mark" :class="statusTone(item.healthState)"></i>
+                {{ healthLabel(item.healthState).text }}
+              </td>
+              <td class="wf-muted">{{ new Date(item.updatedAt).toLocaleString() }}</td>
+            </tr>
+            <tr v-if="!loading && installations.length === 0">
+              <td colspan="6" class="wf-empty">还没有安装任何业务方案</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </section>
   </div>
 </template>
 
 <style scoped>
-.wf-page-subtitle {
-  margin: 2px 0 0;
-  color: var(--wf-text-muted);
-  font-size: var(--wf-type-secondary);
+.wf-overview {
+  max-width: 1240px;
 }
-.wf-stat-grid {
+.wf-overview .wf-panel {
+  margin-bottom: 16px;
+}
+.wf-overview .wf-panel:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- 仪表盘读数：信息条 ---------- */
+.wf-instruments-panel {
+  margin-bottom: 16px;
+}
+.wf-instruments {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--wf-space-3);
-  margin: var(--wf-space-4) 0 var(--wf-space-3);
 }
-.wf-stat-card {
+.wf-instrument {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 18px;
+  border-right: 1px solid var(--wf-border);
+  background: transparent;
+}
+.wf-instrument:last-child {
+  border-right: 0;
+}
+.wf-instrument-label {
+  color: var(--wf-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.wf-instrument-value {
+  margin: 8px 0 4px;
+  font-size: 30px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.wf-instrument-value.good {
+  color: var(--wf-success);
+}
+.wf-instrument-value.bad {
+  color: var(--wf-danger);
+}
+.wf-instrument-value.small {
+  font-size: 16px;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+}
+.wf-instrument-note {
+  color: var(--wf-text-muted);
+  font-size: 11px;
+}
+.wf-instrument.alert {
+  background: var(--wf-surface-soft);
+}
+
+/* ---------- 业务卡片 ---------- */
+.wf-panel-caption {
+  color: var(--wf-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 8px;
+}
+.wf-error-inline {
+  margin: 0;
+}
+.wf-dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.wf-dash-card {
+  min-height: 96px;
   padding: 14px 16px;
-  background: var(--wf-surface);
   border: 1px solid var(--wf-border);
-  border-radius: var(--wf-radius-control);
-  color: var(--wf-text);
-  text-decoration: none;
+  border-radius: 10px;
+  background: var(--wf-surface-elevated);
+  box-shadow: none;
   transition:
     border-color var(--wf-motion-fast) var(--wf-ease-out),
     box-shadow var(--wf-motion-fast) var(--wf-ease-out);
 }
-.wf-stat-card svg {
-  color: var(--wf-primary);
+.wf-dash-card.drop-target {
+  border-color: var(--wf-primary);
+  box-shadow: 0 0 0 3px var(--wf-primary-soft);
 }
-.wf-stat-card.danger svg {
-  color: var(--wf-danger);
-}
-.wf-stat-value {
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1;
-}
-.wf-stat-value-small {
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.2;
-}
-.wf-stat-label {
-  color: var(--wf-text-secondary);
-  font-size: var(--wf-type-secondary);
-}
-.wf-action-heading {
+.wf-dash-card header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-.wf-action-heading h2 {
-  margin: 0;
-}
-.wf-solution-row {
-  cursor: pointer;
-}
-.wf-solution-row:hover td {
-  background: var(--wf-surface-hover);
-}
-.wf-dashboard-section {
-  margin-top: 16px;
-}
-.wf-dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px;
-  margin-top: 12px;
-}
-.wf-dashboard-card {
-  padding: 14px;
-  border: 1px solid var(--wf-border);
-  border-radius: var(--wf-radius-control);
-  background: var(--wf-surface);
-  cursor: grab;
-}
-.wf-dashboard-card:active {
-  cursor: grabbing;
-}
-.wf-dashboard-card header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.wf-dashboard-card header strong {
-  font-size: 14px;
+  gap: 10px;
+  margin-bottom: 14px;
 }
 .wf-drag-handle {
+  display: grid;
+  place-items: center;
   color: var(--wf-text-muted);
   cursor: grab;
-  font-size: 14px;
-  line-height: 1;
   user-select: none;
 }
-.wf-dashboard-card header span {
-  font-size: 11px;
-  color: var(--wf-text-muted);
+.wf-dash-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wf-dash-title strong {
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.wf-dashboard-body {
+.wf-dash-title small {
+  color: var(--wf-text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wf-dash-order {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--wf-motion-fast) var(--wf-ease-out);
+}
+.wf-dash-card:hover .wf-dash-order,
+.wf-dash-card:focus-within .wf-dash-order {
+  opacity: 1;
+}
+.wf-dash-order .wf-icon-button {
+  width: 26px;
+  height: 26px;
+}
+.wf-dash-order .flip {
+  transform: rotate(180deg);
+}
+.wf-dash-body {
   display: flex;
   align-items: baseline;
   gap: 6px;
 }
-.wf-dashboard-value {
+.wf-dash-value {
   font-size: 28px;
   font-weight: 700;
   line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }
-.wf-dashboard-unit {
+.wf-dash-unit {
   color: var(--wf-text-secondary);
   font-size: 13px;
 }
-.wf-dashboard-state {
+.wf-dash-state {
   font-size: 18px;
   font-weight: 700;
 }
-.wf-dashboard-error {
+.wf-dash-error {
   color: var(--wf-danger);
   font-size: 13px;
 }
-.wf-dashboard-empty {
+.wf-dash-empty {
   color: var(--wf-text-muted);
   font-size: 13px;
 }
-.wf-dashboard-card.empty {
+.wf-dash-card.empty {
   background: var(--wf-surface-soft);
+  border-style: dashed;
 }
-.wf-system-summary {
-  margin-top: 16px;
-  padding: 14px 16px;
-}
-.wf-system-issues {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 12px;
-}
-.wf-system-issue {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--wf-border);
-  border-radius: var(--wf-radius-control);
-  background: var(--wf-surface-soft);
-}
-.wf-system-issue strong {
-  min-width: 120px;
-}
-.wf-system-issue span:not(.wf-status) {
-  flex: 1;
-  color: var(--wf-text-secondary);
-}
-.wf-run-quiet {
-  margin: 12px 0 0;
-  color: var(--wf-text-secondary);
-}
+
 @media (max-width: 1200px) {
-  .wf-stat-grid {
+  .wf-instruments {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* 业务信息列表 */
+.wf-info-list {
+  display: flex;
+  flex-direction: column;
+}
+.wf-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--wf-border);
+}
+.wf-info-row:last-child {
+  border-bottom: 0;
+}
+.wf-info-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.wf-info-label strong {
+  font-size: 14px;
+}
+.wf-info-label span {
+  font-size: 12px;
+}
+.wf-info-value {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: none;
+}
+.wf-info-value strong {
+  font-size: 20px;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
 }
 </style>

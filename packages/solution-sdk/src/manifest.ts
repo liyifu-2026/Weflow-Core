@@ -25,7 +25,6 @@ import type {
   PermissionAction,
   PluginApiRoute,
   SecretSlot,
-  SettingCategory,
   SettingContribution,
   SettingField,
   SettingFieldOption,
@@ -112,6 +111,7 @@ const SETTING_FIELD_OPTION_KEYS = new Set(["label", "value"]);
 const SETTING_CONTRIBUTION_KEYS = new Set([
   "id",
   "category",
+  "categoryLabel",
   "label",
   "component",
   "order",
@@ -127,7 +127,14 @@ const DASHBOARD_CONTRIBUTION_KEYS = new Set([
 ]);
 const DASHBOARD_POSITION_KEYS = new Set(["x", "y", "w", "h"]);
 const PLUGIN_API_ROUTE_KEYS = new Set(["prefix", "target"]);
-const HEALTH_CHECK_KEYS = new Set(["id", "type", "target", "timeoutSeconds"]);
+const HEALTH_CHECK_KEYS = new Set([
+  "id",
+  "name",
+  "type",
+  "target",
+  "port",
+  "timeoutSeconds",
+]);
 
 const ARTIFACT_TYPES: readonly ArtifactType[] = [
   "plugin",
@@ -142,12 +149,6 @@ const SETTING_FIELD_TYPES: readonly SettingFieldType[] = [
   "boolean",
   "select",
   "secret",
-];
-const SETTING_CATEGORIES: readonly SettingCategory[] = [
-  "general",
-  "integrations",
-  "security",
-  "advanced",
 ];
 const PERMISSION_ACTIONS: readonly PermissionAction[] = [
   "read",
@@ -465,7 +466,13 @@ function parseHealthCheck(
     addIssue(issues, `${path}.type`, "unknown health check type");
   }
   const type = isOneOf(typeValue, HEALTH_CHECK_TYPES) ? typeValue : undefined;
+  const name = readOptionalString(obj, "name", path, issues);
   const target = readString(obj, "target", path, issues);
+  const port = readNumber(obj, "port", path, issues, {
+    required: false,
+    integer: true,
+    min: 1,
+  });
   const timeoutSeconds = readNumber(obj, "timeoutSeconds", path, issues, {
     required: false,
     integer: true,
@@ -474,8 +481,10 @@ function parseHealthCheck(
   if (!id || !type || !target) return null;
   return {
     id,
+    ...(name === undefined ? {} : { name }),
     type,
     target,
+    ...(port === undefined ? {} : { port }),
     ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
   };
 }
@@ -579,13 +588,8 @@ function parseSettingContribution(
   const obj = parseStrictObject(input, SETTING_CONTRIBUTION_KEYS, path, issues);
   if (!obj) return null;
   const id = readId(obj, "id", path, issues);
-  const categoryValue = obj.category;
-  if (!isOneOf(categoryValue, SETTING_CATEGORIES)) {
-    addIssue(issues, `${path}.category`, "unknown setting category");
-  }
-  const category = isOneOf(categoryValue, SETTING_CATEGORIES)
-    ? categoryValue
-    : undefined;
+  const category = readString(obj, "category", path, issues);
+  const categoryLabel = readOptionalString(obj, "categoryLabel", path, issues);
   const label = readString(obj, "label", path, issues);
   const component = readOptionalString(obj, "component", path, issues);
   const order = readNumber(obj, "order", path, issues, {
@@ -609,6 +613,7 @@ function parseSettingContribution(
   return {
     id,
     category,
+    ...(categoryLabel === undefined ? {} : { categoryLabel }),
     label,
     ...(component === undefined ? {} : { component }),
     ...(order === undefined ? {} : { order }),

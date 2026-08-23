@@ -11,6 +11,62 @@
 
 `SERVER1_*`、`Server1Client` 等只允许作为短期兼容 alias 或历史数据说明出现。新代码应使用 Channel Host 术语。
 
+## 职责边界：Core / Console / Solutions
+
+- **Core / Console（`weflow`）**：平台层。负责认证、会话/消息/Handoff 等领域事实、系统管理、ExtensionHost、审计、设置等平台级能力。
+- **Solutions（`weflow-solutions`）**：业务层。负责具体业务逻辑、业务 UI、业务策略、业务技能、业务 BFF；`weflow-solutions` 是业务 Solution 的唯一来源。
+- 业务 UI 通过 `solution.manifest.json` 的 `consoleExtensions` 嵌入 Console；Console 只负责用 `ExtensionHost` 承载，不实现业务页面本身。
+
+## 绝对禁止
+
+- 禁止在 `weflow/apps/console` 中实现业务专属界面，包括但不限于：
+  - 客服工作台
+  - 会话 / Handoff 业务页面
+  - 微信 / 具体通道相关 UI
+  - 任何只属于某个 Solution 的页面
+- 禁止在 Core 中硬编码业务策略、业务 Prompt、业务状态机。
+- 禁止把 `weflow-solutions` 里的业务功能反向搬到 `weflow`（含 `apps/console`、`core` 及其他平台目录）。
+
+## 允许
+
+- Console 可以增加平台级、业务中立的通用能力，例如：
+  - ExtensionHost 增强
+  - 通用导航 / 设置 / 审计 / 系统状态
+  - 平台级 API 接入
+- 新增页面必须不依赖任何具体 Solution 才能运行；一旦页面依赖某个业务 Solution，就属于业务 UI，应放入 `weflow-solutions`。
+
+## 正确开发路径
+
+- 业务 UI：放 `weflow-solutions/solutions/<solution>/apps/<app>`，在 `solution.manifest.json` 的 `consoleExtensions` 声明入口和导航，通过 Console 的 `ExtensionHost` 加载。
+- 业务 Agent 能力：放 `weflow-solutions/solutions/<solution>/plugins`。
+- 业务后端：放 `weflow-solutions/solutions/<solution>/backend`。
+- 平台壳需要改动时：才修改 `weflow/apps/console`，且必须是平台级、业务中立的改动。
+
+## 提交前自检清单
+
+- 本次改动是否修改了 `weflow/apps/console`？
+  - 如果是，是否包含业务专属页面/路由/文案/组件？
+  - 如果是业务专属内容，必须移到 `weflow-solutions`，不能提交到 Core。
+- 本次业务改动是否放在了 `weflow-solutions/solutions/<solution>/`？
+  - 如果没有，说明放错仓库。
+- 业务页面是否通过 `consoleExtensions` 声明？
+  - 如果没有，Console 无法正确挂载。
+
+## 示例
+
+- 正确：
+  - `weflow-solutions/solutions/customer-support/apps/support-web`
+  - `weflow-solutions/solutions/customer-support/solution.manifest.json` 中的 `consoleExtensions`
+- 错误：
+  - `weflow/apps/console/src/weflow/views/ConversationsView.vue`
+  - 在 Console 中直接写“客服工作台 / 会话 / Handoff 业务页面”
+
+## 违规检测方法
+
+- PR / diff 中若出现 `weflow/apps/console` 下新增业务词（客服、工作台、Handoff 业务页、微信、具体通道 UI 等），必须暂停合入并确认归属。
+- 搜索 `weflow/apps/console` 中的业务专属标题、路由、组件；若找不到对应的 `weflow-solutions` 业务来源，即为违规。
+- 业务 UI 必须能在 `weflow-solutions/solutions/<solution>/solution.manifest.json` 的 `consoleExtensions` 中找到声明；找不到声明却出现在 Console 中，即为违规。
+
 ## Architectural rules
 
 1. Core 通过 `channel.events`、`channel.send`、`channel.media`、`channel.contacts` 与 Channel Host 通信。

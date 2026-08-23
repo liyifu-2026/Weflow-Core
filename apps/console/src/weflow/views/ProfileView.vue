@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 信息名片：客服编辑自己的对外形象（头像、显示名、专家标签）。
+ * 信息名片：操作员编辑自己的对外形象（头像、显示名、专家标签）。
  * 标签与专家队列同源——转人工时系统按标签把相关任务定向推送。
  * 与移动端 Client1（app/profile.tsx）同一 Server2 契约，跨端一致。
  */
@@ -8,6 +8,7 @@ import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { agentDisplayName } from "../labels";
 import { useWeflowAuthStore, type AgentTag } from "../auth-store";
+import DefaultAvatar from "../components/DefaultAvatar.vue";
 
 const auth = useWeflowAuthStore();
 const router = useRouter();
@@ -128,12 +129,7 @@ async function onFileChange(event: Event) {
 </script>
 
 <template>
-  <div class="wf-page wf-page-narrow">
-    <header class="wf-page-head">
-      <h1>信息名片</h1>
-      <p>头像与显示名会展示给客户和同事；标签用于转人工时定向推送。</p>
-    </header>
-
+  <div class="wf-profile-drawer">
     <section class="wf-section-block">
       <div class="wf-profile-row">
         <button
@@ -144,7 +140,7 @@ async function onFileChange(event: Event) {
           @click="pickAvatar"
         >
           <img v-if="user?.avatarUrl" :src="user.avatarUrl" :alt="agentDisplayName(user)" />
-          <span v-else class="wf-avatar">{{ fallbackLetter }}</span>
+          <DefaultAvatar v-else :name="user?.username" :size="52" />
           <span v-if="uploading" class="wf-spinner"></span>
         </button>
         <div class="wf-profile-copy">
@@ -159,7 +155,7 @@ async function onFileChange(event: Event) {
           @change="onFileChange"
         />
       </div>
-      <div v-if="avatarError" class="wf-error">{{ avatarError }}</div>
+      <div v-if="avatarError" class="wf-error" role="alert">{{ avatarError }}</div>
     </section>
 
     <section class="wf-section-block">
@@ -185,7 +181,7 @@ async function onFileChange(event: Event) {
           <span v-if="savingName" class="wf-spinner"></span>{{ savingName ? "保存中" : "保存" }}
         </button>
       </div>
-      <div v-if="nameError" class="wf-error">{{ nameError }}</div>
+      <div v-if="nameError" class="wf-error" role="alert">{{ nameError }}</div>
     </section>
 
     <section class="wf-section-block">
@@ -217,7 +213,7 @@ async function onFileChange(event: Event) {
           <span v-if="savingTags" class="wf-spinner"></span>{{ savingTags ? "保存中" : "保存" }}
         </button>
       </div>
-      <div v-if="tagError" class="wf-error">{{ tagError }}</div>
+      <div v-if="tagError" class="wf-error" role="alert">{{ tagError }}</div>
     </section>
 
     <section class="wf-section-block">
@@ -245,7 +241,7 @@ async function onFileChange(event: Event) {
   padding: 0;
   overflow: hidden;
   cursor: pointer;
-  background: var(--wf-subtle, #f1f3f5);
+  background: var(--wf-surface-soft);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -276,7 +272,7 @@ async function onFileChange(event: Event) {
   margin-top: 10px;
 }
 .wf-profile-saved {
-  color: var(--wf-green, #1a9e6c);
+  color: var(--wf-primary);
   font-weight: 600;
 }
 .wf-tag-chips {
@@ -285,7 +281,7 @@ async function onFileChange(event: Event) {
   gap: 8px;
 }
 .wf-chip {
-  border: 1px solid var(--wf-rule, #e2e6ea);
+  border: 1px solid var(--wf-border-strong);
   background: transparent;
   border-radius: 999px;
   padding: 7px 14px;
@@ -295,9 +291,9 @@ async function onFileChange(event: Event) {
   color: inherit;
 }
 .wf-chip.active {
-  background: var(--wf-blue-wash, #eaf3ff);
-  border-color: var(--wf-blue, #2f6fed);
-  color: var(--wf-blue, #2f6fed);
+  background: var(--wf-primary-soft);
+  border-color: var(--wf-primary);
+  color: var(--wf-primary);
 }
 .wf-row-button {
   display: flex;

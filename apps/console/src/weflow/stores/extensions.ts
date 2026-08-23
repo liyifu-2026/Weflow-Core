@@ -27,11 +27,12 @@ export type SettingField = {
   options?: Array<{ label: string; value: string }>;
 };
 
-export type SettingCategory = "general" | "integrations" | "security" | "advanced";
+export type SettingCategory = string;
 
 export type SettingContribution = {
   id: string;
   category: SettingCategory;
+  categoryLabel?: string;
   label: string;
   component?: string;
   order?: number;

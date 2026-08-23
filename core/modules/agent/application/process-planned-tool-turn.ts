@@ -158,6 +158,11 @@ export async function processPlannedToolTurn(
     .from(schema.agentTurns)
     .where(eq(schema.agentTurns.turnId, turnId))
     .limit(1);
+  const [conversation] = await db
+    .select({ contactId: schema.conversations.contactId })
+    .from(schema.conversations)
+    .where(eq(schema.conversations.conversationId, execution.conversationId))
+    .limit(1);
   const strategy = await resolveStrategy(
     db,
     { executionProfileId: turns[0]?.executionProfileId ?? null },
@@ -166,7 +171,7 @@ export async function processPlannedToolTurn(
   const strategySystem = strategy
     ? strategy.buildModelRequest({
         conversationId: execution.conversationId,
-        contactId: "",
+        contactId: conversation?.contactId ?? "",
         messages: context.history,
         facts: {},
         availableTools: [],

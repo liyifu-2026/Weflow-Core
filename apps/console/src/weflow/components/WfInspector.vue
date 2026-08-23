@@ -10,8 +10,10 @@
  * Inspector 内继续深入（如 联系人 → 历史对话），关闭后恢复原 Workspace。
  * Esc 关闭并把焦点还给触发元素。
  */
-import { toRef } from "vue";
+import { ref, toRef } from "vue";
 import { useEscClose } from "../composables/use-esc-close";
+import { useFocusTrap } from "../composables/use-focus-trap";
+import WfIcon from "./WfIcon.vue";
 
 const props = defineProps<{
   open: boolean;
@@ -24,7 +26,9 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ close: []; back: [] }>();
 
+const root = ref<HTMLElement | null>(null);
 useEscClose(toRef(props, "open"), () => emit("close"));
+useFocusTrap(root, toRef(props, "open"));
 </script>
 
 <template>
@@ -37,13 +41,16 @@ useEscClose(toRef(props, "open"), () => emit("close"));
     ></div>
   </Teleport>
   <aside
+    ref="root"
     class="wf-inspector"
     :class="{
       open: open,
       'has-back': (depth ?? 0) > 0,
       overlay: variant === 'overlay',
     }"
+    role="dialog"
     aria-label="上下文检查器"
+    :aria-modal="variant === 'overlay' ? 'true' : undefined"
   >
     <header class="wf-inspector-head">
       <button
@@ -52,7 +59,7 @@ useEscClose(toRef(props, "open"), () => emit("close"));
         aria-label="返回上一级"
         @click="emit('back')"
       >
-        ←
+        <WfIcon name="back" :size="17" />
       </button>
       <div class="wf-inspector-title">
         <strong>{{ title }}</strong>
@@ -65,7 +72,7 @@ useEscClose(toRef(props, "open"), () => emit("close"));
           aria-label="关闭"
           @click="emit('close')"
         >
-          ×
+          <WfIcon name="close" :size="17" />
         </button>
       </div>
     </header>

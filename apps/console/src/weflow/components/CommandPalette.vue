@@ -20,6 +20,9 @@ const query = ref("");
 const input = ref<HTMLInputElement | null>(null);
 const activeIndex = ref(0);
 const loaded = ref(false);
+const shortcutLabel = computed(() =>
+  /Mac|iPhone|iPad/i.test(navigator.platform) ? "⌘K" : "Ctrl K",
+);
 const solutions = ref<
   Array<{
     solutionId: string;
@@ -120,7 +123,7 @@ const dynamicCommands = computed<Command[]>(() => {
       key: `user-${user.userId}`,
       kind: "用户",
       title: user.username,
-      detail: user.role === "admin" ? "管理员" : "客服",
+      detail: user.role === "admin" ? "管理员" : "操作员",
       to: { path: "/system/users" },
     });
   }
@@ -194,7 +197,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
     title="搜索和快速前往（Ctrl / ⌘ K）"
     @click="show"
   >
-    <WfIcon name="search" :size="15" /><span>搜索</span><kbd>⌘K</kbd>
+    <WfIcon name="search" :size="15" /><span>搜索</span><kbd>{{ shortcutLabel }}</kbd>
   </button>
   <Teleport to="body">
     <div v-if="open" class="wf-command-mask" @click.self="close">

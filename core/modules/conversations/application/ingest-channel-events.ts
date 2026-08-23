@@ -187,7 +187,14 @@ async function ingestNormalizedEvents(
             new Date(event.occurredAt * 1000),
           );
         }
-        if (direction === "inbound" && event.kind === "image") {
+        if (
+          direction === "inbound" &&
+          (event.kind === "image" ||
+            event.kind === "file" ||
+            // 语音仅在无转写文本时建资产走 ASR 备选路径；
+            // 有转写的语音以正文文本直达 Agent/前端，无需媒体流水线
+            (event.kind === "voice" && event.content.trim() === ""))
+        ) {
           await transaction
             .insert(schema.mediaAssets)
             .values({
@@ -210,6 +217,8 @@ async function ingestNormalizedEvents(
       if (
         direction === "inbound" &&
         event.kind !== "image" &&
+        // 无转写文本的语音不立即建 Turn：等 ASR 成功（media ready）或失败降级
+        !(event.kind === "voice" && event.content.trim() === "") &&
         insertedMessages.length === 1 &&
         !agentPaused &&
         agentEnabled &&
@@ -290,11 +299,18 @@ async function ingestNormalizedEvents(
   }
 }
 
+const IMAGE_LIKE_KINDS = new Set(["image", "emoji", "emotion"]);
+/** 需要携带 mediaRef 的媒体类事件（文件附件、语音与图片同等对待） */
+const MEDIA_KINDS = new Set([...IMAGE_LIKE_KINDS, "file", "voice"]);
+/** Provider-neutral 通道类型映射（沿用源通道编号，业务层不解析） */
+const FILE_CHANNEL_TYPE = 49;
+const VOICE_CHANNEL_TYPE = 34;
+
 function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
-  if (event.kind !== "text" && event.kind !== "image") {
+  if (event.kind !== "text" && !MEDIA_KINDS.has(event.kind)) {
     throw new Error(`channel_event_unsupported_kind:${event.kind}`);
   }
-  if (event.kind === "image" && !event.mediaRef) {
+  if (MEDIA_KINDS.has(event.kind) && !event.mediaRef) {
     throw new Error(`channel_image_media_ref_required:${event.eventId}`);
   }
   const occurredAt = Date.parse(event.occurredAt ?? event.observedAt);
@@ -302,6 +318,8 @@ function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
     throw new Error(`channel_event_invalid_timestamp:${event.eventId}`);
   }
   const channelMessageId = event.channelMessageId ?? event.eventId;
+  const imageLike = IMAGE_LIKE_KINDS.has(event.kind);
+  const fileLike = event.kind === "file";
   return {
     eventId: event.eventId,
     conversationId: event.conversationRef,
@@ -309,8 +327,14 @@ function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
     sourceLocalId: null,
     sourceMediaRef: event.mediaRef ?? null,
     senderId: event.senderRef ?? null,
-    type: event.kind === "image" ? 3 : 1,
-    kind: event.kind,
+    type: imageLike
+      ? 3
+      : fileLike
+        ? FILE_CHANNEL_TYPE
+        : event.kind === "voice"
+          ? VOICE_CHANNEL_TYPE
+          : 1,
+    kind: imageLike ? "image" : event.kind,
     content: event.content,
     occurredAt: Math.floor(occurredAt / 1000),
     isSelf: event.isSelf,

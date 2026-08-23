@@ -638,9 +638,13 @@ export async function listConsoleExtensions(db: Database): Promise<
       .limit(1);
     const manifest = payloadRows[0]?.manifestJson as
       { consoleExtensions?: unknown } | undefined;
-    const extensions = Array.isArray(manifest?.consoleExtensions)
+    const rawExtensions = Array.isArray(manifest?.consoleExtensions)
       ? (manifest.consoleExtensions as Array<Record<string, unknown>>)
       : [];
+    const extensions = rawExtensions.filter((extension) => {
+      const entry = typeof extension.entry === "string" ? extension.entry : "";
+      return !entry.startsWith("/console/") && !entry.startsWith("./console/");
+    });
     if (extensions.length > 0) {
       result.push({
         solutionId: installation.solutionId,

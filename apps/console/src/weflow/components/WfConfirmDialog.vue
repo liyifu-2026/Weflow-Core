@@ -1,5 +1,10 @@
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { confirmDialogState } from "./confirm-dialog";
+import { useFocusTrap } from "../composables/use-focus-trap";
+
+const root = ref<HTMLElement | null>(null);
+useFocusTrap(root, computed(() => confirmDialogState.open));
 
 function close(value: boolean) {
   confirmDialogState.resolve?.(value);
@@ -15,7 +20,13 @@ function close(value: boolean) {
       class="wf-modal-mask"
       @click.self="close(false)"
     >
-      <div class="wf-modal wf-modal-narrow" role="alertdialog" aria-modal="true">
+      <div
+        ref="root"
+        class="wf-modal wf-modal-narrow"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="确认操作"
+      >
         <div class="wf-modal-body">
           <p class="wf-confirm-message">{{ confirmDialogState.message }}</p>
         </div>

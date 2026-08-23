@@ -33,8 +33,9 @@ export class MimoAudioClient {
 
   /**
    * 转写一段语音
-   * @param audio - 音频 Buffer（MP3、WAV 或 SILK）
-   * @param mimeType - 音频 MIME 类型（audio/mpeg、audio/wav 或 audio/silk）
+   * @param audio - 音频 Buffer（MiMo 仅接受 mp3/flac/m4a/wav/ogg；
+   * SILK 等原始编码须先经平台转码器转为 MP3 再调用本方法）
+   * @param mimeType - 音频 MIME 类型（如 audio/mpeg、audio/wav）
    * @returns 语音的中文转写（一行以内）
    *
    * 注意：专用 ASR 模型（mimo-v2.5-asr）要求请求**不得包含 text parts**

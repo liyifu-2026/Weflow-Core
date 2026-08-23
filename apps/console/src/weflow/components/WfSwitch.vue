@@ -63,7 +63,7 @@ function toggle() {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--wf-on-primary);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transform: translateX(2px);
   transition: transform var(--wf-motion-fast) var(--wf-ease-out);

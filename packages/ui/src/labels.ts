@@ -228,6 +228,8 @@ export function healthLabel(value: string | undefined | null): HealthLabel {
       return { text: "无法连接", tone: "bad" };
     case "not_monitored":
       return { text: "未监测", tone: "inactive" };
+    case "unknown":
+      return { text: "未知", tone: "inactive" };
     default:
       return { text: value || "未监测", tone: "inactive" };
   }
@@ -271,5 +273,5 @@ export function agentDisplayName(
     username?: string;
   } | null,
 ): string {
-  return user?.displayName || user?.username || "值班客服";
+  return user?.displayName || user?.username || "值班操作员";
 }

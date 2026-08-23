@@ -68,11 +68,16 @@ export async function buildAgentContext(
           ? "[对方发送了一张图片，当前无法查看内容]"
           : message.contentType === "voice" && message.mediaDescription
             ? `语音转写：${message.mediaDescription}`
-            : message.contentType === "voice"
-              ? "[对方发来一条语音，转写不可用]"
-              : message.text,
+            : // 通道侧已提供转写文本（如微信自动转文字）时直接用文本理解
+              message.contentType === "voice" && message.text
+              ? `语音转写：${message.text}`
+              : message.contentType === "voice"
+                ? "[对方发来一条语音，转写不可用]"
+                : message.text,
     ),
   };
+  const now = new Date();
+  const nowText = formatCurrentTime(now);
   return {
     history: history.map((message) => ({
       role: message.direction === "inbound" ? "user" : "assistant",
@@ -83,11 +88,13 @@ export async function buildAgentContext(
             ? "[对方发送了一张图片，当前无法查看内容]"
             : message.contentType === "voice" && message.mediaDescription
               ? `[语音转写：${message.mediaDescription}]`
-              : message.contentType === "voice"
-                ? "[对方发来一条语音，转写不可用]"
-                : message.text,
+              : message.contentType === "voice" && message.text
+                ? `[语音转写：${message.text}]`
+                : message.contentType === "voice"
+                  ? "[对方发来一条语音，转写不可用]"
+                  : message.text,
     })),
-    prompt: `\n\n上一人工接管周期结果（受控上下文；不含内部转交链）：${JSON.stringify(
+    prompt: `\n\n当前时间：${nowText}\n\n上一人工接管周期结果（受控上下文；不含内部转交链）：${JSON.stringify(
       previousHumanCycle,
     )}\n\n本批次消息摘要（由程序生成，不重复询问其中已确认的信息）：${JSON.stringify(
       batchSummary,
@@ -99,4 +106,20 @@ export async function buildAgentContext(
       })),
     )}`,
   };
+}
+
+const WEEKDAYS = [
+  "星期日",
+  "星期一",
+  "星期二",
+  "星期三",
+  "星期四",
+  "星期五",
+  "星期六",
+] as const;
+
+function formatCurrentTime(date: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const weekday: string = WEEKDAYS[date.getDay()] ?? "";
+  return `${String(date.getFullYear())}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${weekday} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }

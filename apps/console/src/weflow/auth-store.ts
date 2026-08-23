@@ -7,11 +7,11 @@ export type WeflowUser = {
   username: string;
   role: "admin" | "operator";
   mustChangePassword: boolean;
-  /** 客服头像相对路径（无头像为 null/undefined，兼容旧响应） */
+  /** 操作员头像相对路径（无头像为 null/undefined，兼容旧响应） */
   avatarUrl?: string | null;
   /** 信息名片显示名（空 = 展示 username） */
   displayName?: string | null;
-  /** 客服自选专家标签（专家队列 key 列表） */
+  /** 操作员自选专家标签（专家队列 key 列表） */
   tags?: string[];
 };
 
@@ -88,7 +88,7 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
     return result.user;
   }
 
-  /** 上传/更换客服头像（multipart；返回新的头像相对路径） */
+  /** 上传/更换操作员头像（multipart；返回新的头像相对路径） */
   async function uploadAvatar(file: File): Promise<string> {
     const form = new FormData();
     form.append("file", file);

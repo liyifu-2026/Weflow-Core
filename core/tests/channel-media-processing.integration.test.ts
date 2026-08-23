@@ -12,7 +12,7 @@ import {
 import * as schema from "../infrastructure/postgres/schema.js";
 import type { ChannelMediaSource } from "../modules/channel/contracts/channel-media-source.js";
 import { ingestChannelEvents } from "../modules/conversations/application/ingest-channel-events.js";
-import { syncChannelImages } from "../modules/media/application/sync-channel-images.js";
+import { syncChannelMedia } from "../modules/media/application/sync-channel-media.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -100,11 +100,17 @@ integration("Channel Host image media synchronization", () => {
           mimeType: "image/jpeg",
         });
       },
+      resolveFile: () => {
+        throw new Error("image assets must not use resolveFile");
+      },
+      resolveAudio: () => {
+        throw new Error("image assets must not use resolveAudio");
+      },
     };
     const storage = new LocalFileStorage(root);
 
-    await syncChannelImages(postgres.db, storage, source);
-    await syncChannelImages(postgres.db, storage, source);
+    await syncChannelMedia(postgres.db, storage, source);
+    await syncChannelMedia(postgres.db, storage, source);
 
     const assets = await postgres.db
       .select()

@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch, type Component } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 import { useExtensionStore } from "../stores/extensions";
 
 const route = useRoute();
-const router = useRouter();
 const extensions = useExtensionStore();
 
 const solutionId = computed(() => String(route.params.solutionId ?? ""));
@@ -12,11 +11,6 @@ const extensionId = computed(() => String(route.params.extensionId ?? ""));
 
 const current = computed(() =>
   extensions.find(solutionId.value, extensionId.value),
-);
-const solutionTitle = computed(() =>
-  current.value
-    ? `${current.value.solution.solutionId} · v${current.value.solution.version}`
-    : "",
 );
 
 const isModule = computed(() =>
@@ -72,19 +66,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="wf-page wf-page-wide">
-    <header class="wf-page-head">
-      <div>
-        <button class="wf-link" @click="router.back()">← 返回</button>
-        <h1>{{ current?.extension.title ?? "业务扩展" }}</h1>
-        <p v-if="solutionTitle" class="wf-page-subtitle">
-          {{ solutionTitle }}
-        </p>
-      </div>
-    </header>
-
+  <div class="wf-extension-page">
     <div v-if="!extensions.loaded" class="wf-panel">
-      <span class="wf-skeleton">正在加载业务扩展…</span>
+      <div class="wf-panel-body">
+        <span class="wf-skeleton">正在加载业务扩展…</span>
+      </div>
     </div>
     <div v-else-if="!current" class="wf-empty">
       <div>
@@ -103,7 +89,7 @@ onMounted(() => {
       ref="mountHost"
       class="wf-extension-module"
     ></div>
-    <div v-else-if="isModule && moduleError" class="wf-error">
+    <div v-else-if="isModule && moduleError" class="wf-error" role="alert">
       {{ moduleError }}
     </div>
     <div v-else-if="!current.extension.entry" class="wf-empty">
@@ -132,19 +118,16 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.wf-page-subtitle {
-  margin: 2px 0 0;
-  color: var(--wf-text-muted);
-  font-size: var(--wf-type-secondary);
+.wf-extension-page {
+  padding: 0;
 }
 .wf-extension-frame {
-  height: calc(100vh - 180px);
+  height: calc(100vh - 44px);
   min-height: 480px;
-  margin-top: 12px;
-  border: 1px solid var(--wf-border);
-  border-radius: var(--wf-radius-popover);
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
-  background: var(--wf-surface);
+  background: transparent;
 }
 .wf-extension-frame iframe {
   width: 100%;
@@ -153,11 +136,10 @@ onMounted(() => {
   display: block;
 }
 .wf-extension-module {
-  margin-top: 12px;
-  min-height: 400px;
-  padding: 16px;
-  border: 1px solid var(--wf-border);
-  border-radius: var(--wf-radius-popover);
-  background: var(--wf-surface);
+  min-height: calc(100vh - 44px);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 </style>

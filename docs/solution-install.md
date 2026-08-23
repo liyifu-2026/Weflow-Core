@@ -78,7 +78,7 @@ file: <solution.zip>
 - `entry`：业务前端地址；`iframe URL` 或远程 ES Module（`.ts` / `.js`，导出 `mount(container)` 或 Vue 组件）
 - `settings`：进入 Console「统一设置」中心，作为业务设置入口
 - `settingsSchema`：可选，声明设置字段，Console 自动生成表单并统一保存
-- `settingsContributions`：可选，声明设置项分类归属
+- `settingsContributions`：可选，声明设置项分类归属；`category` 是分类标识，`categoryLabel` 可选，用于在 Console 显示自定义分类名（缺省时 `general` 显示为「通用」，其他分类显示为分类标识本身）
 - `dashboardContributions`：可选，声明总览卡片（标题、布局、刷新间隔）
 - `apiRoutes`：可选，声明业务包 API 路由前缀与代理目标
 - `eventSubscriptions`：可选，订阅平台事件（如 `conversation.created`、`user.login`）

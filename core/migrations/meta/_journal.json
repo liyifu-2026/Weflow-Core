@@ -365,6 +365,20 @@
       "when": 1788200000000,
       "tag": "0053_solution_extension_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1788300000000,
+      "tag": "0054_memory_importance",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1788386400000,
+      "tag": "0055_media_source_variant",
+      "breakpoints": true
     }
   ]
 }

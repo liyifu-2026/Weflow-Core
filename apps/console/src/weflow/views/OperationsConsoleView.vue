@@ -15,6 +15,8 @@ import { confirmDialog } from "../components/confirm-dialog";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { api } from "../api";
 import WfSwitch from "../components/WfSwitch.vue";
+import PageHeader from "../components/PageHeader.vue";
+import { useRoute, useRouter } from "vue-router";
 
 type Settings = {
   agentEnabled: boolean;
@@ -62,8 +64,14 @@ const allowlists = ref<{ text: string[]; vision: string[] }>({
 });
 const status = ref<OperatorStatus | null>(null);
 const audit = ref<AuditEvent[]>([]);
-const detailOpen = ref(false);
-const diagnosticsOpen = ref(false);
+const route = useRoute();
+const router = useRouter();
+const initialView = typeof route.query.view === "string" ? route.query.view : "";
+const activeView = ref<"overview" | "capabilities" | "diagnostics">(
+  initialView === "capabilities" || initialView === "diagnostics"
+    ? initialView
+    : "overview",
+);
 
 let eventSource: EventSource | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -122,6 +130,14 @@ const activeIssues = computed(() => {
 function flash(message: string, kind: "ok" | "err" = "ok") {
   notice.value = message;
   noticeKind.value = kind;
+}
+
+function showView(view: "overview" | "capabilities" | "diagnostics") {
+  activeView.value = view;
+  const query = { ...route.query };
+  if (view === "overview") delete query.view;
+  else query.view = view;
+  void router.replace({ query });
 }
 
 async function refresh() {
@@ -275,18 +291,13 @@ onBeforeUnmount(disconnectStream);
 </script>
 
 <template>
-  <div class="wf-page wf-page-narrow">
-    <header class="wf-page-head">
-      <h1>运行</h1>
-      <button class="wf-button compact" :disabled="loading" @click="refresh">
-        刷新
-      </button>
-    </header>
+  <div class="wf-page">
+    <PageHeader title="运行" />
 
-    <p v-if="error" class="wf-error">{{ error }}</p>
+    <p v-if="error" class="wf-error" role="alert">{{ error }}</p>
     <p
       v-if="notice"
-      class="wf-notice"
+      class="wf-notice" role="status"
       :class="noticeKind === 'err' ? 'wf-error' : ''"
     >
       {{ notice }}
@@ -299,36 +310,46 @@ onBeforeUnmount(disconnectStream);
 
     <template v-else-if="settings && status">
       <!-- L1: 运行状态 -->
-      <section class="wf-section-block">
-        <div class="wf-run-head">
+      <section class="wf-panel wf-run-overview-panel">
+        <div class="wf-panel-head">
           <div>
-            <span class="wf-run-label">Agent</span>
-            <strong :class="agentRunning ? 'wf-run-good' : 'wf-run-bad'">{{
-              agentRunning ? "运行中" : "已停止"
-            }}</strong>
+            <h2>运行状态</h2>
+            <span class="wf-panel-caption">实时快照</span>
           </div>
-          <span class="wf-run-meta">{{
-            channelOnline ? "Channel Host 在线" : "Channel Host 离线"
-          }}</span>
-        </div>
-
-        <div class="wf-run-capabilities">
-          <span
-            v-for="cap in coreCapabilities"
-            :key="cap.key"
-            class="wf-run-cap"
-            :class="{ off: !cap.enabled }"
-          >
-            {{ cap.label }} {{ cap.enabled ? "开启" : "关闭" }}
+          <span class="wf-status" :class="channelOnline ? 'good' : 'bad'">
+            {{ channelOnline ? "Channel Host 在线" : "Channel Host 离线" }}
           </span>
+        </div>
+        <div class="wf-panel-body">
+          <div class="wf-run-head">
+            <div>
+              <span class="wf-run-label">Agent</span>
+              <strong :class="agentRunning ? 'wf-run-good' : 'wf-run-bad'">
+                {{ agentRunning ? "运行中" : "已停止" }}
+              </strong>
+            </div>
+          </div>
+          <div class="wf-run-capabilities">
+            <span
+              v-for="cap in coreCapabilities"
+              :key="cap.key"
+              class="wf-run-cap"
+              :class="{ off: !cap.enabled }"
+            >
+              {{ cap.label }} · {{ cap.enabled ? "开启" : "关闭" }}
+            </span>
+          </div>
         </div>
       </section>
 
       <!-- L1: 当前异常 -->
-      <section class="wf-section-block">
-        <template v-if="activeIssues.length">
-          <div class="wf-run-issue">
-            <span class="wf-run-issue-label">需要注意</span>
+      <section class="wf-panel wf-run-issues-panel">
+        <div class="wf-panel-head">
+          <h2>需要注意</h2>
+          <span class="wf-panel-caption">{{ activeIssues.length }} 项</span>
+        </div>
+        <div class="wf-panel-body">
+          <template v-if="activeIssues.length">
             <div
               v-for="issue in activeIssues"
               :key="issue.label"
@@ -337,17 +358,9 @@ onBeforeUnmount(disconnectStream);
               <strong>{{ issue.label }}</strong>
               <span>{{ issue.detail }}</span>
             </div>
-          </div>
-        </template>
-        <p v-else class="wf-run-quiet">
-          当前没有需要处理的运行异常。
-        </p>
-        <button
-          class="wf-link wf-link-button"
-          @click="detailOpen = !detailOpen"
-        >
-          {{ detailOpen ? "收起运行详情" : "查看运行详情 →" }}
-        </button>
+          </template>
+          <p v-else class="wf-run-quiet">当前没有需要处理的运行异常。</p>
+        </div>
       </section>
 
       <!-- Kill Switch：高影响控制，与普通设置视觉区分 -->
@@ -376,9 +389,9 @@ onBeforeUnmount(disconnectStream);
               label="AI 自动回复"
               @change="toggleAutoSend"
             />
-            <span>{{
-              settings.autoSendEnabled ? "自动回复已开启" : "自动回复已暂停"
-            }}</span>
+            <span>
+              {{ settings.autoSendEnabled ? "自动回复已开启" : "自动回复已暂停" }}
+            </span>
           </div>
           <button class="wf-button" :disabled="busy" @click="rollback">
             恢复上一份配置
@@ -386,144 +399,162 @@ onBeforeUnmount(disconnectStream);
         </div>
       </section>
 
+      <nav class="wf-run-tabs" aria-label="运行详情视图">
+        <button
+          class="wf-run-tab"
+          :class="{ active: activeView === 'capabilities' }"
+          @click="showView('capabilities')"
+        >
+          能力详情
+        </button>
+        <button
+          class="wf-run-tab"
+          :class="{ active: activeView === 'diagnostics' }"
+          @click="showView('diagnostics')"
+        >
+          诊断详情
+        </button>
+      </nav>
+
       <!-- L2: 能力详情 -->
-      <section v-if="detailOpen" class="wf-section-block">
-        <div class="wf-section-heading">
+      <section v-if="activeView === 'capabilities'" class="wf-panel wf-run-detail-panel">
+        <div class="wf-panel-head">
           <h2>能力详情</h2>
         </div>
-        <div class="wf-config-list">
-          <div
-            v-for="cap in coreCapabilities"
-            :key="cap.key"
-            class="wf-config-row"
-          >
-            <div>
-              <strong>{{ cap.label }}</strong>
-              <span class="wf-muted">{{ cap.impact }}</span>
-            </div>
-            <WfSwitch
-              :model-value="cap.enabled"
-              :disabled="busy"
-              :label="cap.label"
-              @change="
-                toggle(
-                  cap.key as
-                    | 'knowledgeEnabled'
-                    | 'memoryEnabled'
-                    | 'visionEnabled',
-                  $event,
-                )
-              "
-            />
-          </div>
-          <div class="wf-config-row">
-            <div>
-              <strong>主模型</strong>
-              <span class="wf-muted">文本对话模型</span>
-            </div>
-            <select
-              class="wf-select wf-model-select"
-              :value="settings.textModel"
-              :disabled="busy"
-              @change="save({ textModel: ($event.target as HTMLSelectElement).value })"
+        <div class="wf-panel-body">
+          <div class="wf-config-list">
+            <div
+              v-for="cap in coreCapabilities"
+              :key="cap.key"
+              class="wf-config-row"
             >
-              <option
-                v-for="model in allowlists.text"
-                :key="model"
-                :value="model"
-              >
-                {{ model }}
-              </option>
-            </select>
-          </div>
-          <div class="wf-config-row">
-            <div>
-              <strong>视觉模型</strong>
-              <span class="wf-muted">图片理解模型</span>
+              <div>
+                <strong>{{ cap.label }}</strong>
+                <span class="wf-muted">{{ cap.impact }}</span>
+              </div>
+              <WfSwitch
+                :model-value="cap.enabled"
+                :disabled="busy"
+                :label="cap.label"
+                @change="
+                  toggle(
+                    cap.key as
+                      | 'knowledgeEnabled'
+                      | 'memoryEnabled'
+                      | 'visionEnabled',
+                    $event,
+                  )
+                "
+              />
             </div>
-            <select
-              class="wf-select wf-model-select"
-              :value="settings.visionModel"
-              :disabled="busy"
-              @change="save({ visionModel: ($event.target as HTMLSelectElement).value })"
-            >
-              <option
-                v-for="model in allowlists.vision"
-                :key="model"
-                :value="model"
+            <div class="wf-config-row">
+              <div>
+                <strong>主模型</strong>
+                <span class="wf-muted">文本对话模型</span>
+              </div>
+              <select
+                class="wf-select wf-model-select"
+                :value="settings.textModel"
+                :disabled="busy"
+                @change="save({ textModel: ($event.target as HTMLSelectElement).value })"
               >
-                {{ model }}
-              </option>
-            </select>
+                <option
+                  v-for="model in allowlists.text"
+                  :key="model"
+                  :value="model"
+                >
+                  {{ model }}
+                </option>
+              </select>
+            </div>
+            <div class="wf-config-row">
+              <div>
+                <strong>视觉模型</strong>
+                <span class="wf-muted">图片理解模型</span>
+              </div>
+              <select
+                class="wf-select wf-model-select"
+                :value="settings.visionModel"
+                :disabled="busy"
+                @change="save({ visionModel: ($event.target as HTMLSelectElement).value })"
+              >
+                <option
+                  v-for="model in allowlists.vision"
+                  :key="model"
+                  :value="model"
+                >
+                  {{ model }}
+                </option>
+              </select>
+            </div>
           </div>
-        </div>
 
-        <div class="wf-section-heading">
-          <h2>最近配置修改</h2>
-        </div>
-        <div v-if="audit.length === 0" class="wf-empty wf-empty-compact">
-          暂无配置修改记录
-        </div>
-        <div v-else class="wf-audit-stream">
-          <div
-            v-for="event in audit.slice(0, 10)"
-            :key="event.auditId"
-            class="wf-audit-event"
-          >
-            <span class="wf-audit-time">{{
-              new Date(event.createdAt).toLocaleString()
-            }}</span>
-            <span class="wf-muted">{{ event.actorUsername ?? "系统" }}</span>
-            <span class="wf-muted">
-              {{ event.metadata?.previousValue ?? "—" }} →
-              {{ event.metadata?.nextValue ?? "—" }}
-            </span>
+          <div class="wf-section-subhead">
+            <h3>最近配置修改</h3>
+          </div>
+          <div v-if="audit.length === 0" class="wf-empty wf-empty-compact">
+            暂无配置修改记录
+          </div>
+          <div v-else class="wf-audit-stream">
+            <div
+              v-for="event in audit.slice(0, 10)"
+              :key="event.auditId"
+              class="wf-audit-event"
+            >
+              <span class="wf-audit-time">
+                {{ new Date(event.createdAt).toLocaleString() }}
+              </span>
+              <span class="wf-muted">{{ event.actorUsername ?? "系统" }}</span>
+              <span class="wf-muted">
+                {{ event.metadata?.previousValue ?? "—" }} →
+                {{ event.metadata?.nextValue ?? "—" }}
+              </span>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- L3: 管理员诊断 -->
-      <section class="wf-section-block">
-        <button
-          class="wf-link wf-link-button"
-          @click="diagnosticsOpen = !diagnosticsOpen"
-        >
-          {{ diagnosticsOpen ? "收起诊断" : "诊断详情 →" }}
-        </button>
-        <div v-if="diagnosticsOpen" class="wf-config-list">
-          <div class="wf-config-row">
-            <div>
-              <strong>积压 Turn</strong>
-              <span class="wf-muted">排队中的 Agent 任务</span>
+      <section v-if="activeView === 'diagnostics'" class="wf-panel wf-run-detail-panel">
+        <div class="wf-panel-head">
+          <h2>诊断详情</h2>
+        </div>
+        <div class="wf-panel-body">
+          <div class="wf-config-list">
+            <div class="wf-config-row">
+              <div>
+                <strong>积压 Turn</strong>
+                <span class="wf-muted">排队中的 Agent 任务</span>
+              </div>
+              <span class="wf-mono">{{ status.queuedTurnCount }}</span>
             </div>
-            <span class="wf-mono">{{ status.queuedTurnCount }}</span>
-          </div>
-          <div class="wf-config-row">
-            <div>
-              <strong>运行中 Turn</strong>
-              <span class="wf-muted">正在执行的任务</span>
+            <div class="wf-config-row">
+              <div>
+                <strong>运行中 Turn</strong>
+                <span class="wf-muted">正在执行的任务</span>
+              </div>
+              <span class="wf-mono">{{ status.runningTurnCount }}</span>
             </div>
-            <span class="wf-mono">{{ status.runningTurnCount }}</span>
-          </div>
-          <div class="wf-config-row">
-            <div>
-              <strong>待人工处理</strong>
-              <span class="wf-muted">当前待人工会话</span>
+            <div class="wf-config-row">
+              <div>
+                <strong>待人工处理</strong>
+                <span class="wf-muted">当前待人工会话</span>
+              </div>
+              <span class="wf-mono">{{ status.pendingHandoffCount }}</span>
             </div>
-            <span class="wf-mono">{{ status.pendingHandoffCount }}</span>
-          </div>
-          <div class="wf-config-row">
-            <div>
-              <strong>最近成功处理</strong>
-              <span class="wf-muted">最近一次完成时间</span>
+            <div class="wf-config-row">
+              <div>
+                <strong>最近成功处理</strong>
+                <span class="wf-muted">最近一次完成时间</span>
+              </div>
+              <span class="wf-mono">
+                {{
+                  status.lastCompletedTurnAt
+                    ? new Date(status.lastCompletedTurnAt).toLocaleString()
+                    : "—"
+                }}
+              </span>
             </div>
-            <span class="wf-mono">
-              {{
-                status.lastCompletedTurnAt
-                  ? new Date(status.lastCompletedTurnAt).toLocaleString()
-                  : "—"
-              }}
-            </span>
           </div>
         </div>
       </section>
@@ -532,6 +563,59 @@ onBeforeUnmount(disconnectStream);
 </template>
 
 <style scoped>
+.wf-run-overview-panel,
+.wf-run-issues-panel {
+  margin-bottom: 16px;
+}
+.wf-run-overview-panel .wf-run-head {
+  padding: 2px 0 14px;
+}
+.wf-run-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.wf-run-cap {
+  background: transparent;
+  color: var(--wf-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+.wf-run-cap.off {
+  color: var(--wf-text-muted);
+}
+.wf-run-issues-panel .wf-run-issue-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--wf-border);
+  font-size: 13px;
+}
+.wf-run-issues-panel .wf-run-issue-row:last-child {
+  border-bottom: 0;
+}
+.wf-run-issues-panel .wf-run-issue-row strong {
+  min-width: 96px;
+}
+.wf-run-issues-panel .wf-run-issue-row span {
+  color: var(--wf-text-secondary);
+}
+.wf-run-issues-panel .wf-run-quiet {
+  margin: 0;
+}
+.wf-run-detail-panel {
+  margin-bottom: 16px;
+}
+.wf-section-subhead {
+  margin: 22px 0 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--wf-border);
+}
+.wf-section-subhead h3 {
+  margin: 0;
+  font-size: 14px;
+}
 .wf-switch-row {
   display: inline-flex;
   align-items: center;
@@ -549,5 +633,29 @@ onBeforeUnmount(disconnectStream);
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+.wf-run-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 14px;
+  flex-wrap: wrap;
+}
+.wf-run-tab {
+  padding: 7px 14px;
+  border: 1px solid var(--wf-border);
+  border-radius: 999px;
+  background: var(--wf-surface);
+  color: var(--wf-text-secondary);
+  font-weight: 600;
+  cursor: pointer;
+}
+.wf-run-tab:hover {
+  border-color: var(--wf-border-strong);
+  color: var(--wf-text);
+}
+.wf-run-tab.active {
+  background: var(--wf-surface-soft);
+  border-color: var(--wf-border-strong);
+  color: var(--wf-text);
 }
 </style>

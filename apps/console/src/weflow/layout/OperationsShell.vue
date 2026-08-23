@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useWeflowAuthStore } from "../auth-store";
 import { agentDisplayName } from "../labels";
 import WfIcon from "../components/WfIcon.vue";
-import CommandPalette from "../components/CommandPalette.vue";
+import WeFlowLogo from "../components/WeFlowLogo.vue";
+import DefaultAvatar from "../components/DefaultAvatar.vue";
+import ProfileView from "../views/ProfileView.vue";
+import WfDrawer from "../components/WfDrawer.vue";
+import { useEscClose } from "../composables/use-esc-close";
 import WfConfirmDialog from "../components/WfConfirmDialog.vue";
 import { resetWeflowWorkspaceStores } from "../stores/reset";
 import { useExtensionStore } from "../stores/extensions";
@@ -13,72 +17,34 @@ const router = useRouter();
 const route = useRoute();
 const auth = useWeflowAuthStore();
 const extensions = useExtensionStore();
-const pageTitle = computed(() => {
-  const titles: Record<string, string> = {
-    overview: "平台总览",
-    users: "用户与角色",
-    solutions: "业务方案",
-    systemStatus: "系统状态",
-    operations: "运行",
-    settings: "统一设置",
-    audit: "审计日志",
-    profile: "信息名片",
-    help: "技术文档",
-  };
-  return titles[String(route.name ?? "")] ?? "Weflow";
-});
 const collapsed = ref(localStorage.getItem("wf-sidebar") === "collapsed");
 const theme = ref<"light" | "dark">(
   localStorage.getItem("wf-theme") === "dark" ? "dark" : "light",
 );
+const profileOpen = ref(false);
+const mobileNavOpen = ref(false);
+const noticeOpen = ref(false);
+watch(() => route.fullPath, () => { mobileNavOpen.value = false; noticeOpen.value = false; });
+useEscClose(computed(() => profileOpen.value), () => closeProfile());
 const groups = computed(() => [
   {
-    label: "总览",
+    label: "工作台",
     items: [{ to: "/", icon: "overview", label: "平台总览" }],
   },
   ...(auth.isAdmin
     ? [
         {
-          label: "方案",
+          label: "平台",
           items: [
-            {
-              to: "/platform/solutions",
-              icon: "engine",
-              label: "业务方案",
-            },
+            { to: "/system/status", icon: "runtime", label: "系统状态" },
+            { to: "/system/operations", icon: "engine", label: "运行" },
+            { to: "/platform/solutions", icon: "verify", label: "业务方案" },
+            { to: "/system/users", icon: "users", label: "用户与角色" },
+            { to: "/system/audit", icon: "audit", label: "审计日志" },
           ],
         },
       ]
     : []),
-  ...(auth.isAdmin
-    ? [
-        {
-          label: "设置",
-          items: [
-            {
-              to: "/settings",
-              icon: "engine",
-              label: "统一设置",
-            },
-          ],
-        },
-      ]
-    : []),
-  {
-    label: "系统",
-    items: [
-      { to: "/system/status", icon: "runtime", label: "系统状态" },
-      ...(auth.isAdmin
-        ? [{ to: "/system/users", icon: "users", label: "用户与角色" }]
-        : []),
-      ...(auth.isAdmin
-        ? [{ to: "/system/operations", icon: "engine", label: "运行" }]
-        : []),
-      ...(auth.isAdmin
-        ? [{ to: "/system/audit", icon: "audit", label: "审计日志" }]
-        : []),
-    ],
-  },
 ]);
 
 const dynamicGroups = computed(() => {
@@ -104,6 +70,10 @@ function toggleTheme() {
   localStorage.setItem("wf-theme", theme.value);
   applyTheme();
 }
+function toggleMobileNav() {
+  mobileNavOpen.value = !mobileNavOpen.value;
+}
+
 function toggleSidebar() {
   collapsed.value = !collapsed.value;
   localStorage.setItem("wf-sidebar", collapsed.value ? "collapsed" : "open");
@@ -113,17 +83,28 @@ async function signOut() {
   await auth.logout();
   await router.replace("/login");
 }
+function closeProfile() {
+  profileOpen.value = false;
+  if (route.query.profile === "1") {
+    const query = { ...route.query };
+    delete query.profile;
+    void router.replace({ query });
+  }
+}
+
 onMounted(() => {
   applyTheme();
+  if (route.query.profile === "1") profileOpen.value = true;
   void extensions.load();
 });
 </script>
 
 <template>
-  <div class="wf-shell" :class="{ 'is-collapsed': collapsed }">
+  <div v-if="mobileNavOpen" class="wf-mobile-nav-backdrop" @click="mobileNavOpen = false"></div>
+<div class="wf-shell" :class="{ 'is-collapsed': collapsed, 'mobile-nav-open': mobileNavOpen }">
     <aside class="wf-sidebar">
       <div class="wf-brand">
-        <span class="wf-brand-wordmark"><b>We</b>flow</span>
+        <WeFlowLogo v-if="!collapsed" :size="22" />
         <button
           class="wf-icon-button wf-collapse"
           :title="collapsed ? '展开侧栏' : '收起侧栏'"
@@ -154,46 +135,78 @@ onMounted(() => {
           </router-link>
         </section>
       </nav>
-      <div class="wf-user-area">
-        <details class="wf-row-menu wf-user-menu">
-          <summary class="wf-user-trigger" title="账号">
-            <img
-              v-if="auth.user?.avatarUrl"
-              :src="auth.user.avatarUrl"
-              :alt="agentDisplayName(auth.user)"
-              class="wf-user-avatar-img"
-            />
-            <span v-else class="wf-avatar">
-              {{ (auth.user?.username ?? "值").slice(0, 1).toUpperCase() }}
-            </span>
-            <span class="wf-user-name">
-              <strong>{{ agentDisplayName(auth.user) }}</strong>
-            </span>
-          </summary>
-          <div>
-            <button @click="router.push('/account/profile')">信息名片</button>
-            <button @click="signOut">退出登录</button>
-          </div>
-        </details>
-        <button
-          class="wf-user-help"
-          title="技术文档"
-          @click="router.push('/help')"
+      <div class="wf-sidebar-foot">
+        <router-link
+          v-if="auth.isAdmin"
+          to="/settings"
+          class="wf-nav-item"
+          active-class=""
+          exact-active-class="wf-route-active"
         >
-          <span class="wf-user-help-full">技术文档</span>
-          <span class="wf-user-help-short">?</span>
+          <WfIcon name="settings" />
+          <span>设置</span>
+        </router-link>
+        <router-link
+          to="/help"
+          class="wf-nav-item"
+          active-class=""
+          exact-active-class="wf-route-active"
+        >
+          <WfIcon name="knowledge" />
+          <span>技术文档</span>
+        </router-link>
+      </div>
+      <div class="wf-user-area">
+        <button
+          class="wf-user-trigger"
+          :title="`打开 ${agentDisplayName(auth.user)} 的信息名片`"
+          @click="profileOpen = true"
+        >
+          <img
+            v-if="auth.user?.avatarUrl"
+            :src="auth.user.avatarUrl"
+            :alt="agentDisplayName(auth.user)"
+            class="wf-user-avatar-img"
+          />
+          <DefaultAvatar
+            v-else
+            :name="auth.user?.username"
+            :size="30"
+            class="wf-user-default-avatar"
+          />
+          <span class="wf-user-name">
+            <strong>{{ agentDisplayName(auth.user) }}</strong>
+            <small>{{ auth.isAdmin ? "管理员" : "操作员" }}</small>
+          </span>
+        </button>
+        <button
+          class="wf-icon-button wf-user-logout"
+          title="退出登录"
+          aria-label="退出登录"
+          @click="signOut"
+        >
+          <WfIcon name="logout" />
         </button>
       </div>
     </aside>
-    <main class="wf-main">
+    <main id="wf-main-content" class="wf-main" tabindex="-1">
       <header class="wf-topbar">
-        <div class="wf-topbar-title">
-          <span class="wf-topbar-crumb">共享工作空间</span>
-          <span class="wf-topbar-sep">/</span>
-          <strong>{{ pageTitle }}</strong>
-        </div>
         <div class="wf-topbar-actions">
-          <CommandPalette />
+          <div class="wf-notice-wrap">
+            <button
+              class="wf-icon-button"
+              aria-label="通知"
+              :aria-expanded="noticeOpen ? 'true' : 'false'"
+              aria-haspopup="true"
+              @click="noticeOpen = !noticeOpen"
+            >
+              <WfIcon name="bell" />
+            </button>
+            <div v-if="noticeOpen" class="wf-notice-popover" role="status">
+              <strong>通知</strong>
+              <p>暂无新通知</p>
+            </div>
+          </div>
           <button
             class="wf-icon-button"
             :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'"
@@ -207,29 +220,59 @@ onMounted(() => {
       <router-view />
     </main>
   </div>
+  <WfDrawer :open="profileOpen" title="信息名片" @close="closeProfile()">
+    <ProfileView />
+  </WfDrawer>
   <WfConfirmDialog />
 </template>
 
 <style scoped>
 .wf-topbar {
-  justify-content: space-between;
+  justify-content: flex-end;
 }
-.wf-topbar-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+.wf-user-trigger {
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.wf-user-default-avatar {
+  color: var(--wf-rail-active-text);
+}
+.wf-user-logout {
+  flex: 0 0 auto;
+  color: var(--wf-rail-text);
+}
+.wf-user-logout:hover {
+  color: var(--wf-rail-text-strong);
+  background: var(--wf-rail-hover);
+}
+.is-collapsed .wf-user-logout {
+  display: none;
+}
+.wf-notice-wrap {
+  position: relative;
+}
+.wf-notice-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  width: 240px;
+  padding: 14px 16px;
+  background: var(--wf-surface-elevated);
+  border: 1px solid var(--wf-border-strong);
+  border-radius: 10px;
+  box-shadow: var(--wf-shadow-overlay);
+}
+.wf-notice-popover strong {
+  display: block;
+  margin-bottom: 4px;
   font-size: 13px;
 }
-.wf-topbar-crumb {
-  color: var(--wf-text-muted);
-}
-.wf-topbar-sep {
-  color: var(--wf-border-strong);
-}
-.wf-topbar-title strong {
-  font-weight: 650;
-  letter-spacing: -0.01em;
+.wf-notice-popover p {
+  margin: 0;
+  color: var(--wf-text-secondary);
+  font-size: 12px;
 }
 .wf-user-avatar-img {
   width: 30px;
@@ -238,32 +281,13 @@ onMounted(() => {
   border-radius: 50%;
   object-fit: cover;
 }
-.wf-user-help {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 2px;
-  padding: 6px 7px;
-  border: none;
-  background: transparent;
-  color: var(--wf-text);
-  font-size: 12px;
-  font-weight: 600;
-  border-radius: var(--wf-radius-control);
-  cursor: pointer;
-  white-space: nowrap;
+.wf-sidebar-foot {
+  padding: 8px 10px;
+  border-top: 1px solid var(--wf-rail-border);
+  display: grid;
+  gap: 2px;
 }
-.wf-user-help:hover {
-  background: var(--wf-surface-soft);
-}
-.wf-user-help-short {
-  display: none;
-}
-.is-collapsed .wf-user-help-full {
-  display: none;
-}
-.is-collapsed .wf-user-help-short {
-  display: inline;
+.wf-sidebar-foot .wf-nav-item {
+  width: 100%;
 }
 </style>

@@ -5,12 +5,17 @@ export type ChannelMediaPollerOptions<Database> = {
   intervalMs?: number;
   logger?: Pick<Logger, "error" | "info">;
   syncMedia(db: Database): Promise<void>;
+  /** 缩略图→原图升级 pass（可选；缺省跳过） */
+  upgradeOriginals?(db: Database): Promise<void>;
 };
 
 export async function pollChannelMediaOnce<Database>(
   options: ChannelMediaPollerOptions<Database>,
 ): Promise<void> {
   await options.syncMedia(options.db);
+  if (options.upgradeOriginals) {
+    await options.upgradeOriginals(options.db);
+  }
 }
 
 export function startChannelMediaPoller<Database>(

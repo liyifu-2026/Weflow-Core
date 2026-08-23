@@ -3,15 +3,29 @@ import { computed, onMounted, ref } from "vue";
 import { api } from "../api";
 import { eventTypeLabel } from "../labels";
 import WfInspector from "../components/WfInspector.vue";
+import PageHeader from "../components/PageHeader.vue";
+import EmptyState from "../components/EmptyState.vue";
+import { useRoute, useRouter } from "vue-router";
 
 const PAGE_SIZE = 50;
 
+const route = useRoute();
+const router = useRouter();
+
 const events = ref<any[]>([]);
 const policies = ref<any[]>([]);
-const filter = ref("");
-const selectedActor = ref("");
-const fromDate = ref("");
-const toDate = ref("");
+const filter = ref(
+  typeof route.query.eventType === "string" ? route.query.eventType : "",
+);
+const selectedActor = ref(
+  typeof route.query.actor === "string" ? route.query.actor : "",
+);
+const fromDate = ref(
+  typeof route.query.from === "string" ? route.query.from : "",
+);
+const toDate = ref(
+  typeof route.query.to === "string" ? route.query.to : "",
+);
 const error = ref("");
 const loading = ref(false);
 const loadingMore = ref(false);
@@ -77,7 +91,17 @@ async function loadMore() {
   await load(false);
 }
 
+function syncQuery() {
+  const query: Record<string, string> = {};
+  if (filter.value) query.eventType = filter.value;
+  if (selectedActor.value) query.actor = selectedActor.value;
+  if (fromDate.value) query.from = fromDate.value;
+  if (toDate.value) query.to = toDate.value;
+  void router.replace({ query });
+}
+
 function applyFilters() {
+  syncQuery();
   void load(true);
 }
 
@@ -86,6 +110,7 @@ function clearFilters() {
   selectedActor.value = "";
   fromDate.value = "";
   toDate.value = "";
+  void router.replace({});
   void load(true);
 }
 
@@ -142,51 +167,50 @@ onMounted(() => {
 </script>
 <template>
   <div class="wf-page">
-    <header class="wf-page-head">
-      <h1>审计日志</h1>
-      <div class="wf-filter-bar">
-        <select v-model="filter" class="wf-select" @change="applyFilters">
-          <option value="">全部事件类型</option>
-          <option v-for="type in eventOptions" :key="type" :value="type">
-            {{ eventTypeLabel(type) }}
-          </option>
-        </select>
-        <select
-          v-model="selectedActor"
-          class="wf-select"
-          @change="applyFilters"
-        >
-          <option value="">全部操作者</option>
-          <option v-for="actor in actorOptions" :key="actor" :value="actor">
-            {{ actor }}
-          </option>
-        </select>
-        <input
-          v-model="fromDate"
-          type="date"
-          class="wf-input"
-          @change="applyFilters"
-        />
-        <span class="wf-muted">至</span>
-        <input
-          v-model="toDate"
-          type="date"
-          class="wf-input"
-          @change="applyFilters"
-        />
-        <button class="wf-button compact primary" @click="applyFilters">
-          筛选
-        </button>
-        <button
-          v-if="filter || selectedActor || fromDate || toDate"
-          class="wf-button compact ghost"
-          @click="clearFilters"
-        >
-          清除
-        </button>
-      </div>
-    </header>
-    <div v-if="error" class="wf-error">{{ error }}</div>
+    <PageHeader title="审计日志" />
+    <div class="wf-filter-bar">
+      <span class="wf-filter-label">筛选</span>
+      <select v-model="filter" class="wf-select" @change="applyFilters">
+        <option value="">全部事件类型</option>
+        <option v-for="type in eventOptions" :key="type" :value="type">
+          {{ eventTypeLabel(type) }}
+        </option>
+      </select>
+      <select
+        v-model="selectedActor"
+        class="wf-select"
+        @change="applyFilters"
+      >
+        <option value="">全部操作者</option>
+        <option v-for="actor in actorOptions" :key="actor" :value="actor">
+          {{ actor }}
+        </option>
+      </select>
+      <input
+        v-model="fromDate"
+        type="date"
+        class="wf-input"
+        @change="applyFilters"
+      />
+      <span class="wf-muted">至</span>
+      <input
+        v-model="toDate"
+        type="date"
+        class="wf-input"
+        @change="applyFilters"
+      />
+      <button class="wf-button compact primary" @click="applyFilters">
+        筛选
+      </button>
+      <button
+        v-if="filter || selectedActor || fromDate || toDate"
+        class="wf-button compact ghost"
+        @click="clearFilters"
+      >
+        清除
+      </button>
+    </div>
+    <div v-if="error" class="wf-error" role="alert">{{ error }}</div>
     <section class="wf-audit-stream">
       <template v-if="loading">
         <div v-for="i in 6" :key="i" class="wf-audit-event">
@@ -212,12 +236,11 @@ onMounted(() => {
             <span class="wf-audit-link">详情 →</span>
           </button>
         </div>
-        <div v-if="!events.length && !loading" class="wf-empty">
-          <div>
-            <strong>没有符合条件的审计事件</strong>
-            <p>调整筛选条件后再试。</p>
-          </div>
-        </div>
+        <EmptyState
+          v-if="!events.length && !loading"
+          title="没有符合条件的审计事件"
+          description="调整筛选条件后再试。"
+        />
       </template>
     </section>
 
@@ -280,15 +303,24 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  padding: 10px 12px;
+  padding: 10px 14px;
   border: 1px solid var(--wf-border);
-  border-radius: var(--wf-radius-control);
+  border-radius: 12px;
   background: var(--wf-surface);
-  margin-bottom: 12px;
+  box-shadow: none;
+  margin-bottom: 16px;
+}
+.wf-filter-label {
+  color: var(--wf-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-right: 4px;
 }
 .wf-filter-bar .wf-select,
 .wf-filter-bar .wf-input {
   min-width: 150px;
+  width: auto;
 }
 .wf-load-more {
   display: flex;

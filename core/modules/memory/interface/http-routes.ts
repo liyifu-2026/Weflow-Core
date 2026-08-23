@@ -34,6 +34,7 @@ const createSchema = z
       .trim()
       .regex(/^[a-z0-9_.-]{1,100}$/),
     content: z.string().trim().min(1).max(500),
+    importance: z.number().int().min(1).max(5).optional(),
     clientRequestId: z.uuid(),
   })
   .strict();
@@ -89,6 +90,7 @@ export function registerMemoryRoutes(
         kind: body.data.kind,
         memoryKey: body.data.key,
         content: body.data.content,
+        ...(body.data.importance === undefined ? {} : { importance: body.data.importance }),
       });
       if (result.status === "conversation_not_found") {
         return reply.code(404).send({ error: "conversation_not_found" });

@@ -1145,6 +1145,10 @@ export const mediaAssets = mediaSchema.table(
     originalImageFileId: varchar("original_image_file_id", {
       length: 36,
     }).references(() => storedFiles.fileId),
+    /** Host 返回的媒体变体：thumbnail=缩略图回退（可升级原图），original/NULL=终态 */
+    sourceVariant: varchar("source_variant", { length: 16 }),
+    /** 缩略图→原图升级已尝试次数 */
+    upgradeAttempt: integer("upgrade_attempt").default(0).notNull(),
     attempt: integer("attempt").default(0).notNull(),
     errorCode: varchar("error_code", { length: 100 }),
     description: text("description"),
@@ -1224,6 +1228,7 @@ export const memories = memorySchema.table(
     content: text("content").notNull(),
     status: varchar("status", { length: 30 }).notNull(),
     confidence: integer("confidence").notNull(),
+    importance: integer("importance").notNull().default(3),
     evidenceMessageIds: jsonb("evidence_message_ids")
       .$type<string[]>()
       .notNull(),
@@ -1238,6 +1243,7 @@ export const memories = memorySchema.table(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    lastRecalledAt: timestamp("last_recalled_at", { withTimezone: true }),
   },
   (table) => [
     index("memories_contact_status_idx").on(table.contactId, table.status),
@@ -1245,6 +1251,12 @@ export const memories = memorySchema.table(
       table.contactId,
       table.kind,
       table.memoryKey,
+    ),
+    index("memories_contact_status_importance_idx").on(
+      table.contactId,
+      table.status,
+      table.importance,
+      table.updatedAt,
     ),
   ],
 );

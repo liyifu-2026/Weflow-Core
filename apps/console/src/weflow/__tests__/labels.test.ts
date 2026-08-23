@@ -16,7 +16,7 @@ test('agentDisplayName prefers displayName then username then fallback', () => {
     agentDisplayName({ displayName: '', username: 'op_xiaoming' }),
     'op_xiaoming',
   )
-  assert.equal(agentDisplayName(undefined), '值班客服')
+  assert.equal(agentDisplayName(undefined), '值班操作员')
 })
 
 test('contactDisplayName follows the shared display-name chain', () => {

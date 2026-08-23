@@ -2,8 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { api } from "../api";
 import { confirmDialog } from "../components/confirm-dialog";
+import WfDrawer from "../components/WfDrawer.vue";
+import PageHeader from "../components/PageHeader.vue";
+import WfIcon from "../components/WfIcon.vue";
 import { statusTone } from "../components/status-tone";
 import { healthLabel } from "../labels";
+import { useRoute, useRouter } from "vue-router";
+import { useEscClose } from "../composables/use-esc-close";
 import {
   solutionPayloadDigestBrowser,
   validateSolutionLock,
@@ -56,6 +61,9 @@ const selected = ref<Installation | null>(null);
 const detail = ref<Detail | null>(null);
 const secrets = ref<SecretSlotStatus[]>([]);
 const detailLoading = ref(false);
+const route = useRoute();
+const router = useRouter();
+useEscClose(computed(() => Boolean(selected.value)), () => closeDetail());
 
 const wizardOpen = ref(false);
 const wizardStep = ref<"upload" | "confirm" | "running" | "done">("upload");
@@ -238,8 +246,7 @@ async function load() {
       );
       if (current) selected.value = current;
       else {
-        selected.value = null;
-        detail.value = null;
+        closeDetail();
       }
     }
   } catch (reason) {
@@ -250,7 +257,12 @@ async function load() {
 }
 
 async function selectSolution(installation: Installation) {
+  if (selected.value?.solutionId === installation.solutionId) {
+    closeDetail();
+    return;
+  }
   selected.value = installation;
+  await router.replace({ query: { ...route.query, solution: installation.solutionId } });
   detailLoading.value = true;
   detail.value = null;
   secrets.value = [];
@@ -267,6 +279,17 @@ async function selectSolution(installation: Installation) {
     error.value = reason instanceof Error ? reason.message : "加载详情失败";
   } finally {
     detailLoading.value = false;
+  }
+}
+
+function closeDetail() {
+  selected.value = null;
+  detail.value = null;
+  secrets.value = [];
+  if (route.query.solution) {
+    const query = { ...route.query };
+    delete query.solution;
+    void router.replace({ query });
   }
 }
 
@@ -572,48 +595,45 @@ function operationTypeLabel(value: string): string {
 }
 
 onBeforeUnmount(stopTracking);
-onMounted(load);
+onMounted(async () => {
+  await load();
+  const solutionId = typeof route.query.solution === "string" ? route.query.solution : "";
+  if (solutionId) {
+    const found = installations.value.find((item) => item.solutionId === solutionId);
+    if (found) await selectSolution(found);
+  }
+});
 </script>
 
 <template>
   <div class="wf-page">
-    <header class="wf-page-head">
-      <h1>业务方案</h1>
-      <div class="wf-page-actions">
-        <button class="wf-button compact" :disabled="loading" @click="load">
-          刷新
-        </button>
-        <button
-          class="wf-button compact"
-          :disabled="importBusy"
-          @click="fileInput?.click()"
-        >
-          {{ importBusy ? "导入中…" : "导入压缩包" }}
-        </button>
-        <input
-          ref="fileInput"
-          type="file"
-          accept=".zip,application/zip"
-          style="display: none"
-          @change="importZip"
-        />
-        <button class="wf-button primary compact" @click="openWizard">
-          安装方案
-        </button>
-      </div>
-    </header>
-    <div v-if="error" class="wf-error">
+    <PageHeader title="业务方案" />
+    <div v-if="error" class="wf-error" role="alert">
       <span>{{ error }}</span>
       <button class="wf-button compact" @click="load">重新加载</button>
     </div>
-    <div v-if="notice" class="wf-notice">{{ notice }}</div>
+    <div v-if="notice" class="wf-notice" role="status">{{ notice }}</div>
 
     <section class="wf-panel">
       <div class="wf-panel-head">
         <h2>已安装方案</h2>
+        <div class="wf-actions">
+          <button class="wf-button compact" :disabled="loading" @click="load">刷新</button>
+          <button class="wf-button compact" :disabled="importBusy" @click="fileInput?.click()">
+            {{ importBusy ? "导入中…" : "导入压缩包" }}
+          </button>
+          <button class="wf-button primary compact" @click="openWizard">安装方案</button>
+          <input
+            ref="fileInput"
+            type="file"
+            accept=".zip,application/zip"
+            style="display: none"
+            @change="importZip"
+          />
+        </div>
       </div>
       <div class="wf-table-wrap">
-        <table class="wf-table">
+        <table class="wf-table" data-card>
           <thead>
             <tr>
               <th>方案</th>
@@ -633,30 +653,21 @@ onMounted(load);
               }"
               @click="selectSolution(item)"
             >
-              <td>{{ item.solutionId }}</td>
-              <td>{{ item.version }}</td>
-              <td>
-                <i
-                  class="wf-health-mark"
-                  :class="statusTone(item.desiredState)"
-                ></i>
+              <td data-label="方案">{{ item.solutionId }}</td>
+              <td data-label="版本">{{ item.version }}</td>
+              <td data-label="期望状态">
+                  <i class="wf-health-mark" :class="statusTone(item.desiredState)"></i>
                 {{ stateLabel(item.desiredState) }}
               </td>
-              <td>
-                <i
-                  class="wf-health-mark"
-                  :class="statusTone(item.observedState)"
-                ></i>
+              <td data-label="实际状态">
+                  <i class="wf-health-mark" :class="statusTone(item.observedState)"></i>
                 {{ stateLabel(item.observedState) }}
               </td>
-              <td>
-                <i
-                  class="wf-health-mark"
-                  :class="statusTone(item.healthState)"
-                ></i>
+              <td data-label="健康">
+                  <i class="wf-health-mark" :class="statusTone(item.healthState)"></i>
                 {{ healthLabel(item.healthState).text }}
               </td>
-              <td>{{ new Date(item.updatedAt).toLocaleString() }}</td>
+              <td data-label="更新时间">{{ new Date(item.updatedAt).toLocaleString() }}</td>
             </tr>
             <tr v-if="!loading && installations.length === 0">
               <td colspan="6" class="wf-empty">还没有安装任何方案</td>
@@ -666,113 +677,48 @@ onMounted(load);
       </div>
     </section>
 
-    <section v-if="selected" class="wf-panel" style="margin-top: 12px">
-      <div class="wf-panel-head">
-        <h2>{{ selected.solutionId }} · 最近操作</h2>
-        <div class="wf-panel-actions">
-          <button
-            class="wf-button compact"
-            :disabled="!canActivate || operationBusy !== null"
-            @click="runOperation('activate')"
-          >
-            激活
-          </button>
-          <button
-            class="wf-button compact"
-            :disabled="!canDisable || operationBusy !== null"
-            @click="runOperation('disable')"
-          >
-            停用
-          </button>
-          <button
-            class="wf-button compact danger"
-            :disabled="!canUninstall || operationBusy !== null"
-            @click="runOperation('uninstall')"
-          >
-            卸载
-          </button>
-        </div>
+    <WfDrawer :open="Boolean(selected)" title="业务方案详情" @close="closeDetail">
+      <div v-if="selected" class="wf-drawer-body">
+        <section class="wf-drawer-section">
+          <div class="wf-solution-detail-meta">
+            <span class="wf-status" :class="statusTone(selected.observedState)">{{ stateLabel(selected.observedState) }}</span>
+            <span class="wf-status" :class="statusTone(selected.healthState)">{{ healthLabel(selected.healthState).text }}</span>
+          </div>
+          <div class="wf-drawer-actions">
+            <button class="wf-button compact" :disabled="!canActivate || operationBusy !== null" @click="runOperation('activate')">激活</button>
+            <button class="wf-button compact" :disabled="!canDisable || operationBusy !== null" @click="runOperation('disable')">停用</button>
+            <button class="wf-button compact danger" :disabled="!canUninstall || operationBusy !== null" @click="runOperation('uninstall')">卸载</button>
+          </div>
+        </section>
+        <section class="wf-drawer-section">
+          <h3>最近操作</h3>
+          <div v-if="detailLoading" class="wf-muted">加载中…</div>
+          <div v-else-if="detail" class="wf-drawer-operation-list">
+            <div v-for="operation in detail.recentOperations" :key="operation.operationId" class="wf-drawer-operation-row">
+              <div class="wf-drawer-operation-main">
+                <strong>{{ operationTypeLabel(operation.type) }}</strong>
+                <span class="wf-status" :class="statusTone(operation.state)">{{ operationStateLabel(operation.state) }}</span>
+              </div>
+              <div class="wf-muted">{{ operation.actor }} · {{ new Date(operation.createdAt).toLocaleString() }}</div>
+              <div v-if="operation.errorCode" class="wf-error" role="alert">{{ operation.errorCode }}</div>
+            </div>
+            <div v-if="detail.recentOperations.length === 0" class="wf-empty">暂无操作记录</div>
+          </div>
+        </section>
+        <section class="wf-drawer-section">
+          <h3>Secret 配置状态</h3>
+          <div v-if="detailLoading" class="wf-muted">加载中…</div>
+          <div v-else class="wf-drawer-secret-list">
+            <div v-for="slot in secrets" :key="slot.name" class="wf-drawer-secret-row">
+              <span>{{ slot.name }}</span>
+              <span class="wf-status" :class="slot.configured ? 'good' : 'warn'">{{ slot.configured ? '已配置' : '缺失' }}</span>
+              <span v-if="slot.configured" class="wf-muted">{{ slot.refType }}:{{ slot.refValue }}</span>
+            </div>
+            <div v-if="secrets.length === 0" class="wf-empty">暂无 Secret Slot 信息</div>
+          </div>
+        </section>
       </div>
-      <div v-if="detailLoading" class="wf-panel-body">加载中…</div>
-      <div v-else-if="detail" class="wf-table-wrap">
-        <table class="wf-table">
-          <thead>
-            <tr>
-              <th>类型</th>
-              <th>状态</th>
-              <th>Checkpoint</th>
-              <th>错误</th>
-              <th>操作人</th>
-              <th>创建时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="operation in detail.recentOperations"
-              :key="operation.operationId"
-            >
-              <td>{{ operationTypeLabel(operation.type) }}</td>
-              <td>
-                <i
-                  class="wf-health-mark"
-                  :class="statusTone(operation.state)"
-                ></i>
-                {{ operationStateLabel(operation.state) }}
-              </td>
-              <td>{{ operation.checkpoint ?? "—" }}</td>
-              <td>{{ operation.errorCode ?? "—" }}</td>
-              <td>{{ operation.actor }}</td>
-              <td>{{ new Date(operation.createdAt).toLocaleString() }}</td>
-            </tr>
-            <tr v-if="detail.recentOperations.length === 0">
-              <td colspan="6" class="wf-empty">暂无操作记录</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section v-if="selected" class="wf-panel" style="margin-top: 12px">
-      <div class="wf-panel-head">
-        <h2>{{ selected.solutionId }} · Secret 配置状态</h2>
-      </div>
-      <div v-if="detailLoading" class="wf-panel-body">加载中…</div>
-      <div v-else class="wf-table-wrap">
-        <table class="wf-table">
-          <thead>
-            <tr>
-              <th>Slot</th>
-              <th>类型</th>
-              <th>必填</th>
-              <th>状态</th>
-              <th>引用</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="slot in secrets" :key="slot.name">
-              <td>{{ slot.name }}</td>
-              <td>{{ slot.kind }}</td>
-              <td>{{ slot.required ? "是" : "否" }}</td>
-              <td>
-                <i
-                  class="wf-health-mark"
-                  :class="slot.configured ? 'good' : 'warn'"
-                ></i>
-                {{ slot.configured ? "已配置" : "缺失" }}
-              </td>
-              <td>
-                <span v-if="slot.configured">{{ slot.refType }}:{{ slot.refValue }}</span>
-                <span v-else>—</span>
-              </td>
-            </tr>
-            <tr v-if="secrets.length === 0">
-              <td colspan="5" class="wf-empty">暂无 Secret Slot 信息</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
+    </WfDrawer>
     <div v-if="wizardOpen" class="wf-modal-mask" @click.self="wizardOpen = false">
       <div class="wf-modal">
         <div class="wf-modal-head">
@@ -793,10 +739,41 @@ onMounted(load);
             :title="wizardStep === 'running' ? '执行中请稍候' : '关闭'"
             @click="wizardOpen = false"
           >
-            ✕
+            <WfIcon name="close" :size="17" />
           </button>
         </div>
-        <div class="wf-modal-body">
+        <div class="wf-wizard-steps" aria-label="安装步骤">
+          <ol>
+            <li
+              class="wf-wizard-step"
+              :class="{ active: wizardStep === 'upload', done: wizardStep !== 'upload' }"
+            >
+              <span class="wf-wizard-step-num">1</span>
+              <span class="wf-wizard-step-label">选择方案包</span>
+            </li>
+            <li
+              class="wf-wizard-step"
+              :class="{
+                active: wizardStep === 'confirm',
+                done: wizardStep === 'running' || wizardStep === 'done',
+              }"
+            >
+              <span class="wf-wizard-step-num">2</span>
+              <span class="wf-wizard-step-label">确认安装</span>
+            </li>
+            <li
+              class="wf-wizard-step"
+              :class="{
+                active: wizardStep === 'running' || wizardStep === 'done',
+                done: wizardStep === 'done',
+              }"
+            >
+              <span class="wf-wizard-step-num">3</span>
+              <span class="wf-wizard-step-label">执行</span>
+            </li>
+          </ol>
+        </div>
+<div class="wf-modal-body">
           <template v-if="!advancedJson">
             <div v-if="wizardStep === 'upload'" class="wf-field">
               <span>选择方案包</span>
@@ -857,7 +834,7 @@ onMounted(load);
                   <dd>{{ wizardSummary.executionProfiles.join("、") }}</dd>
                 </div>
               </dl>
-              <div v-if="wizardWarnings.length" class="wf-error">
+              <div v-if="wizardWarnings.length" class="wf-error" role="alert">
                 <strong>解析警告</strong>
                 <ul>
                   <li v-for="warning in wizardWarnings" :key="warning">
@@ -898,13 +875,13 @@ onMounted(load);
                   <strong>Checkpoint</strong>
                   <span>{{ trackedOperation.checkpoint ?? "—" }}</span>
                 </div>
-                <div v-if="trackedOperation.errorCode" class="wf-error">
+                <div v-if="trackedOperation.errorCode" class="wf-error" role="alert">
                   错误：{{ trackedOperation.errorCode }}
                 </div>
                 <p v-if="wizardStep === 'running'" class="wf-hint">
                   Runner 正在执行，页面每 2 秒自动刷新进度。
                 </p>
-                <p v-else class="wf-notice">安装操作已结束。</p>
+                <p v-else class="wf-notice" role="status">安装操作已结束。</p>
               </div>
               <div v-else>
                 <span class="wf-skeleton">正在读取执行状态…</span>
@@ -940,8 +917,8 @@ onMounted(load);
             </button>
           </template>
 
-          <div v-if="wizardError" class="wf-error">{{ wizardError }}</div>
-          <div v-if="wizardNotice" class="wf-notice">{{ wizardNotice }}</div>
+          <div v-if="wizardError" class="wf-error" role="alert">{{ wizardError }}</div>
+          <div v-if="wizardNotice" class="wf-notice" role="status">{{ wizardNotice }}</div>
         </div>
         <div class="wf-modal-foot">
           <template v-if="advancedJson">
@@ -1005,7 +982,7 @@ onMounted(load);
       <div class="wf-modal wf-modal-narrow">
         <div class="wf-modal-head">
           <h2>操作执行中</h2>
-          <button class="wf-icon-button" @click="closeTracking">✕</button>
+          <button class="wf-icon-button" @click="closeTracking"><WfIcon name="close" :size="17" /></button>
         </div>
         <div class="wf-modal-body">
           <div v-if="trackedOperation" class="wf-operation-progress">
@@ -1019,7 +996,7 @@ onMounted(load);
               <strong>Checkpoint</strong>
               <span>{{ trackedOperation.checkpoint ?? "—" }}</span>
             </div>
-            <div v-if="trackedOperation.errorCode" class="wf-error">
+            <div v-if="trackedOperation.errorCode" class="wf-error" role="alert">
               错误：{{ trackedOperation.errorCode }}
             </div>
             <p class="wf-hint">页面每 2 秒自动刷新进度。</p>
@@ -1090,5 +1067,104 @@ onMounted(load);
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+.wf-solution-detail-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.wf-drawer-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wf-drawer-operation-list,
+.wf-drawer-secret-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.wf-drawer-operation-row,
+.wf-drawer-secret-row {
+  padding: 10px 12px;
+  border: 1px solid var(--wf-border);
+  border-radius: var(--wf-radius-control);
+  background: var(--wf-surface-soft);
+}
+.wf-drawer-operation-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wf-drawer-secret-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wf-drawer-section h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+.wf-wizard-steps {
+  padding: 14px 16px 0;
+  border-bottom: 1px solid var(--wf-border);
+}
+.wf-wizard-steps ol {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wf-wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--wf-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.wf-wizard-step + .wf-wizard-step {
+  margin-left: 12px;
+}
+.wf-wizard-step + .wf-wizard-step::before {
+  content: "";
+  width: 28px;
+  height: 1px;
+  margin-right: 12px;
+  background: var(--wf-border-strong);
+}
+.wf-wizard-step-num {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--wf-border-strong);
+  border-radius: 50%;
+  background: var(--wf-surface);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.wf-wizard-step.active {
+  color: var(--wf-text);
+}
+.wf-wizard-step.active .wf-wizard-step-num {
+  background: var(--wf-primary);
+  border-color: var(--wf-primary);
+  color: var(--wf-on-primary);
+}
+.wf-wizard-step.done {
+  color: var(--wf-primary);
+}
+.wf-wizard-step.done .wf-wizard-step-num {
+  border-color: var(--wf-primary);
+  color: var(--wf-primary);
+  background: var(--wf-primary-soft);
 }
 </style>

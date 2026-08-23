@@ -52,6 +52,7 @@ import { registerSolutionBackendPlugins } from "../../modules/solution/applicati
 import { requireBusinessIdentity } from "../../modules/identity/interface/request-authentication.js";
 import { inspectKnowledgeEngine } from "../../modules/knowledge-provider/application/boundary.js";
 import { startMobileHandoffMaintenance } from "../../modules/handoff/application/mobile-handoff-service.js";
+import { startMemoryMaintenance } from "../../modules/memory/application/memory-maintenance.js";
 import { routeMediaToHuman } from "../../modules/handoff/application/route-media-to-human.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
 import {
@@ -59,7 +60,8 @@ import {
   ingestChannelEvents,
 } from "../../modules/conversations/application/ingest-channel-events.js";
 import { processOutboundMessages } from "../../modules/conversations/application/process-outbound-messages.js";
-import { syncChannelImages } from "../../modules/media/application/sync-channel-images.js";
+import { syncChannelMedia } from "../../modules/media/application/sync-channel-media.js";
+import { upgradeChannelImageOriginals } from "../../modules/media/application/upgrade-channel-image-originals.js";
 import { syncChannelContactProfiles } from "../../modules/contacts/application/sync-channel-contact-profiles.js";
 
 /** 启动 Core API 进程 */
@@ -216,6 +218,7 @@ await runProcess({
       redisUrl: config.redisUrl,
       logger,
     });
+    const stopMemoryMaintenance = startMemoryMaintenance(postgres.db, logger);
     // 启动媒体处理调度器，处理入站媒体文件的转码和存储。
     // 业务依赖由组合根绑定：infrastructure 的 dispatcher/poller 不反向依赖 modules。
     const stopMediaProcessingDispatcher = startMediaProcessingDispatcher({
@@ -223,6 +226,8 @@ await runProcess({
       redisUrl: config.redisUrl,
       logger,
       visionConfigured: Boolean(config.vision),
+      // ASR 与视觉共用 MiMo 端点与密钥（asrModel 由 ASR_MODEL 配置）
+      asrConfigured: Boolean(config.vision?.asrModel),
       dependencies: {
         readSettings: (db) => readRuntimeSettings(db),
         routeToHuman: (input) => routeMediaToHuman(postgres.db, logger, input),
@@ -263,7 +268,13 @@ await runProcess({
         logger,
         intervalMs: config.channelHost.pollIntervalMs,
         syncMedia: (db) =>
-          syncChannelImages(
+          syncChannelMedia(
+            db,
+            new LocalFileStorage(`${config.fileStorageRoot}/media`),
+            channelMedia,
+          ),
+        upgradeOriginals: (db) =>
+          upgradeChannelImageOriginals(
             db,
             new LocalFileStorage(`${config.fileStorageRoot}/media`),
             channelMedia,
@@ -284,6 +295,7 @@ await runProcess({
         stopChannelHostContactPoller();
         stopAgentTurnDispatcher();
         stopMemoryCaptureDispatcher();
+        stopMemoryMaintenance();
         stopMediaProcessingDispatcher();
         stopPushDispatcher();
         stopPluginEvents();
@@ -297,6 +309,7 @@ await runProcess({
       stopMobileHandoffMaintenance();
       stopAgentTurnDispatcher();
       stopMemoryCaptureDispatcher();
+      stopMemoryMaintenance();
       stopMediaProcessingDispatcher();
       stopPushDispatcher();
       stopPluginEvents();

@@ -4,11 +4,13 @@
  * 职责：
  * - 从 Redis 队列消费媒体处理任务
  * - 图片：使用视觉模型（MimoVision）生成文字描述
+ * - 语音：SILK→MP3 转码 + MiMo ASR 中文转写
  * - 将结果持久化到数据库，供后续对话上下文使用
  */
 import { Worker } from "bullmq";
 import { eq } from "drizzle-orm";
 import { LocalFileStorage } from "../../infrastructure/file_storage/local-file-storage.js";
+import { PysilkFfmpegTranscoder } from "../../infrastructure/media/audio-transcoder.js";
 import { MEDIA_PROCESSING_QUEUE } from "../../infrastructure/redis/media-processing-dispatcher.js";
 import {
   bullMqConnection,
@@ -17,7 +19,9 @@ import {
 import { runProcess } from "../../infrastructure/runtime/run-process.js";
 import * as schema from "../../infrastructure/postgres/schema.js";
 import { MimoVisionClient } from "../../infrastructure/model_runtime/mimo-vision-client.js";
+import { MimoAudioClient } from "../../infrastructure/model_runtime/mimo-audio-client.js";
 import { processImageDescription } from "../../modules/media/application/process-image-description.js";
+import { processVoiceTranscription } from "../../modules/media/application/process-voice-transcription.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
 
 await runProcess({
@@ -29,13 +33,36 @@ await runProcess({
       `${config.fileStorageRoot}/media`,
     );
     const vision = config.vision;
-    // 仅在配置了视觉模型时创建图片工作队列消费者
+    // 仅在配置了多模态模型时创建媒体处理队列消费者（图片视觉 / 语音 ASR 共用端点）
     const mediaWorker = vision
       ? new Worker<JobEnvelope>(
           MEDIA_PROCESSING_QUEUE,
           async (job) => {
             // 运行时模型选择：切换 vision_model 无需重启
             const runtime = await readRuntimeSettings(postgres.db);
+            if (job.data.jobType === "media.transcribe_voice") {
+              // 语音转写：读取 SILK → 平台转码器产出 MP3 → MiMo ASR → 持久化描述
+              await processVoiceTranscription(
+                postgres.db,
+                mediaStorage,
+                new MimoAudioClient({
+                  baseUrl: vision.baseUrl,
+                  apiKey: vision.apiKey,
+                  model: vision.asrModel,
+                  timeoutMs: vision.timeoutMs,
+                }),
+                vision.asrModel,
+                job.data.businessEntityId,
+                {
+                  transcoder: new PysilkFfmpegTranscoder({
+                    onDiagnostics: (line) => {
+                      logger.debug({ line }, "audio transcode diagnostics");
+                    },
+                  }),
+                },
+              );
+              return;
+            }
             // 图片描述：读取图片 -> 调用视觉模型 -> 持久化描述
             await processImageDescription(
               postgres.db,

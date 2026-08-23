@@ -53,6 +53,7 @@ export async function createManualMemory(
     kind: MemoryKind;
     memoryKey: string;
     content: string;
+    importance?: number;
   },
 ): Promise<
   | {
@@ -120,6 +121,7 @@ export async function createManualMemory(
         content: input.content,
         status: "active",
         confidence: 100,
+        importance: input.importance ?? 3,
         evidenceMessageIds: [],
         extractedByModel: "manual",
         validFrom: now,
@@ -131,6 +133,7 @@ export async function createManualMemory(
         set: {
           status: "active",
           confidence: 100,
+          importance: input.importance ?? 3,
           extractedByModel: "manual",
           invalidatedAt: null,
           updatedAt: now,

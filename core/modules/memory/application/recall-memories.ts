@@ -1,10 +1,10 @@
 /**
  * 记忆召回
  *
- * 查询指定会话关联联系人的活跃记忆，按更新时间倒序返回。
+ * 查询指定会话关联联系人的活跃记忆，按重要度优先、最近更新优先返回。
  * 用于在 Agent 上下文组装时提供历史记忆信息。
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 
@@ -19,13 +19,15 @@ export async function recallMemories(
   conversationId: string,
   limit = 12,
 ) {
-  return db
+  const rows = await db
     .select({
       memoryId: schema.memories.memoryId,
       kind: schema.memories.kind,
       memoryKey: schema.memories.memoryKey,
       content: schema.memories.content,
       confidence: schema.memories.confidence,
+      importance: schema.memories.importance,
+      lastRecalledAt: schema.memories.lastRecalledAt,
     })
     .from(schema.conversations)
     .innerJoin(
@@ -38,6 +40,27 @@ export async function recallMemories(
         eq(schema.memories.status, "active"),
       ),
     )
-    .orderBy(desc(schema.memories.updatedAt))
+    .orderBy(
+      desc(schema.memories.importance),
+      desc(schema.memories.updatedAt),
+    )
     .limit(Math.min(Math.max(limit, 1), 50));
+
+  if (rows.length > 0) {
+    const now = new Date();
+    await db
+      .update(schema.memories)
+      .set({ lastRecalledAt: now })
+      .where(
+        and(
+          eq(schema.memories.status, "active"),
+          inArray(
+            schema.memories.memoryId,
+            rows.map((row) => row.memoryId),
+          ),
+        ),
+      );
+  }
+
+  return rows;
 }

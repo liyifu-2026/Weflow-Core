@@ -116,11 +116,13 @@ export interface SettingField {
   options?: SettingFieldOption[];
 }
 
-export type SettingCategory = "general" | "integrations" | "security" | "advanced";
+export type SettingCategory = string;
 
 export interface SettingContribution {
   id: string;
   category: SettingCategory;
+  /** 分类在 Console 设置中心展示的名称；缺省时由 Console 根据 category 提供兜底文案。 */
+  categoryLabel?: string;
   label: string;
   component?: string;
   order?: number;
@@ -166,8 +168,10 @@ export type HealthCheckType = "http" | "tcp" | "process";
 
 export interface HealthCheck {
   id: string;
+  name?: string;
   type: HealthCheckType;
   target: string;
+  port?: number;
   timeoutSeconds?: number;
 }
 

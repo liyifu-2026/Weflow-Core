@@ -68,8 +68,8 @@ onMounted(load);
       <span class="wf-skeleton">正在加载设置…</span>
     </div>
     <template v-else>
-      <div v-if="error" class="wf-error">{{ error }}</div>
-      <div v-if="notice" class="wf-notice">{{ notice }}</div>
+      <div v-if="error" class="wf-error" role="alert">{{ error }}</div>
+      <div v-if="notice" class="wf-notice" role="status">{{ notice }}</div>
       <label v-for="field in schema" :key="field.key" class="wf-field">
         <span>{{ field.label }}</span>
         <input

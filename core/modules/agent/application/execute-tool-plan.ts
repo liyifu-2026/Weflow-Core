@@ -119,5 +119,126 @@ async function executeCurrentTool(
     };
   }
 
+  if (execution.toolName === "fetch_url") {
+    const url = execution.arguments.url;
+    if (typeof url !== "string" || !url.trim()) {
+      throw new Error("invalid_fetch_url");
+    }
+    return await fetchUrlText(url);
+  }
+
   throw new Error("tool_not_implemented");
+}
+
+const MAX_URL_CONTENT_BYTES = 256 * 1024;
+const MAX_URL_TEXT_LENGTH = 8_000;
+const FETCH_URL_TIMEOUT_MS = 15_000;
+
+async function fetchUrlText(rawUrl: string): Promise<Record<string, unknown>> {
+  const url = assertPublicHttpUrl(rawUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_URL_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "user-agent": "WeflowAgent/1.0",
+        accept: "text/html,text/plain,application/json,application/xhtml+xml",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`http_${String(response.status)}`);
+    }
+    const contentType = response.headers.get("content-type") ?? "";
+    if (
+      !contentType.includes("text/html") &&
+      !contentType.includes("text/plain") &&
+      !contentType.includes("application/json") &&
+      !contentType.includes("application/xhtml+xml")
+    ) {
+      return {
+        url: url.toString(),
+        fetchedAt: new Date().toISOString(),
+        contentType,
+        text: "",
+        note: "unsupported_content_type",
+      };
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("empty_response_body");
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+      if (total > MAX_URL_CONTENT_BYTES) {
+        await reader.cancel();
+        break;
+      }
+    }
+    const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+    const text = buffer.toString("utf8").replace(/^\uFEFF/, "");
+    const cleaned = stripHtml(text).slice(0, MAX_URL_TEXT_LENGTH);
+    return {
+      url: url.toString(),
+      fetchedAt: new Date().toISOString(),
+      contentType,
+      text: cleaned,
+      truncated: text.length > MAX_URL_TEXT_LENGTH,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function assertPublicHttpUrl(rawUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("invalid_url");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("unsupported_url_protocol");
+  }
+  if (isBlockedHostname(url.hostname.toLowerCase())) {
+    throw new Error("url_host_blocked");
+  }
+  return url;
+}
+
+function isBlockedHostname(hostname: string): boolean {
+  if (
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "0.0.0.0" ||
+    hostname.endsWith(".local")
+  ) {
+    return true;
+  }
+  if (hostname.startsWith("127.")) return true;
+  if (hostname.startsWith("10.")) return true;
+  if (hostname.startsWith("192.168.")) return true;
+  if (hostname.startsWith("169.254.")) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return true;
+  return false;
+}
+
+function stripHtml(input: string): string {
+  return input
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }

@@ -13,6 +13,10 @@ export type ChannelEvent = {
   readonly kind: string;
   readonly content: string;
   readonly mediaRef?: string | null;
+  /** Provider-neutral 文件名（kind=file 时由 Channel Host 提供） */
+  readonly fileName?: string | null;
+  /** Provider-neutral MIME 提示（kind=file 时由 Channel Host 提供） */
+  readonly mimeType?: string | null;
   readonly occurredAt?: string | null;
   readonly observedAt: string;
   readonly isSelf: boolean;

@@ -2,25 +2,20 @@
 import { computed } from "vue";
 import technicalDocumentation from "@docs/technical-documentation.md?raw";
 import { renderMiniMarkdown } from "../markdown";
+import PageHeader from "../components/PageHeader.vue";
 
 const rendered = computed(() => renderMiniMarkdown(technicalDocumentation));
 </script>
 
 <template>
-  <div class="wf-page wf-page-narrow docs-page">
-    <header class="wf-page-head">
-      <h1>技术文档</h1>
-      <p>Weflow 平台技术文档 · 由 <code>docs/technical-documentation.md</code> 渲染</p>
-    </header>
+  <div class="wf-page docs-page">
+    <PageHeader title="技术文档" />
 
     <div class="docs-content" v-html="rendered"></div>
   </div>
 </template>
 
 <style scoped>
-.docs-page {
-  max-width: 980px;
-}
 .docs-page .wf-page-head {
   margin-bottom: 8px;
 }

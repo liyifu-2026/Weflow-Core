@@ -33,6 +33,6 @@ describe("labels", () => {
       agentDisplayName({ username: "alice", displayName: "Alice" }),
       "Alice",
     );
-    assert.equal(agentDisplayName(null), "值班客服");
+    assert.equal(agentDisplayName(null), "值班操作员");
   });
 });

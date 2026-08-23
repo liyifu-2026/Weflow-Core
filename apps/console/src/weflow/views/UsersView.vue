@@ -2,7 +2,12 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { api } from "../api";
 import { statusTone } from "../components/status-tone";
+import PageHeader from "../components/PageHeader.vue";
+import WfIcon from "../components/WfIcon.vue";
 import { useEscClose } from "../composables/use-esc-close";
+import { useFocusTrap } from "../composables/use-focus-trap";
+import { confirmDialog } from "../components/confirm-dialog";
+import { useRoute, useRouter } from "vue-router";
 type User = {
   userId: string;
   username: string;
@@ -21,6 +26,10 @@ const password = ref("");
 const saving = ref(false);
 const roleOpen = ref(false);
 const roleTarget = ref<User | null>(null);
+const createModal = ref<HTMLElement | null>(null);
+const roleModal = ref<HTMLElement | null>(null);
+useFocusTrap(createModal, open);
+useFocusTrap(roleModal, roleOpen);
 useEscClose(computed(() => open.value || roleOpen.value), () => {
   open.value = false;
   roleOpen.value = false;
@@ -75,9 +84,9 @@ async function confirmRoleChange() {
 }
 async function revokeSessions(user: User) {
   if (
-    !confirm(
+    !(await confirmDialog(
       `撤销 ${user.username} 的全部 Session？用户需要重新登录；账号和数据不会删除。`,
-    )
+    ))
   )
     return;
   try {
@@ -91,9 +100,9 @@ async function revokeSessions(user: User) {
 }
 async function reset(user: User) {
   if (
-    !confirm(
+    !(await confirmDialog(
       `重置 ${user.username} 的密码并撤销全部 Session？旧密码将立即失效。`,
-    )
+    ))
   )
     return;
   try {
@@ -112,9 +121,9 @@ async function toggleStatus(user: User) {
   const disabling = user.status === "active";
   if (
     disabling &&
-    !confirm(
+    !(await confirmDialog(
       `禁用 ${user.username}？该用户将无法登录，已有 Session 会按服务端规则处理。`,
-    )
+    ))
   )
     return;
   await update(user, { status: disabling ? "disabled" : "active" });
@@ -125,10 +134,20 @@ function startCreate() {
   password.value = "";
   open.value = true;
 }
-const userSearch = ref("");
-const roleFilter = ref("");
-const statusFilter = ref("");
-const page = ref(1);
+const route = useRoute();
+const router = useRouter();
+const userSearch = ref(
+  typeof route.query.q === "string" ? route.query.q : "",
+);
+const roleFilter = ref(
+  typeof route.query.role === "string" ? route.query.role : "",
+);
+const statusFilter = ref(
+  typeof route.query.status === "string" ? route.query.status : "",
+);
+const page = ref(
+  Math.max(1, Number(typeof route.query.page === "string" ? route.query.page : "1") || 1),
+);
 const pageSize = 10;
 
 const filteredUsers = computed(() => {
@@ -137,7 +156,7 @@ const filteredUsers = computed(() => {
     const matchSearch =
       !q ||
       user.username.toLowerCase().includes(q) ||
-      (user.role === "admin" ? "管理员" : "客服").includes(q);
+      (user.role === "admin" ? "管理员" : "操作员").includes(q);
     const matchRole = !roleFilter.value || user.role === roleFilter.value;
     const matchStatus =
       !statusFilter.value || user.status === statusFilter.value;
@@ -153,12 +172,23 @@ const pagedUsers = computed(() => {
   return filteredUsers.value.slice(start, start + pageSize);
 });
 
+function syncQuery() {
+  const query: Record<string, string> = {};
+  if (userSearch.value) query.q = userSearch.value;
+  if (roleFilter.value) query.role = roleFilter.value;
+  if (statusFilter.value) query.status = statusFilter.value;
+  if (page.value > 1) query.page = String(page.value);
+  void router.replace({ query });
+}
+
 function setPage(next: number) {
   page.value = Math.min(totalPages.value, Math.max(1, next));
+  syncQuery();
 }
 
 watch([userSearch, roleFilter, statusFilter], () => {
   page.value = 1;
+  syncQuery();
 });
 async function copyPassword(password: string) {
   try {
@@ -172,27 +202,23 @@ onMounted(load);
 </script>
 <template>
   <div class="wf-page">
-    <header class="wf-page-head">
-      <h1>用户</h1>
-      <button class="wf-button primary" @click="startCreate">发放账号</button>
-    </header>
-    <div v-if="error" class="wf-error">{{ error }}</div>
-    <div v-if="notice" class="wf-notice">{{ notice }}</div>
-    <section class="wf-section-block">
-      <div class="wf-section-heading">
-        <h2>共享工作空间成员</h2>
-        <span class="wf-muted">{{ users.length }} 人</span>
+    <PageHeader title="用户" />
+    <div v-if="error" class="wf-error" role="alert">{{ error }}</div>
+    <div v-if="notice" class="wf-notice" role="status">{{ notice }}</div>
+    <section class="wf-panel wf-users-panel">
+      <div class="wf-panel-head">
+        <div>
+          <h2>共享工作空间成员</h2>
+          <span class="wf-panel-caption">共 {{ users.length }} 人</span>
+        </div>
+        <button class="wf-button primary" @click="startCreate">发放账号</button>
       </div>
+      <div class="wf-users-body">
       <div class="wf-user-filters">
-        <input
-          v-model="userSearch"
-          class="wf-input"
-          placeholder="搜索用户名…"
-        />
         <select v-model="roleFilter" class="wf-select">
           <option value="">全部角色</option>
           <option value="admin">管理员</option>
-          <option value="operator">客服</option>
+          <option value="operator">操作员</option>
         </select>
         <select v-model="statusFilter" class="wf-select">
           <option value="">全部状态</option>
@@ -200,7 +226,7 @@ onMounted(load);
           <option value="disabled">已禁用</option>
         </select>
       </div>
-      <table class="wf-table">
+      <table class="wf-table" data-card>
         <thead>
           <tr>
             <th>账号</th>
@@ -212,27 +238,27 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="user in pagedUsers" :key="user.userId">
-            <td>
-              <strong>{{ user.username }}</strong>
+            <td data-label="账号">
+                <strong>{{ user.username }}</strong>
               <div v-if="user.mustChangePassword" class="wf-muted">
                 等待首次设置密码
               </div>
             </td>
-            <td>{{ user.role === "admin" ? "管理员" : "客服" }}</td>
-            <td>
-              <span
-                v-if="user.status !== 'active'"
-                class="wf-status"
+            <td data-label="角色">{{ user.role === "admin" ? "管理员" : "操作员" }}</td>
+            <td data-label="状态">
+                <span
+                  v-if="user.status !== 'active'"
+                  class="wf-status"
                 :class="statusTone(user.status)"
                 >已禁用</span
               ><span v-else class="wf-muted">正常</span>
             </td>
-            <td class="wf-muted">
-              {{ new Date(user.createdAt).toLocaleDateString() }}
+            <td data-label="创建时间" class="wf-muted">
+                {{ new Date(user.createdAt).toLocaleDateString() }}
             </td>
-            <td>
-              <details class="wf-row-menu">
-                <summary class="wf-icon-button" title="更多操作">···</summary>
+            <td data-label="操作">
+                <details class="wf-row-menu">
+                <summary class="wf-icon-button" title="更多操作"><WfIcon name="more" :size="17" /></summary>
                 <div>
                   <button @click="startRoleChange(user)">修改角色</button>
                   <button @click="reset(user)">重置密码</button>
@@ -268,12 +294,13 @@ onMounted(load);
           下一页
         </button>
       </div>
+      </div>
     </section>
     <div v-if="open" class="wf-modal-mask" @click.self="open = false">
-      <div class="wf-modal">
+      <div ref="createModal" class="wf-modal" role="dialog" aria-modal="true" aria-label="发放账号">
         <div class="wf-modal-head">
           <h3>{{ password ? "一次性初始密码" : "发放封闭账号" }}</h3>
-          <button class="wf-button ghost" @click="open = false">×</button>
+          <button class="wf-button ghost" @click="open = false"><WfIcon name="close" :size="17" /></button>
         </div>
         <div class="wf-modal-body">
           <template v-if="password"
@@ -299,7 +326,7 @@ onMounted(load);
             <div class="wf-field">
               <label>角色</label
               ><select v-model="role" class="wf-select">
-                <option value="operator">客服</option>
+                <option value="operator">操作员</option>
                 <option value="admin">管理员</option>
               </select>
             </div></template
@@ -324,10 +351,10 @@ onMounted(load);
       class="wf-modal-mask"
       @click.self="roleOpen = false"
     >
-      <div class="wf-modal wf-modal-narrow">
+      <div ref="roleModal" class="wf-modal wf-modal-narrow" role="dialog" aria-modal="true" aria-label="修改角色">
         <div class="wf-modal-head">
           <h3>修改角色 · {{ roleTarget.username }}</h3>
-          <button class="wf-icon-button" @click="roleOpen = false">×</button>
+          <button class="wf-icon-button" @click="roleOpen = false"><WfIcon name="close" :size="17" /></button>
         </div>
         <div class="wf-modal-body">
           <div class="wf-assignee-list">
@@ -336,7 +363,7 @@ onMounted(load);
               :class="{ active: roleTarget.role === 'operator' }"
               @click="roleTarget.role = 'operator'"
             >
-              客服
+              操作员
             </button>
             <button
               class="wf-assignee-row"
@@ -359,22 +386,31 @@ onMounted(load);
 </template>
 
 <style scoped>
+.wf-users-body {
+  padding: 0 16px 14px;
+}
 .wf-user-filters {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-  margin-bottom: 12px;
+  padding: 14px 0;
 }
-.wf-user-filters .wf-input,
+.wf-user-filters .wf-search {
+  flex: 1;
+  min-width: 220px;
+  max-width: 340px;
+}
 .wf-user-filters .wf-select {
-  min-width: 160px;
+  min-width: 140px;
+  width: auto;
 }
 .wf-pagination {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 12px 4px 0;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--wf-border);
 }
 </style>

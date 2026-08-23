@@ -143,7 +143,10 @@ export async function processAgentTurn(
   }
 
   const [conversation] = await db
-    .select({ revision: schema.conversations.revision })
+    .select({
+      revision: schema.conversations.revision,
+      contactId: schema.conversations.contactId,
+    })
     .from(schema.conversations)
     .where(eq(schema.conversations.conversationId, turn.conversationId))
     .limit(1);
@@ -169,12 +172,14 @@ export async function processAgentTurn(
     const strategySystem = strategy
       ? strategy.buildModelRequest({
           conversationId: turn.conversationId,
-          contactId: "",
+          contactId: conversation?.contactId ?? "",
           messages: context.history,
           facts: {},
-          availableTools: dependencies.knowledgeSearch
-            ? ["retrieve_knowledge"]
-            : [],
+          availableTools: [
+            ...(dependencies.knowledgeSearch ? ["retrieve_knowledge"] : []),
+            "query_contact_profile",
+            "fetch_url",
+          ],
         }).system
       : SYSTEM_PROMPT(Boolean(dependencies.knowledgeSearch));
 

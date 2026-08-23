@@ -50,7 +50,7 @@ weflow/
 
 ## Current convergence rule
 
-本仓库是 Weflow 的平台核心干净快照。旧的客服业务应用目录（apps/support-web、apps/support-bff、apps/mobile）与微信实现目录（channel-host-wechat、wechatauto）已从仓库移除；客服业务插件已迁出为独立仓库 **Weflow-Solutions**（`github.com/liyifu-2026/Weflow-Solutions`），遵循平台插件契约（插件导出 `strategy`/`skill`，经 `SKILL_PLUGIN_PATH`/`STRATEGY_PLUGIN_PATH` 注入或 Solution Pack 安装后按 Execution Profile 选择）。本仓库只保留官方基础 Solution：`solutions/knowledge`、`solutions/memory`。`wechatbot-new` 保持为独立归档仓库，它的 Agent、Prompt、Memory 和回复策略不再复制到 Weflow。来源与迁移记录见 [docs/migration/source-manifest.md](docs/migration/source-manifest.md)。
+本仓库是 Weflow 的平台核心干净快照。旧的客服业务应用目录（apps/support-web、apps/support-bff、apps/mobile）已从仓库移除；微信通道实现目前收编于本仓库 `runtimes/channel-host-wechat`（平台级 Channel Host 适配器，Python/微信本地自动化）。客服业务插件已迁出为独立仓库 **Weflow-Solutions**（`github.com/liyifu-2026/Weflow-Solutions`），遵循平台插件契约（插件导出 `strategy`/`skill`，经 `SKILL_PLUGIN_PATH`/`STRATEGY_PLUGIN_PATH` 注入或 Solution Pack 安装后按 Execution Profile 选择）。本仓库只保留官方基础 Solution：`solutions/knowledge`、`solutions/memory`。`wechatbot-new` 保持为独立归档仓库，它的 Agent、Prompt、Memory 和回复策略不再复制到 Weflow。来源与迁移记录见 [docs/migration/source-manifest.md](docs/migration/source-manifest.md)。
 
 短期兼容代码可能仍出现 `Server1` 字样，但新代码和新文档统一使用 `Channel Host`、`Core`、`Console`。
 

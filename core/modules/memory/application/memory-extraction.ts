@@ -20,6 +20,7 @@ const candidateSchema = z
       .regex(/^[a-z0-9_.-]{1,100}$/),
     content: z.string().trim().min(1).max(500),
     confidence: z.number().int().min(0).max(100),
+    importance: z.number().int().min(1).max(5).default(3),
     evidenceMessageIds: z.array(z.string().min(1).max(600)).min(1).max(20),
     subject: z.enum(["contact", "other", "unclear"]),
     explicit: z.boolean(),
@@ -48,7 +49,7 @@ export function memoryExtractionPrompt(
     {
       role: "system",
       content:
-        '你是 Weflow 的长期记忆提取器。只提取联系人本人明确表达、跨轮仍有用的事实、偏好或关系。忽略临时情绪、寒暄、助手说的话、关于他人的转述和推测。敏感信息必须标 sensitive=true。key 必须是简短英文 snake_case。只返回 JSON，不要 Markdown：{"memories":[{"kind":"fact|preference|relationship","key":"...","content":"...","confidence":0,"evidenceMessageIds":["..."],"subject":"contact|other|unclear","explicit":true,"stable":true,"sensitive":false}]}',
+        '你是 Weflow 的长期记忆提取器。只提取联系人本人明确表达、跨轮仍有用的事实、偏好或关系。忽略临时情绪、寒暄、助手说的话、关于他人的转述和推测。敏感信息必须标 sensitive=true。key 必须是简短英文 snake_case。importance 表示这条记忆对长期服务客户的重要程度：1=很低，2=低，3=普通，4=重要，5=关键。只返回 JSON，不要 Markdown：{"memories":[{"kind":"fact|preference|relationship","key":"...","content":"...","confidence":0,"importance":3,"evidenceMessageIds":["..."],"subject":"contact|other|unclear","explicit":true,"stable":true,"sensitive":false}]}',
     },
     {
       role: "user",

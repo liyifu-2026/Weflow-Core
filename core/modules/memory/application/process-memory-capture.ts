@@ -238,6 +238,7 @@ async function publishCapture(
           content: item.content,
           status,
           confidence: item.confidence,
+          importance: item.importance,
           evidenceMessageIds: [...new Set(item.evidenceMessageIds)],
           extractedByModel: model,
           validFrom: now,
@@ -247,6 +248,7 @@ async function publishCapture(
           target: schema.memories.memoryId,
           set: {
             confidence: maxConfidence(existing[0]?.confidence, item.confidence),
+            importance: Math.max(existing[0]?.importance ?? 0, item.importance),
             evidenceMessageIds: [
               ...new Set([
                 ...(existing[0]?.evidenceMessageIds ?? []),

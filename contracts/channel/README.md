@@ -16,6 +16,8 @@ Channel 是入口适配层。Core 不知道入口来自微信、企业微信、�
 
 以事件中的不透明 `mediaRef` 请求媒体。微信 `local_id`、数据库路径和源文件可用性只属于 Channel Host/Driver；Core 只得到可持久化的媒体流或明确的 `pending`、`not_found`、`failed` 结果。
 
+200 响应可携带 `X-Media-Variant: original | thumbnail`（缺省 `original`）。`thumbnail` 表示 Host 以低清变体回退（例如原图密钥暂不可用）：Core 将其落盘为展示层文件并标记资产 `sourceVariant=thumbnail`，待 Host 侧条件就绪后由 Core 的升级任务重取原图填充 `originalImageFileId`；Console/Mobile 只消费 `mediaId`，不感知变体实现细节。
+
 ### `channel.contacts`
 
 按不透明 `contactRef` 游标分页读取标准化联系人资料。微信联系人表、列名、头像来源和本地数据库路径只属于 Channel Host/Driver；Core 只接收联系人身份展示字段并维护 Contact Profile。

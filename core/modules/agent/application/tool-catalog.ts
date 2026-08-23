@@ -13,6 +13,10 @@ const queryContactProfileArguments = z.object({}).strict();
 const retrieveKnowledgeArguments = z
   .object({ query: z.string().trim().min(1).max(1_000) })
   .strict();
+/** 抓取网页链接内容的参数 Schema */
+const fetchUrlArguments = z
+  .object({ url: z.string().trim().min(1).max(2_000) })
+  .strict();
 
 /** 工具注册表 */
 const catalog = {
@@ -25,6 +29,11 @@ const catalog = {
     sideEffect: false,
     timeoutMs: 15_000,
     arguments: retrieveKnowledgeArguments,
+  },
+  fetch_url: {
+    sideEffect: false,
+    timeoutMs: 15_000,
+    arguments: fetchUrlArguments,
   },
 } as const;
 

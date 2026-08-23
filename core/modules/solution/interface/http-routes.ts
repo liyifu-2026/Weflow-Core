@@ -33,6 +33,7 @@ import {
   saveExtensionSettings,
   setSecretAssignment,
 } from "../application/solution-installation-service.js";
+import { listSolutionHealth } from "../application/solution-health-service.js";
 
 /** 插件声明的 dashboard 卡片贡献数据（manifest.consoleExtensions[].dashboardContributions[]）。 */
 type Contribution = {
@@ -179,6 +180,11 @@ export function registerSolutionRoutes(
   server.get("/api/v1/admin/solutions/extensions", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
     return { solutions: await listConsoleExtensions(db) };
+  });
+
+  server.get("/api/v1/admin/solutions/health", async (request, reply) => {
+    if (!(await requireAdminIdentity(db, request, reply))) return;
+    return { solutions: await listSolutionHealth(db) };
   });
 
   server.get("/api/v1/admin/dashboard/cards", async (request, reply) => {

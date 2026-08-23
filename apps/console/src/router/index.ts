@@ -27,7 +27,7 @@ const router = createRouter({
         {
           path: "account/profile",
           name: "profile",
-          component: () => import("@/weflow/views/ProfileView.vue"),
+          redirect: { path: "/", query: { profile: "1" } },
         },
         {
           path: "help",
