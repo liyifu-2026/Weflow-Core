@@ -3,7 +3,7 @@
   "kind": "SolutionLock",
   "solutionId": "weflow.customer-support",
   "solutionVersion": "1.0.0",
-  "manifestDigest": "sha256:b9a2b007c6858d89379a92ab1aba7526052cf24d4b4b5679e0d2361194150fc9",
+  "manifestDigest": "sha256:453f8ee023677f9d014a79a1a2289c9cf2a84481bc5fa41e6fa0d84cc8601b07",
   "dependencies": [],
   "artifacts": [
     {
@@ -28,8 +28,8 @@
       "id": "support-web",
       "ref": "artifacts/support-web.tgz",
       "registry": "file",
-      "digest": "sha256:264288a8ef93f981dcd4b98fc4c43cf4601ef73352f2782bd0567d3e2057af13",
-      "size": 23,
+      "digest": "sha256:ae901eb5cee5e200ae40e5d6d3841dd1d1470944d11028e5adac87ace1ca345f",
+      "size": 54305,
       "platform": "linux",
       "architecture": "x64"
     },

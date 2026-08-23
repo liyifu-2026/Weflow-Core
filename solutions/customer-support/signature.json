@@ -1,6 +1,6 @@
 {
   "algorithm": "ed25519",
   "keyId": "dev-key",
-  "digest": "sha256:b9a2b007c6858d89379a92ab1aba7526052cf24d4b4b5679e0d2361194150fc9",
+  "digest": "sha256:453f8ee023677f9d014a79a1a2289c9cf2a84481bc5fa41e6fa0d84cc8601b07",
   "signature": "p9sonEI6lFtu46ba2fSkTxh1FcSnbdpPRxZ4LLiIiq+XqJf+eFSjd6pDCKxvJnN5hJD3iL22Jgh1UMM8YBbXAA=="
 }

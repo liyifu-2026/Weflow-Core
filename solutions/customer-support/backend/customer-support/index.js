@@ -6,6 +6,25 @@
  * domain service without hardcoding them into Core.
  */
 import { createHandoffService } from "./handoff-service.js";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const promptsPath = join(currentDir, "..", "..", "plugins", "customer-support-strategy", "prompts.json");
+
+function readJsonFile(path, fallback) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFile(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(value, null, 2) + "\n", "utf8");
+}
 
 export async function registerRoutes(server, ctx) {
   const { db, schema, count, eq, gte, inArray, desc } = ctx;
@@ -222,4 +241,25 @@ export async function registerRoutes(server, ctx) {
       body: request.body,
     };
   });
+
+  server.get("/customer-support/prompts", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    return readJsonFile(promptsPath, { default: null, contacts: {}, conversations: {} });
+  });
+
+  server.put("/customer-support/prompts", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    const body = request.body ?? {};
+    const next = {
+      default: typeof body.default === "string" || body.default === null ? body.default : null,
+      contacts: body.contacts && typeof body.contacts === "object" ? body.contacts : {},
+      conversations: body.conversations && typeof body.conversations === "object" ? body.conversations : {},
+    };
+    writeJsonFile(promptsPath, next);
+    return next;
+  });
+
+
 }

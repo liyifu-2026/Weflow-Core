@@ -98,9 +98,27 @@
   ],
   "healthChecks": [
     {
-      "id": "support-web-health",
+      "id": "support-bff",
+      "name": "Support BFF",
       "type": "http",
-      "target": "/healthz",
+      "target": "http://127.0.0.1:3200/healthz",
+      "port": 3200,
+      "timeoutSeconds": 5
+    },
+    {
+      "id": "support-web",
+      "name": "Support Web",
+      "type": "http",
+      "target": "http://127.0.0.1:5174/support/",
+      "port": 5174,
+      "timeoutSeconds": 5
+    },
+    {
+      "id": "mobile",
+      "name": "Mobile App",
+      "type": "http",
+      "target": "http://127.0.0.1:8081",
+      "port": 8081,
       "timeoutSeconds": 5
     }
   ],
@@ -111,7 +129,7 @@
     {
       "id": "support-console",
       "title": "客服工作台",
-      "entry": "http://localhost:5174/support/",
+      "entry": "/plugins/customer-support/apps/support-web/dist/support-console.js",
       "nav": {
         "group": "业务",
         "label": "客服工作台",
@@ -147,6 +165,22 @@
               "default": "已为您转接人工客服"
             }
           ]
+        },
+        {
+          "id": "external-services",
+          "category": "integrations",
+          "label": "客服外部服务配置",
+          "order": 30,
+          "schema": [
+            { "key": "web_search_enabled", "label": "启用联网搜索", "type": "boolean", "default": false },
+            { "key": "web_search_base_url", "label": "联网搜索 Base URL", "type": "text", "placeholder": "https://api.example.com/v1" },
+            { "key": "web_search_api_key", "label": "联网搜索 API Key", "type": "secret" },
+            { "key": "web_search_model", "label": "联网搜索模型", "type": "text", "placeholder": "gpt-4o-mini" },
+            { "key": "voice_transcription_enabled", "label": "启用语音转写", "type": "boolean", "default": false },
+            { "key": "voice_transcription_base_url", "label": "语音转写 Base URL", "type": "text", "placeholder": "https://api.example.com/v1" },
+            { "key": "voice_transcription_api_key", "label": "语音转写 API Key", "type": "secret" },
+            { "key": "voice_transcription_model", "label": "语音转写模型", "type": "text", "placeholder": "mimo-v2.5-asr" }
+          ]
         }
       ],
       "dashboardContributions": [
@@ -176,17 +210,6 @@
         }
       ],
       "eventSubscriptions": ["customer_message", "handoff_created"]
-    },
-    {
-      "id": "console-demo",
-      "title": "远程组件演示",
-      "entry": "/console/src/remote-demo.ts",
-      "nav": {
-        "group": "业务",
-        "label": "组件演示",
-        "icon": "engine",
-        "order": 20
-      }
     }
   ]
 }
