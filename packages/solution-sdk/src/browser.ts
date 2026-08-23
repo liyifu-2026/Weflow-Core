@@ -1,39 +1,58 @@
 /**
  * Browser-safe entry for @weflow/solution-sdk.
  *
- * The main entry uses node:crypto for synchronous digests and signatures.
- * This entry uses Web Crypto so Console/Vite can consume validators and the
- * payload digest without pulling Node built-ins into the browser bundle.
+ * The Node entry uses node:crypto for synchronous digests and signatures.
+ * This entry exposes the pure schema validators plus a Web Crypto digest so
+ * Console/Vite can validate manifests and locks without pulling Node
+ * built-ins into the browser bundle.
  */
-import { validateSolutionLock } from "./lock.js";
-import { validateSolutionManifest } from "./manifest.js";
-import type { SolutionLockV1, SolutionManifestV1 } from "./types.js";
+import {
+  canonicalJson,
+  type SolutionLockV1,
+  type SolutionManifestV1,
+} from "./schema.js";
 
-export { validateSolutionLock, validateSolutionManifest };
-export type { SolutionLockV1, SolutionManifestV1 } from "./types.js";
-export type { ValidationIssue, ValidationResult } from "./validate.js";
+export {
+  canonicalJson,
+  normalizeSolutionManifest,
+  parseSolutionLock,
+  parseSolutionManifest,
+  solutionLockSchema,
+  solutionManifestSchema,
+  solutionSignatureSchema,
+  validateSolutionLock,
+  validateSolutionManifest,
+} from "./schema.js";
+export type {
+  ExecutionProfile,
+  HealthCheck,
+  SolutionApplication,
+  SolutionArtifact,
+  SolutionCompatibility,
+  SolutionConsoleExtension,
+  SolutionDependencies,
+  SolutionDescriptor,
+  SolutionLockV1,
+  SolutionManifestValidationResult,
+  SolutionLockValidationResult,
+  SolutionMetadata,
+  SolutionPackageDescriptor,
+  SolutionPackageFiles,
+  SolutionPermission,
+  SolutionResource,
+  SolutionSecretSlot,
+  SolutionSignature,
+} from "./schema.js";
 
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => canonicalize(item));
-  }
-  if (value !== null && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    const result: Record<string, unknown> = {};
-    for (const key of Object.keys(record).sort()) {
-      const item = canonicalize(record[key]);
-      if (item !== undefined) result[key] = item;
-    }
-    return result;
-  }
-  return value;
-}
-
+/**
+ * Deterministic payload digest over the manifest+lock pair, computed with
+ * Web Crypto. Same `sha256:` framing as the Node entry.
+ */
 export async function solutionPayloadDigestBrowser(
   manifest: SolutionManifestV1,
   lock: SolutionLockV1,
 ): Promise<string> {
-  const canonical = JSON.stringify(canonicalize({ manifest, lock }));
+  const canonical = canonicalJson({ lock, manifest });
   const data = new TextEncoder().encode(canonical);
   const digest = await crypto.subtle.digest("SHA-256", data);
   const bytes = new Uint8Array(digest);

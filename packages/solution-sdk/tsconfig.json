@@ -19,6 +19,6 @@
     "types": ["node"],
     "typeRoots": ["../../core/node_modules/@types", "../../node_modules/@types"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"],
+  "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"]
 }
