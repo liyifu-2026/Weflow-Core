@@ -19,7 +19,7 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@weflow/contracts": ["../../../../packages/contracts/dist/index.d.ts"]
+      "@weflow/contracts": ["../../../../../weflow/packages/contracts/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts"],

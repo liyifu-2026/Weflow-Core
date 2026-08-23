@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@weflow/contracts':
-        specifier: link:../../../../packages/contracts
-        version: link:../../../../packages/contracts
+        specifier: link:../../../../../weflow/packages/contracts
+        version: link:../../../../../weflow/packages/contracts
     devDependencies:
       '@types/node':
         specifier: 24.1.0

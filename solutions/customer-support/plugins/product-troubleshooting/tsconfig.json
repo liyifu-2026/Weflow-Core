@@ -19,8 +19,8 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@weflow/plugin-sdk": ["../../../../packages/plugin-sdk/dist/index.d.ts"],
-      "@weflow/contracts": ["../../../../packages/contracts/dist/index.d.ts"]
+      "@weflow/plugin-sdk": ["../../../../../weflow/packages/plugin-sdk/dist/index.d.ts"],
+      "@weflow/contracts": ["../../../../../weflow/packages/contracts/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts"],

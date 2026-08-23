@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@weflow/contracts':
-        specifier: link:../../../../packages/contracts
-        version: link:../../../../packages/contracts
+        specifier: link:../../../../../weflow/packages/contracts
+        version: link:../../../../../weflow/packages/contracts
       '@weflow/plugin-sdk':
-        specifier: link:../../../../packages/plugin-sdk
-        version: link:../../../../packages/plugin-sdk
+        specifier: link:../../../../../weflow/packages/plugin-sdk
+        version: link:../../../../../weflow/packages/plugin-sdk
     devDependencies:
       '@types/node':
         specifier: 24.1.0

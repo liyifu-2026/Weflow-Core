@@ -15,7 +15,7 @@
     "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
-    "@weflow/contracts": "link:../../../../packages/contracts"
+    "@weflow/contracts": "link:../../../../../weflow/packages/contracts"
   },
   "devDependencies": {
     "@types/node": "24.1.0",
