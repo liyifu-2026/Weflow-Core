@@ -35,7 +35,7 @@
   },
   "dependencies": {
     "@fastify/multipart": "10.1.0",
-    "@weflow/solution-sdk": "link:../../packages/solution-sdk",
+    "@weflow/solution-sdk": "link:../packages/solution-sdk",
     "adm-zip": "0.5.16",
     "argon2": "0.45.1",
     "bullmq": "5.81.2",

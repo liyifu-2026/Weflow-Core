@@ -12,8 +12,8 @@ importers:
         specifier: 10.1.0
         version: 10.1.0
       '@weflow/solution-sdk':
-        specifier: link:../../packages/solution-sdk
-        version: link:../../packages/solution-sdk
+        specifier: link:../packages/solution-sdk
+        version: link:../packages/solution-sdk
       adm-zip:
         specifier: 0.5.16
         version: 0.5.16
