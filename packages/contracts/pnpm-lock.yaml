@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@weflow/solution-sdk':
+        specifier: link:../solution-sdk
+        version: link:../solution-sdk
     devDependencies:
       typescript:
         specifier: 5.9.3

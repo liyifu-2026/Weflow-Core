@@ -13,7 +13,8 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../../../infrastructure/postgres/schema.js";
-import { describeSolution } from "@weflow/solution-sdk";
+import { describeSolution, type SolutionManifestV1 } from "@weflow/solution-sdk";
+import type { ConsoleExtensionProjection } from "@weflow/contracts";
 import { checkSolutionVersionHealth } from "../../../infrastructure/solutions/solution-health.js";
 import { readManifestFile } from "../../../infrastructure/solutions/solution-stage.js";
 import {
@@ -22,26 +23,15 @@ import {
 } from "../../../infrastructure/solutions/solution-store.js";
 import { requireAdminIdentity } from "../../identity/interface/request-authentication.js";
 
-type ConsoleExtensionView = {
-  solutionId: string;
-  version: string;
-  extensionId: string;
-  title: string;
-  path: string;
-  entry: string;
-  group?: string;
-  icon?: string;
-  adminOnly?: boolean;
-  hidden?: boolean;
-};
-
-async function loadActiveConsoleExtensions(): Promise<ConsoleExtensionView[]> {
+async function loadActiveConsoleExtensions(): Promise<
+  ConsoleExtensionProjection[]
+> {
   const root = getSolutionStoreRoot();
-  const extensions: ConsoleExtensionView[] = [];
+  const extensions: ConsoleExtensionProjection[] = [];
   for (const overview of await listStoreOverviews()) {
     if (!overview.activeVersion) continue;
     const activeDir = join(root, overview.solutionId, overview.activeVersion);
-    let manifest;
+    let manifest: SolutionManifestV1;
     try {
       manifest = describeSolution(await readManifestFile(activeDir)).manifest;
     } catch {

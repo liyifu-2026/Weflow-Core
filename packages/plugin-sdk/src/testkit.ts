@@ -1,8 +1,8 @@
 import { isPluginManifest } from "./guards.js";
 import type {
+  AuthoringPluginContext,
   ExecutionStrategyRegistration,
-  PluginContext,
-  PluginDefinition,
+  PluginPackage,
   RuntimePluginManifest,
   SkillRegistration,
   ToolRegistration,
@@ -13,12 +13,12 @@ export interface PluginHarness {
   tools: Map<string, ToolRegistration>;
   skills: Map<string, SkillRegistration>;
   strategies: Map<string, ExecutionStrategyRegistration>;
-  activate(ctx: PluginContext): Promise<void>;
-  deactivate(ctx: PluginContext): Promise<void>;
-  dispose(ctx: PluginContext): Promise<void>;
+  activate(ctx: AuthoringPluginContext): Promise<void>;
+  deactivate(ctx: AuthoringPluginContext): Promise<void>;
+  dispose(ctx: AuthoringPluginContext): Promise<void>;
 }
 
-export function createPluginHarness(plugin: PluginDefinition): PluginHarness {
+export function createPluginHarness(plugin: PluginPackage): PluginHarness {
   if (!isPluginManifest(plugin.manifest)) {
     throw new Error("invalid plugin manifest");
   }

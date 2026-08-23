@@ -19,7 +19,7 @@ const manifest: RuntimePluginManifest = {
   },
   capabilities: [
     {
-      name: "agent.execution-strategy",
+      id: "agent.execution-strategy",
       version: "1.0.0",
     },
   ],

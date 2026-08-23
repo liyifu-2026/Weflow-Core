@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import {
-  useExtensionStore,
-  type SettingCategory,
-  type SettingContribution,
-} from "../stores/extensions";
+import { useExtensionStore, type SettingField } from "../stores/extensions";
 import WfIcon from "../components/WfIcon.vue";
 import SettingForm from "../components/SettingForm.vue";
 import PageHeader from "../components/PageHeader.vue";
@@ -12,7 +8,7 @@ import EmptyState from "../components/EmptyState.vue";
 
 const extensions = useExtensionStore();
 
-const activeCategory = ref<SettingCategory>("");
+const activeCategory = ref<string>("");
 const searchQuery = ref("");
 
 type PluginSetting = {
@@ -20,46 +16,17 @@ type PluginSetting = {
   version: string;
   extensionId: string;
   contributionId: string;
-  category: SettingCategory;
+  category: string;
   categoryLabel?: string;
   label: string;
   order: number;
   component?: string;
-  schema?: SettingContribution["schema"];
+  schema?: SettingField[];
 };
 
-const pluginSettings = computed<PluginSetting[]>(() =>
-  extensions.solutions.flatMap((solution) =>
-    solution.extensions.flatMap((extension) => {
-      const contributions = extension.settingsContributions?.length
-        ? extension.settingsContributions
-        : extension.settingsSchema
-          ? [
-              {
-                id: extension.id,
-                category: "general",
-                categoryLabel: "通用",
-                label: extension.title,
-                order: 100,
-                schema: extension.settingsSchema,
-              },
-            ]
-          : [];
-      return contributions.map((contribution) => ({
-        solutionId: solution.solutionId,
-        version: solution.version,
-        extensionId: extension.id,
-        contributionId: contribution.id,
-        category: contribution.category,
-        categoryLabel: contribution.categoryLabel,
-        label: contribution.label,
-        order: contribution.order ?? 100,
-        component: contribution.component,
-        schema: contribution.schema,
-      }));
-    }),
-  ),
-);
+// Store 投影（@weflow/contracts ConsoleExtensionProjection）当前不携带
+// 设置 schema；settings 贡献契约未来由 Solution 包重新提供后在这里接入。
+const pluginSettings = computed<PluginSetting[]>(() => []);
 
 const normalizedQuery = computed(() => searchQuery.value.trim().toLowerCase());
 const filteredPluginSettings = computed(() => {

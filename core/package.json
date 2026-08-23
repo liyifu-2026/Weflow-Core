@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@fastify/multipart": "10.1.0",
+    "@weflow/contracts": "link:../packages/contracts",
     "@weflow/solution-sdk": "link:../packages/solution-sdk",
     "adm-zip": "0.5.16",
     "argon2": "0.45.1",

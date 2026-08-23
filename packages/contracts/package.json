@@ -20,11 +20,15 @@
     "dist"
   ],
   "scripts": {
+    "prebuild": "pnpm --dir ../solution-sdk build",
     "build": "tsc -p tsconfig.build.json",
     "build:test": "tsc -p tsconfig.test.json",
-    "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "test": "npm run build:test \u0026\u0026 node dist-test/tests/agent.test.js",
-    "check": "pnpm typecheck \u0026\u0026 pnpm test"
+    "typecheck": "pnpm --dir ../solution-sdk build && tsc -p tsconfig.build.json --noEmit",
+    "test": "npm run build:test && node dist-test/tests/agent.test.js",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "dependencies": {
+    "@weflow/solution-sdk": "link:../solution-sdk"
   },
   "devDependencies": {
     "typescript": "5.9.3"

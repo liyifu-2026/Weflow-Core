@@ -50,9 +50,9 @@ const groups = computed(() => [
 const dynamicGroups = computed(() => {
   const map = new Map<string, Array<{ to: string; icon: string; label: string }>>();
   for (const item of extensions.navItems) {
-    const group = item.extension.nav?.group || "业务";
-    const label = item.extension.nav?.label || item.extension.title;
-    const icon = item.extension.nav?.icon || "engine";
+    const group = item.extension.group || "业务";
+    const label = item.extension.title;
+    const icon = item.extension.icon || "engine";
     if (!map.has(group)) map.set(group, []);
     map.get(group)!.push({ to: item.to, icon, label });
   }

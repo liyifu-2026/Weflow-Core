@@ -101,6 +101,19 @@ export interface AgentExecutionStrategy {
   validateAction(input: AgentActionValidationInput): AgentActionValidation;
 }
 
+/**
+ * Execution Strategy 注册表契约。
+ *
+ * 实现属于平台（Core 内的 `MapExecutionStrategyRegistry`）；本接口是
+ * Agent Turn 执行链与 Solution Strategy 插件之间的唯一权威形状。
+ */
+export interface ExecutionStrategyRegistry {
+  get(strategyId: string): AgentExecutionStrategy | undefined;
+  has(strategyId: string): boolean;
+  list(): AgentExecutionStrategy[];
+  register(strategy: AgentExecutionStrategy): void;
+}
+
 export function isAgentAction(value: unknown): value is AgentAction {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;

@@ -1,5 +1,5 @@
 import type {
-  CapabilityToken,
+  CapabilityDeclaration,
   PluginRestartPolicy,
   PluginRuntimeType,
   RuntimePluginManifest,
@@ -17,10 +17,10 @@ const RESTART_POLICIES: readonly PluginRestartPolicy[] = [
   "never",
 ];
 
-export function isCapabilityToken(value: unknown): value is CapabilityToken {
+export function isCapabilityDeclaration(value: unknown): value is CapabilityDeclaration {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  return typeof record.name === "string" && record.name.length > 0;
+  return typeof record.id === "string" && record.id.length > 0;
 }
 
 export function isPluginManifest(value: unknown): value is RuntimePluginManifest {
@@ -64,5 +64,5 @@ export function isPluginManifest(value: unknown): value is RuntimePluginManifest
     return false;
   }
   if (!Array.isArray(record.capabilities)) return false;
-  return record.capabilities.every(isCapabilityToken);
+  return record.capabilities.every(isCapabilityDeclaration);
 }

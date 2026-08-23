@@ -4,21 +4,27 @@
  * The kernel owns composition and lifecycle only. Domain/application modules
  * must receive their capabilities from a composition root and must not use
  * this registry as an ambient service locator.
+ *
+ * The plugin/capability contract shapes are the authoritative ones from
+ * `@weflow/contracts` (`src/kernel.ts`); they are re-exported here so existing
+ * import sites stay stable.
  */
+import type {
+  CapabilityToken,
+  KernelEventListener,
+  MaybePromise,
+  PluginContext,
+  PluginDefinition,
+} from "@weflow/contracts";
 
-export type MaybePromise<T> = T | Promise<T>;
-
-export type CapabilityToken<T> = {
-  readonly id: string;
-  /** TypeScript-only marker; it is never read at runtime. */
-  readonly __type?: T;
-};
-
-export function capability<T>(id: string): CapabilityToken<T> {
-  return { id };
-}
-
-export type KernelEventListener = (payload: unknown) => void | Promise<void>;
+export {
+  capability,
+  type CapabilityToken,
+  type KernelEventListener,
+  type MaybePromise,
+  type PluginContext,
+  type PluginDefinition,
+} from "@weflow/contracts";
 
 export type PluginState =
   | "registered"
@@ -27,30 +33,6 @@ export type PluginState =
   | "stopping"
   | "disposed"
   | "failed";
-
-export type PluginContext = {
-  /** Resolve a capability explicitly declared in the plugin's requires list. */
-  use<T>(token: CapabilityToken<T>): T;
-  /** Register a capability explicitly declared in the plugin's provides list. */
-  provide<T>(token: CapabilityToken<T>, value: T): void;
-  /** Register an owned disposer. Disposers run in reverse registration order. */
-  effect(disposer: () => MaybePromise<void>): void;
-  /** Event subscriptions are automatically owned by the current plugin. */
-  events: {
-    on(event: string, listener: KernelEventListener): () => void;
-    emit(event: string, payload: unknown): Promise<void>;
-  };
-};
-
-export type PluginDefinition = {
-  name: string;
-  provides: readonly CapabilityToken<unknown>[];
-  requires: readonly CapabilityToken<unknown>[];
-  setup?(context: PluginContext): MaybePromise<void>;
-  start?(context: PluginContext): MaybePromise<void>;
-  stop?(context: PluginContext): MaybePromise<void>;
-  dispose?(context: PluginContext): MaybePromise<void>;
-};
 
 type ListenerEntry = {
   owner: string;

@@ -1,4 +1,32 @@
+/**
+ * Plugin SDK authoring model.
+ *
+ * The runtime registration shapes (`PluginDefinition`, `CapabilityToken`,
+ * kernel `PluginContext`) are the authoritative ones from
+ * `@weflow/contracts`; they are re-exported here under their canonical names.
+ * This module only owns the authoring-time package model
+ * (`RuntimePluginManifest` / `PluginPackage`) used by Solution developers;
+ * adapting a `PluginPackage` into a runtime `PluginDefinition` happens in the
+ * platform adapter layer, never by re-declaring lookalike types.
+ */
 import type { AgentExecutionStrategy } from "@weflow/contracts";
+
+// Runtime contract shapes — canonical definitions live in @weflow/contracts.
+export {
+  capability,
+  type CapabilityToken,
+  type KernelEventListener,
+  type MaybePromise,
+} from "@weflow/contracts";
+export type PluginDefinition = import("@weflow/contracts").PluginDefinition;
+
+/** Manifest-level capability declaration (authoring view of a token). */
+export interface CapabilityDeclaration {
+  /** Stable capability id, identical to the kernel token id. */
+  id: string;
+  version?: string;
+  scope?: string;
+}
 
 export type PluginKind =
   | "provider"
@@ -10,12 +38,6 @@ export type PluginKind =
 export type PluginRuntimeType = "node" | "isolated" | "container";
 
 export type PluginRestartPolicy = "always" | "on-failure" | "never";
-
-export interface CapabilityToken {
-  name: string;
-  version?: string;
-  scope?: string;
-}
 
 export interface PluginMetadata {
   id: string;
@@ -31,7 +53,12 @@ export interface PluginRuntime {
   restartPolicy?: PluginRestartPolicy;
 }
 
-export interface PluginContext {
+/**
+ * Authoring-time context passed to lifecycle hooks. Deliberately distinct
+ * from the kernel's `PluginContext` (capability registry) — this one carries
+ * deployment configuration only.
+ */
+export interface AuthoringPluginContext {
   config: Record<string, unknown>;
   secrets: Record<string, string>;
   logger: {
@@ -42,9 +69,9 @@ export interface PluginContext {
 }
 
 export interface PluginLifecycle {
-  activate?(ctx: PluginContext): void | Promise<void>;
-  deactivate?(ctx: PluginContext): void | Promise<void>;
-  dispose?(ctx: PluginContext): void | Promise<void>;
+  activate?(ctx: AuthoringPluginContext): void | Promise<void>;
+  deactivate?(ctx: AuthoringPluginContext): void | Promise<void>;
+  dispose?(ctx: AuthoringPluginContext): void | Promise<void>;
 }
 
 export interface ToolResult {
@@ -64,7 +91,7 @@ export interface ToolRegistration {
   timeoutMs?: number;
   handler(
     args: Record<string, string>,
-    ctx: PluginContext,
+    ctx: AuthoringPluginContext,
   ): Promise<ToolResult> | ToolResult;
 }
 
@@ -73,7 +100,10 @@ export interface SkillRegistration {
   version?: string;
   beforeKnowledge?(input: unknown): unknown;
   afterKnowledge?(input: unknown): unknown;
-  execute?(input: unknown, ctx: PluginContext): Promise<unknown> | unknown;
+  execute?(
+    input: unknown,
+    ctx: AuthoringPluginContext,
+  ): Promise<unknown> | unknown;
 }
 
 export interface ExecutionStrategyRegistration {
@@ -87,14 +117,15 @@ export interface RuntimePluginManifest {
   kind: "Plugin";
   metadata: PluginMetadata;
   runtime: PluginRuntime;
-  capabilities: CapabilityToken[];
+  capabilities: CapabilityDeclaration[];
   permissions?: string[];
   tools?: ToolRegistration[];
   skills?: SkillRegistration[];
   executionStrategies?: ExecutionStrategyRegistration[];
 }
 
-export interface PluginDefinition {
+/** Authoring-time plugin package: a manifest plus optional lifecycle hooks. */
+export interface PluginPackage {
   manifest: RuntimePluginManifest;
   lifecycle?: PluginLifecycle;
 }
