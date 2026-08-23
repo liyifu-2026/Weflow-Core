@@ -47,7 +47,7 @@ for (const target of targets) {
   const dir = resolve(target);
   try {
     const readJson = async (name) =>
-      JSON.parse(await readFile(resolve(dir, name), "utf8"));
+      JSON.parse((await readFile(resolve(dir, name), "utf8")).trim());
     const descriptor = describeSolutionPackage({
       manifest: await readJson("solution.manifest.json"),
       lock: await readJson("solution.lock.json"),
