@@ -743,7 +743,7 @@ onMounted(() => {
                 <div class="bubble-row" :class="messageBubbleClass(message)">
                   <div class="bubble-wrap">
                     <div class="bubble" :class="{ media: Boolean(message.mediaId), long: (message.text?.length ?? 0) > 120 }">
-                      <MediaImage v-if="message.mediaId && message.contentType === 'image'" :media-id="message.mediaId" :alt="message.mediaDescription || '图片消息'" />
+                      <MediaImage v-if="message.mediaId && (message.contentType === 'image' || message.contentType === 'emotion')" :media-id="message.mediaId" :alt="message.mediaDescription || '图片消息'" />
                       <span v-else-if="message.contentType === 'voice'" class="wf-subtle">{{ message.text || message.mediaDescription || "〔语音消息〕转写不可用" }}</span>
                       <span v-else-if="message.mediaId" class="wf-subtle">{{ message.mediaDescription || "媒体消息" }}</span>
                       <span v-else>{{ message.text || "—" }}</span>
