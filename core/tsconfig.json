@@ -21,6 +21,7 @@
   "include": [
     "apps/**/*.ts",
     "infrastructure/**/*.ts",
+    "modules/**/*.ts",
     "scripts/**/*.ts",
     "tests/**/*.ts",
     "drizzle.config.ts",

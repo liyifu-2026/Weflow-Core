@@ -762,18 +762,25 @@ class WeChatUIA:
         """把账号/username 解析成微信搜索框能命中的关键词列表。
 
         微信搜索框不认 wxid（系统账号），只认昵称/备注/微信号(alias)。
-        优先返回直接命中词（原样），再尝试 DB 映射：username 精确 → 昵称/备注/微信号。
+        因此先尝试 DB 映射：username 精确 → 备注/昵称/微信号；
+        原始 keyword 只作为最后兜底（可能是 alias，也可能最终仍失败）。
         """
-        candidates = [keyword]
+        candidates: List[str] = []
         try:
             from wechatauto.db import WeChatDB
             db = WeChatDB()
             for hit in db.search_contact(keyword):
-                for k in (hit.get("remark"), hit.get("nick_name")):
+                for k in (
+                    hit.get("remark"),
+                    hit.get("nick_name"),
+                    hit.get("alias"),
+                ):
                     if k and k not in candidates:
                         candidates.append(k)
         except Exception:
             pass
+        if keyword not in candidates:
+            candidates.append(keyword)
         return candidates
 
     def open_chat(self, keyword: str, index: Optional[int] = None,

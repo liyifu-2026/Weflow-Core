@@ -155,7 +155,7 @@ export async function failMediaVisionDisabled(
     })
     .where(
       and(
-        inArray(schema.mediaAssets.kind, ["image", "voice"]),
+        inArray(schema.mediaAssets.kind, ["image", "voice", "emotion"]),
         inArray(schema.mediaAssets.status, MULTIMODAL_STAGE_STATUSES),
       ),
     )

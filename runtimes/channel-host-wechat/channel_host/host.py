@@ -133,6 +133,7 @@ class WeChatChannelHost:
                         and not _is_image_message(message)
                         and not _is_file_message(message)
                         and not _is_voice_message(message)
+                        and not _is_emotion_message(message)
                     ):
                         self.event_store.advance_checkpoint(
                             conversation_ref, sort_seq
@@ -173,6 +174,7 @@ class WeChatChannelHost:
         is_image = _is_image_message(message)
         is_file = not is_image and _is_file_message(message)
         is_voice = not is_image and not is_file and _is_voice_message(message)
+        is_emotion = not is_image and not is_file and not is_voice and _is_emotion_message(message)
         file_name: Optional[str] = None
         mime_type: Optional[str] = None
         if is_file:
@@ -196,6 +198,9 @@ class WeChatChannelHost:
             else:
                 content = raw_content
             mime_type = "audio/x-silk"
+        elif is_emotion:
+            raw_content = message.get("content")
+            content = raw_content if isinstance(raw_content, str) else "[动画表情]"
         else:
             content = message.get("content")
             if not isinstance(content, str):
@@ -219,14 +224,24 @@ class WeChatChannelHost:
             conversation_ref=conversation_ref,
             channel_message_id=local_id_text,
             sender_ref=sender_ref,
-            kind="image" if is_image else "file" if is_file else "voice" if is_voice else "text",
+            kind=(
+                "image"
+                if is_image
+                else "file"
+                if is_file
+                else "voice"
+                if is_voice
+                else "emotion"
+                if is_emotion
+                else "text"
+            ),
             content=normalized_content,
             occurred_at=occurred_at,
             observed_at=datetime.now(timezone.utc).isoformat(),
             is_self=is_self,
             media_ref=(
                 f"wechat-media:v1:{hashlib.sha256(event_id.encode()).hexdigest()}"
-                if is_image or is_file or is_voice
+                if is_image or is_file or is_voice or is_emotion
                 else None
             ),
             file_name=file_name,
@@ -331,6 +346,12 @@ def _is_voice_message(message: dict) -> bool:
     return message.get("type") in ("语音", "voice", 34) or message.get(
         "local_type"
     ) in ("语音", "voice", 34)
+
+
+def _is_emotion_message(message: dict) -> bool:
+    return message.get("type") in ("动画表情", "表情", "emotion", 47) or message.get(
+        "local_type"
+    ) in ("动画表情", "表情", "emotion", 47)
 
 
 # 微信语音占位内容：未开启自动转文字时形如 "[语音]"、"[语音]12秒"、"[语音]5秒,未播放"

@@ -769,7 +769,7 @@ class WeChatDB:
             conn = self._open(rel)
             try:
                 rows = conn.execute(
-                    "SELECT username, nick_name, remark FROM contact "
+                    "SELECT username, nick_name, remark, alias FROM contact "
                     "WHERE nick_name LIKE ? OR remark LIKE ? OR username LIKE ? "
                     "OR alias LIKE ? LIMIT 50",
                     ("%" + keyword + "%",) * 4,
@@ -781,6 +781,7 @@ class WeChatDB:
                     "username": r["username"],
                     "nick_name": r["nick_name"],
                     "remark": r["remark"],
+                    "alias": r["alias"],
                 })
             break
         return results

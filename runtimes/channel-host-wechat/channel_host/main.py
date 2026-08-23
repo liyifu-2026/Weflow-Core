@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import threading
+from typing import Callable, Optional
 
 from wechatauto import MediaDownloader, WeChatDB
 
@@ -14,6 +15,31 @@ from .http_host import ChannelHostHttpServer
 from .key_service import ImageKeyService
 from .media import create_media_resolver
 from .outbound import WeChatChannelSender, process_send_operations
+
+
+def _capture_emoji(
+    db: WeChatDB,
+    media_staging: Path,
+) -> Callable[[str, int], Optional[str]]:
+    def capture(conversation_ref: str, local_id: int) -> Optional[str]:
+        from wechatauto import WeChatGUI
+        from wechatauto.wx import Chat, _db_row_to_message
+
+        row = db.get_message_row(conversation_ref, int(local_id))
+        if not row:
+            return None
+        save_dir = media_staging / "emoji"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            chat = Chat(who=conversation_ref, gui=WeChatGUI(), db=db)
+            msg = _db_row_to_message(row, chat)
+            if hasattr(msg, "capture"):
+                return msg.capture(save_dir=str(save_dir))
+        except Exception as error:
+            print(f"emoji capture failed: {error}")
+        return None
+
+    return capture
 
 
 def main() -> None:
@@ -43,6 +69,7 @@ def main() -> None:
         event_store,
         downloader,
         str(media_staging),
+        emoji_capture=_capture_emoji(db, media_staging),
     )
     key_service = ImageKeyService(
         downloader,
