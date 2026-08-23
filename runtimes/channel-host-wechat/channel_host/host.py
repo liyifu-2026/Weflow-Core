@@ -193,7 +193,11 @@ class WeChatChannelHost:
             # 一起出现；未开启时内容是 [语音] 占位，此时 transcript 留空，
             # 由 Core 通过 mediaRef 走 SILK 下载 + ASR 备选路径。
             stripped = raw_content.strip()
-            if not stripped or _VOICE_PLACEHOLDER_RE.match(stripped):
+            if (
+                not stripped
+                or _VOICE_PLACEHOLDER_RE.match(stripped)
+                or "<voicemsg" in stripped.lower()
+            ):
                 content = ""
             else:
                 content = raw_content

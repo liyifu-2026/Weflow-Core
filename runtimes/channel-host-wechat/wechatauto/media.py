@@ -638,18 +638,26 @@ class MediaDownloader:
             finally:
                 conn.close()
             if r and r["packed_info"]:
-                name = r["packed_info"].decode("utf-8", "replace").strip()
-                name = re.sub(r"[\r\n\x00]+", "", name)
-                if "/" in name or "\\" in name:
-                    name = name.split("/")[-1].split("\\")[-1]
-                return name or None
+                names = _extract_packed_info_strings(r["packed_info"])
+                for raw_name in reversed(names):
+                    name = raw_name.strip().replace("\\", "/")
+                    if "/" in name:
+                        name = name.rsplit("/", 1)[-1]
+                    if name:
+                        return name
+                return None
             break
         return None
 
     def download_file(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
         """文件：msg/file/<YYYY-MM>/<原文件名>，原文件名来自 message_resource"""
         row = self.db.get_message_row(user, local_id)
-        if not row or row["local_type"] != 49:
+        if not row:
+            return None
+        type_name = self.db._msg_type_name(row["local_type"]) if hasattr(
+            self.db, "_msg_type_name"
+        ) else None
+        if row["local_type"] != 49 and type_name != "文件/链接/卡片":
             return None
         name = self._file_name(row)
         if not name:
@@ -680,3 +688,50 @@ class MediaDownloader:
         if t == 49:
             return self.download_file(user, local_id, save_dir)
         return None
+
+
+def _read_varint(data: bytes, index: int):
+    value = 0
+    shift = 0
+    while index < len(data):
+        byte = data[index]
+        index += 1
+        value |= (byte & 0x7F) << shift
+        if not (byte & 0x80):
+            break
+        shift += 7
+    return value, index
+
+
+def _extract_packed_info_strings(packed_info: bytes) -> list[str]:
+    """从微信 MessageResourceDetail.packed_info 中提取 UTF-8 文件名字符串。
+
+    该字段是若干嵌套 length-delimited 的类似 Protobuf 消息；文件名通常位于
+    字段号 2（0x12）。解析失败时返回空列表，由调用方保持旧的安全降级。
+    """
+    strings: list[str] = []
+    index = 0
+    while index < len(packed_info):
+        tag = packed_info[index]
+        index += 1
+        wire = tag & 0x07
+        if wire == 2:
+            length, index = _read_varint(packed_info, index)
+            payload = packed_info[index : index + length]
+            index += length
+            if tag == 0x0A:
+                strings.extend(_extract_packed_info_strings(payload))
+            elif tag == 0x12:
+                try:
+                    strings.append(payload.decode("utf-8"))
+                except UnicodeDecodeError:
+                    continue
+        elif wire == 0:
+            _value, index = _read_varint(packed_info, index)
+        elif wire == 1:
+            index += 8
+        elif wire == 5:
+            index += 4
+        else:
+            index += 1
+    return strings

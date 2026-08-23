@@ -57,8 +57,11 @@ const POLL_INTERVAL_MS = 20;
 
 /** 解码阶段：stdin=SILK，stdout=PCM s16le；pysilk 调用内联避免额外脚本文件 */
 const DECODE_SCRIPT =
-  "import io,sys,pysilk;sys.stdout.buffer.write(" +
-  "pysilk.decode(io.BytesIO(sys.stdin.buffer.read()),sample_rate=%d))";
+  "import io,sys,pysilk;" +
+  "data=sys.stdin.buffer.read();" +
+  "out=io.BytesIO();" +
+  "pysilk.decode(io.BytesIO(data),out,%d);" +
+  "sys.stdout.buffer.write(out.getvalue())";
 
 function encodeArgs(sampleRate: number): string[] {
   return [
@@ -92,8 +95,9 @@ export class PysilkFfmpegTranscoder {
   readonly #onDiagnostics: (line: string) => void;
 
   public constructor(options: PysilkFfmpegTranscoderOptions = {}) {
-    this.#pythonPath = options.pythonPath ?? "python";
-    this.#ffmpegPath = options.ffmpegPath ?? "ffmpeg";
+    this.#pythonPath = options.pythonPath ?? process.env.PYTHON_PATH ?? "python";
+    this.#ffmpegPath =
+      options.ffmpegPath ?? process.env.FFMPEG_PATH ?? "ffmpeg";
     this.#sampleRate = options.sampleRate ?? 24_000;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.#spawnImpl =
