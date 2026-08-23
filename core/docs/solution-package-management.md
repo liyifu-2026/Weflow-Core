@@ -17,17 +17,17 @@ Solution 采用同一心智模型。
 
 ## 2. 核心概念
 
-| npm 概念                 | Weflow Solution 对应                                          |
-| ------------------------ | ------------------------------------------------------------- |
+| npm 概念                 | Weflow Solution 对应                                               |
+| ------------------------ | ------------------------------------------------------------------ |
 | `package.json`           | `solution.manifest.json` + `solution.lock.json` + `signature.json` |
-| npm registry             | Solution Registry（本地目录或 HTTP）                          |
-| `npm install <pkg>`      | `weflowctl solution install <package>`                        |
-| `node_modules/<pkg>`     | `<store>/<id>/<version>/`                                     |
-| `package-lock.json`      | `weflow-solution.lock.json`                                   |
-| `npm update`             | `weflowctl solution update`                                   |
-| `node_modules/.bin` 软链 | `<store>/<id>/active` junction                                |
-| `npm publish`            | `weflowctl solution publish <dir>`                            |
-| semver                   | 更新策略 manual/patch/minor/major                             |
+| npm registry             | Solution Registry（本地目录或 HTTP）                               |
+| `npm install <pkg>`      | `weflowctl solution install <package>`                             |
+| `node_modules/<pkg>`     | `<store>/<id>/<version>/`                                          |
+| `package-lock.json`      | `weflow-solution.lock.json`                                        |
+| `npm update`             | `weflowctl solution update`                                        |
+| `node_modules/.bin` 软链 | `<store>/<id>/active` junction                                     |
+| `npm publish`            | `weflowctl solution publish <dir>`                                 |
+| semver                   | 更新策略 manual/patch/minor/major                                  |
 
 ## 3. 目录布局
 
