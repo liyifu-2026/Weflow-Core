@@ -54,7 +54,7 @@ async function latestManifest(
     .from(schema.solutionOperationPayloads)
     .where(eq(schema.solutionOperationPayloads.operationId, operationId))
     .limit(1);
-  return payloadRows[0]?.manifestJson as Record<string, unknown> | undefined;
+  return payloadRows[0]?.manifestJson;
 }
 
 async function probeCheck(
@@ -76,7 +76,7 @@ async function probeCheck(
           target: check.target,
           ...(check.port === undefined ? {} : { port: check.port }),
           status: "healthy",
-          summary: `HTTP ${response.status}`,
+          summary: `HTTP ${String(response.status)}`,
           checkedAt,
         };
       }
@@ -87,7 +87,7 @@ async function probeCheck(
         target: check.target,
         ...(check.port === undefined ? {} : { port: check.port }),
         status: "unreachable",
-        summary: `HTTP ${response.status}`,
+        summary: `HTTP ${String(response.status)}`,
         checkedAt,
       };
     } catch {

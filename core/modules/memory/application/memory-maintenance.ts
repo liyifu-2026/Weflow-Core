@@ -84,5 +84,7 @@ export function startMemoryMaintenance(
     }
   };
   void run();
-  return () => abortController.abort();
+  return () => {
+    abortController.abort();
+  };
 }

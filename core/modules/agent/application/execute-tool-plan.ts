@@ -137,7 +137,9 @@ const FETCH_URL_TIMEOUT_MS = 15_000;
 async function fetchUrlText(rawUrl: string): Promise<Record<string, unknown>> {
   const url = assertPublicHttpUrl(rawUrl);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_URL_TIMEOUT_MS);
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, FETCH_URL_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
       redirect: "follow",
@@ -169,9 +171,14 @@ async function fetchUrlText(rawUrl: string): Promise<Record<string, unknown>> {
     if (!reader) throw new Error("empty_response_body");
     const chunks: Uint8Array[] = [];
     let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    for (;;) {
+      const result = (await reader.read()) as {
+        done: boolean;
+        value?: Uint8Array;
+      };
+      if (result.done) break;
+      const value = result.value;
+      if (value === undefined) break;
       chunks.push(value);
       total += value.byteLength;
       if (total > MAX_URL_CONTENT_BYTES) {
