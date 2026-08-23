@@ -290,6 +290,31 @@ export async function resolveActiveSolutionDir(
   return realpath(activePath);
 }
 
+/** One-row overview of an installed solution as recorded by the store. */
+export type SolutionStoreOverview = {
+  solutionId: string;
+  installedVersions: string[];
+  activeVersion: string | null;
+};
+
+/**
+ * Overview of every installed solution in the store. This is the read model
+ * platform components should use: the store lockfile plus directory layout
+ * are authoritative, never the Core database.
+ */
+export async function listStoreOverviews(): Promise<SolutionStoreOverview[]> {
+  const overviews: SolutionStoreOverview[] = [];
+  if (!(await existsInStore("."))) return overviews;
+  for (const solutionId of await storeSolutions()) {
+    overviews.push({
+      solutionId,
+      installedVersions: await listInstalledVersions(solutionId),
+      activeVersion: await readActiveVersion(solutionId),
+    });
+  }
+  return overviews;
+}
+
 export async function readSolutionLockfile(): Promise<SolutionLockfile> {
   const root = await ensureSolutionStore();
   const lockPath = join(root, "weflow-solution.lock.json");

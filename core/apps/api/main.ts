@@ -6,7 +6,6 @@
  * - 启动 Redis 消息队列调度器（Agent Turn、内存捕获、媒体处理、推送通知）
  * - 启动 Channel Host 轮询器，从 Channel Host 同步通道事件
  */
-import { resolve } from "node:path";
 import { runProcess } from "../../infrastructure/runtime/run-process.js";
 import multipart from "@fastify/multipart";
 import { LocalFileStorage } from "../../infrastructure/file_storage/local-file-storage.js";
@@ -45,11 +44,9 @@ import { startExpoPushDispatcher } from "../../infrastructure/notifications/expo
 import { registerKnowledgeProviderRoutes } from "../../modules/knowledge-provider/interface/http-routes.js";
 import { registerKnoraBridgeRoutes } from "../../modules/knora-bridge/interface/http-routes.js";
 import { registerOperationsRoutes } from "../../modules/operations/interface/http-routes.js";
-import { registerSolutionRoutes } from "../../modules/solution/interface/http-routes.js";
-import { registerSolutionRunnerRoutes } from "../../modules/solution/interface/runner-routes.js";
-import { startPluginEventDispatcher } from "../../modules/solution/application/plugin-event-dispatcher.js";
-import { registerSolutionBackendPlugins } from "../../modules/solution/application/solution-backend-loader.js";
-import { requireBusinessIdentity } from "../../modules/identity/interface/request-authentication.js";
+import { registerSolutionStoreRoutes } from "../../modules/solution/interface/store-routes.js";
+import { loadInstalledSolutionPlugins } from "../../infrastructure/solutions/solution-plugin-loader.js";
+import { adaptSolutionPlugin } from "../../infrastructure/solutions/solution-plugin-adapter.js";
 import { inspectKnowledgeEngine } from "../../modules/knowledge-provider/application/boundary.js";
 import { startMobileHandoffMaintenance } from "../../modules/handoff/application/mobile-handoff-service.js";
 import { startMemoryMaintenance } from "../../modules/memory/application/memory-maintenance.js";
@@ -170,22 +167,9 @@ await runProcess({
         }
       },
     });
-    const solutionStagingRoot =
-      process.env.SOLUTION_STAGING_ROOT ??
-      resolve(config.fileStorageRoot, "solution-staging");
-    registerSolutionRoutes(server, postgres.db, {
-      stagingRoot: solutionStagingRoot,
-    });
-    registerSolutionRunnerRoutes(server, postgres.db);
-    await registerSolutionBackendPlugins(
-      server,
-      postgres.db,
-      solutionStagingRoot,
-      {
-        knowledgeClient,
-      },
-      requireBusinessIdentity,
-    );
+    // Solution Store 是安装事实的唯一来源：这里只投影只读状态与
+    // consoleExtensions；安装/激活通过 weflowctl 完成。
+    registerSolutionStoreRoutes(server, postgres.db);
   },
   /** 启动后台调度器和正式 Channel Host 轮询器，返回清理函数 */
   start: async ({ config, logger, postgres }) => {
@@ -238,7 +222,31 @@ await runProcess({
       db: postgres.db,
       logger,
     });
-    const stopPluginEvents = startPluginEventDispatcher(postgres.db);
+    // 启动时从 Solution Store 加载 active Solution 的插件。Store 是安装
+    // 事实的唯一来源；单个插件失败只降级告警，不阻断平台启动。
+    const solutionKernel = new RuntimeKernel();
+    try {
+      for (const loaded of await loadInstalledSolutionPlugins()) {
+        try {
+          solutionKernel.register(adaptSolutionPlugin(loaded));
+        } catch (error) {
+          logger.warn(
+            { err: error, plugin: loaded.id },
+            "solution plugin registration failed",
+          );
+        }
+      }
+      await solutionKernel.start();
+      logger.info(
+        { plugins: solutionKernel.diagnostics().plugins.length },
+        "solution plugins loaded from store",
+      );
+    } catch (error) {
+      logger.warn(
+        { err: error },
+        "loading solution plugins failed; continuing without them",
+      );
+    }
     if (config.channelHost && channelKernel) {
       const channelSource = channelKernel.get(CHANNEL_EVENTS_CAPABILITY);
       const channelMedia = channelKernel.get(CHANNEL_MEDIA_CAPABILITY);
@@ -298,21 +306,21 @@ await runProcess({
         stopMemoryMaintenance();
         stopMediaProcessingDispatcher();
         stopPushDispatcher();
-        stopPluginEvents();
+        await solutionKernel.stop();
         await channelKernel.stop();
       };
     }
     logger.info(
       "Channel Host is not configured; background channel polling is disabled",
     );
-    return () => {
+    return async () => {
       stopMobileHandoffMaintenance();
       stopAgentTurnDispatcher();
       stopMemoryCaptureDispatcher();
       stopMemoryMaintenance();
       stopMediaProcessingDispatcher();
       stopPushDispatcher();
-      stopPluginEvents();
+      await solutionKernel.stop();
     };
   },
 });

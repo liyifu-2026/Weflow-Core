@@ -29,10 +29,7 @@ import {
   VISION_MODEL_ALLOWLIST,
   type RuntimeSettings,
 } from "../application/runtime-settings.js";
-import {
-  listDashboardContributions,
-  listSolutionInstallations,
-} from "../../solution/application/solution-installation-service.js";
+import { listStoreOverviews } from "../../../infrastructure/solutions/solution-store.js";
 
 const runtimeSettingsPatchSchema = z.object({
   agentEnabled: z.boolean().optional(),
@@ -126,79 +123,6 @@ async function buildRuntimeConsole(db: NodePgDatabase<typeof schema>) {
     status,
     audit,
   };
-}
-
-async function listDashboardCards(db: NodePgDatabase<typeof schema>) {
-  const solutions = await listDashboardContributions(db);
-  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const cards: Array<Record<string, unknown>> = [];
-  for (const solution of solutions) {
-    for (const raw of solution.contributions) {
-      const contribution = raw as {
-        id?: string;
-        title?: string;
-        defaultPosition?: { x: number; y: number; w: number; h: number };
-        refreshInterval?: number;
-      };
-      const cardId = `${solution.solutionId}.${contribution.id ?? "card"}`;
-      const position = contribution.defaultPosition ?? {
-        x: 0,
-        y: 0,
-        w: 3,
-        h: 2,
-      };
-      let data: unknown = null;
-      let status: "ready" | "empty" = "empty";
-      const error: string | null = null;
-      // 平台内置卡片数据钩子：按 contribution.id 计算，与 Solution 无关
-      if (contribution.id === "today-consultations") {
-        const rows = await db
-          .select({ value: count() })
-          .from(schema.conversations)
-          .where(gte(schema.conversations.createdAt, since24h));
-        data = { value: rows[0]?.value ?? 0, unit: "会话" };
-        status = "ready";
-      } else if (contribution.id === "pending-handoffs") {
-        const rows = await db
-          .select({ value: count() })
-          .from(schema.handoffStates)
-          .where(
-            inArray(schema.handoffStates.status, [
-              "pending",
-              "transfer_pending",
-            ]),
-          );
-        data = { value: rows[0]?.value ?? 0, unit: "个" };
-        status = "ready";
-      } else if (contribution.id === "solution-status") {
-        const rows = await db
-          .select()
-          .from(schema.solutionInstallations)
-          .where(
-            eq(schema.solutionInstallations.solutionId, solution.solutionId),
-          )
-          .limit(1);
-        const current = rows[0];
-        data = current
-          ? {
-              observedState: current.observedState,
-              healthState: current.healthState,
-            }
-          : null;
-        status = current ? "ready" : "empty";
-      }
-      cards.push({
-        id: cardId,
-        title: contribution.title ?? "业务卡片",
-        position,
-        refreshInterval: contribution.refreshInterval ?? 30_000,
-        data,
-        status,
-        error,
-      });
-    }
-  }
-  return cards;
 }
 
 export function registerOperationsRoutes(
@@ -434,12 +358,11 @@ export function registerOperationsRoutes(
 
   server.get("/api/v1/admin/console/home", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
-    const [solutions, cards, systemStatus] = await Promise.all([
-      listSolutionInstallations(db),
-      listDashboardCards(db),
+    const [solutions, systemStatus] = await Promise.all([
+      listStoreOverviews(),
       buildSystemStatus(capabilities),
     ]);
-    return { solutions, cards, systemStatus };
+    return { solutions, cards: [], systemStatus };
   });
 
   server.get("/api/v1/admin/stream", async (request, reply) => {
