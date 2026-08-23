@@ -210,7 +210,7 @@ Core 提供 HTTP API，按模块分组：
 | --- | --- |
 | `@weflow/contracts` | 稳定公共契约 |
 | `@weflow/plugin-sdk` | Plugin 注册契约：Tool / Skill / Execution Strategy / Provider |
-| `@weflow/solution-sdk` | Solution Manifest/Lock/Signature 校验、Planner、签名验证 |
+| `@weflow/solution-sdk` | npm 风格 Solution 包契约：Manifest/Lock/Signature 校验与签名验证 |
 | `@weflow/admin-sdk` | Core Admin 客户端 |
 | `@weflow/ui` | 共享 UI 工具 |
 | `weflowctl` | CLI：Solution 校验、状态、激活、停用、卸载、回滚、Secret 管理 |
