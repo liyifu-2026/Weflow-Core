@@ -16,6 +16,8 @@
     "dev:core": "pnpm dev:api",
     "dev:agent-worker": "tsx watch apps/agent-worker/main.ts",
     "dev:ingestion-worker": "tsx watch apps/ingestion-worker/main.ts",
+    "dev:solution-registry": "tsx watch apps/solution-registry/main.ts",
+    "dev:solution-runner": "tsx watch apps/solution-runner/main.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
@@ -26,6 +28,8 @@
     "start:core": "pnpm start:api",
     "start:agent-worker": "node dist/apps/agent-worker/main.js",
     "start:ingestion-worker": "node dist/apps/ingestion-worker/main.js",
+    "start:solution-registry": "node dist/apps/solution-registry/main.js",
+    "start:solution-runner": "node dist/apps/solution-runner/main.js",
     "test": "vitest run --no-file-parallelism",
     "typecheck": "tsc --noEmit"
   },
