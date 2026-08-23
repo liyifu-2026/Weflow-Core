@@ -8,7 +8,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "install:all": "pnpm --dir core install --config.confirmModulesPurge=false && pnpm --dir apps/console install --config.confirmModulesPurge=false && pnpm --dir apps/solution-runner install --config.confirmModulesPurge=false && pnpm --dir tooling/weflowctl install --config.confirmModulesPurge=false && pnpm --dir packages/contracts install --config.confirmModulesPurge=false && pnpm --dir packages/solution-sdk install --config.confirmModulesPurge=false && pnpm --dir packages/plugin-sdk install --config.confirmModulesPurge=false && pnpm --dir packages/admin-sdk install --config.confirmModulesPurge=false && pnpm --dir packages/ui install --config.confirmModulesPurge=false && pnpm --dir packages/consumer-fixture install --config.confirmModulesPurge=false",
+    "install:all": "pnpm --dir core install --config.confirmModulesPurge=false && pnpm --dir apps/console install --config.confirmModulesPurge=false && pnpm --dir tooling/weflowctl install --config.confirmModulesPurge=false && pnpm --dir packages/contracts install --config.confirmModulesPurge=false && pnpm --dir packages/solution-sdk install --config.confirmModulesPurge=false && pnpm --dir packages/plugin-sdk install --config.confirmModulesPurge=false && pnpm --dir packages/admin-sdk install --config.confirmModulesPurge=false && pnpm --dir packages/ui install --config.confirmModulesPurge=false && pnpm --dir packages/consumer-fixture install --config.confirmModulesPurge=false",
     "platform:verify": "node scripts/platform-verify.mjs",
     "platform:verify:ci": "node scripts/platform-verify.mjs --ci",
     "solution:verify": "node scripts/solution-verify.mjs",

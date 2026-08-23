@@ -20,6 +20,7 @@ import {
 } from "./schema.js";
 
 export * from "./schema.js";
+export * from "./artifacts.js";
 
 export function sha256Digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;

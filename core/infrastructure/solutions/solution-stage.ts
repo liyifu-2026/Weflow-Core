@@ -5,20 +5,21 @@
  * directory: plugin entries are bundled with esbuild into `dist/plugin.js`
  * so the result never depends on the source workspace's node_modules.
  */
-import { createHash } from "node:crypto";
 import {
   copyFile,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
-  stat,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import * as esbuild from "esbuild";
-import type { SolutionManifestV1 } from "@weflow/solution-sdk";
+import {
+  digestArtifactPath,
+  type SolutionManifestV1,
+} from "@weflow/solution-sdk";
 
 export const STAGE_EXCLUDED = new Set([
   "node_modules",
@@ -167,44 +168,9 @@ export async function readManifestFile(
   return JSON.parse(text) as SolutionManifestV1;
 }
 
-/** Digest a staged file or directory deterministically. */
+/** Digest a staged file or directory deterministically (SDK implementation). */
 export async function digestPath(
   path: string,
 ): Promise<{ digest: string; size: number }> {
-  const info = await stat(path);
-  if (info.isFile()) {
-    const content = await readFile(path);
-    return {
-      digest: `sha256:${createHash("sha256").update(content).digest("hex")}`,
-      size: info.size,
-    };
-  }
-  const files: string[] = [];
-  await collectFiles(path, "", files);
-  files.sort((left, right) => left.localeCompare(right));
-  const hash = createHash("sha256");
-  let totalSize = 0;
-  for (const relFile of files) {
-    const content = await readFile(join(path, relFile));
-    hash.update(relFile);
-    hash.update("\0");
-    hash.update(content);
-    hash.update("\0");
-    totalSize += content.byteLength;
-  }
-  return { digest: `sha256:${hash.digest("hex")}`, size: totalSize };
-}
-
-async function collectFiles(
-  dir: string,
-  prefix: string,
-  out: string[],
-): Promise<void> {
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    if (entry.isDirectory()) {
-      await collectFiles(join(dir, entry.name), `${prefix}${entry.name}/`, out);
-    } else if (entry.isFile()) {
-      out.push(`${prefix}${entry.name}`);
-    }
-  }
+  return digestArtifactPath(path);
 }

@@ -21,6 +21,9 @@ export const ErrorCodes = {
   TrustedKeyRequiredProductionInstall:
     "trusted_public_key_required_for_production_install",
   ArtifactMissing: "solution_artifact_missing",
+  ArtifactPathEscape: "solution_artifact_path_escape",
+  ArtifactDigestMismatch: "solution_artifact_digest_mismatch",
+  ArtifactSizeMismatch: "solution_artifact_size_mismatch",
   PluginEntryMissing: "plugin_entry_missing",
   VersionNotInStore: "solution_version_not_in_store",
   NotInstalled: "solution_not_installed",
@@ -199,6 +202,21 @@ const PREFIX_HINTS: Array<{ prefix: string; code: string; hint?: string }> = [
     prefix: "solution_artifact_missing",
     code: ErrorCodes.ArtifactMissing,
     hint: "The manifest references an artifact directory that does not exist.",
+  },
+  {
+    prefix: "solution_artifact_path_escape",
+    code: ErrorCodes.ArtifactPathEscape,
+    hint: "The lock references a path outside the package directory; republish from a trusted source tree.",
+  },
+  {
+    prefix: "solution_artifact_digest_mismatch",
+    code: ErrorCodes.ArtifactDigestMismatch,
+    hint: "Artifact contents changed after signing; re-run `weflowctl solution publish`.",
+  },
+  {
+    prefix: "solution_artifact_size_mismatch",
+    code: ErrorCodes.ArtifactSizeMismatch,
+    hint: "Artifact byte size differs from the lock entry; the package is corrupt or tampered.",
   },
 ];
 

@@ -48,6 +48,7 @@ import {
 } from "../../../core/infrastructure/solutions/solution-keys.js";
 import {
   describeSolutionPackage,
+  assertSolutionArtifacts,
   type SolutionPackageFiles,
 } from "@weflow/solution-sdk";
 import { ErrorCodes, classifyError } from "./cli-errors.js";
@@ -88,6 +89,7 @@ export type VerifyResult = {
   signatureKeyId: string;
   mode: string;
   signatureVerified: boolean;
+  artifactsVerified?: number;
   note: string;
 };
 
@@ -1039,8 +1041,11 @@ async function verifyCommand(rawArgs: string[]): Promise<VerifyResult> {
   if (!rawArgs.includes("--development")) {
     throw new Error("trusted_public_key_required_for_production_verify");
   }
-  const files = await readPackageFiles(resolve(input));
+  const packageDir = resolve(input);
+  const files = await readPackageFiles(packageDir);
   const descriptor = describeSolutionPackage(files);
+  // 产物校验统一走 SDK：路径逃逸 + sha256 摘要 + size 一致性。
+  const verified = await assertSolutionArtifacts(descriptor, packageDir);
   return {
     valid: true,
     solutionId: descriptor.manifest.metadata.id,
@@ -1052,6 +1057,7 @@ async function verifyCommand(rawArgs: string[]): Promise<VerifyResult> {
     signatureKeyId: descriptor.signature.keyId,
     mode: "development",
     signatureVerified: false,
+    artifactsVerified: verified.length,
     note: "Development package verification does not authorize production installation.",
   };
 }
