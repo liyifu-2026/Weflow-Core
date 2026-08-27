@@ -14,7 +14,7 @@ import { resolve } from "node:path";
 import {
   describeSolution,
   type SolutionManifestV1,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";
 import { readManifestFile } from "./solution-stage.js";
 import { resolveActiveSolutionDir, storeSolutions } from "./solution-store.js";
 
@@ -64,6 +64,10 @@ export async function loadInstalledSolutionPlugins(): Promise<
     }
     for (const artifact of manifest.artifacts) {
       if (artifactKind(artifact) !== "plugin") continue;
+      // `targetProcess` routes plugin ownership (agent-worker strategies and
+      // skills export `{ strategy }` / `{ skill }`, not a Solution Plugin).
+      const owner = (artifact as { targetProcess?: unknown }).targetProcess;
+      if (owner !== undefined && owner !== "core") continue;
       const absolutePath = resolveSolutionRef(activeRoot, artifact.ref);
       const moduleUrl = pathToFileURL(`${absolutePath}/dist/plugin.js`).href;
       // The imported module is untrusted runtime data; narrow defensively.

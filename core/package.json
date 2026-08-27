@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test",
     "create-user": "tsx scripts/create-user.ts",
+    "reset-password": "tsx scripts/reset-password.ts",
     "promote-admin": "tsx scripts/promote-admin.ts",
     "dev:api": "tsx watch apps/api/main.ts",
     "dev:core": "pnpm dev:api",
@@ -35,8 +36,8 @@
   },
   "dependencies": {
     "@fastify/multipart": "10.1.0",
-    "@weflow/contracts": "link:../packages/contracts",
-    "@weflow/solution-sdk": "link:../packages/solution-sdk",
+    "@weflow-leaif/contracts": "link:../packages/contracts",
+    "@weflow-leaif/solution-sdk": "link:../packages/solution-sdk",
     "adm-zip": "0.5.16",
     "argon2": "0.45.1",
     "bullmq": "5.81.2",

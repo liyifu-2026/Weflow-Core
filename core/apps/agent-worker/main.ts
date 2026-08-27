@@ -28,7 +28,8 @@ import {
   MEMORY_CAPTURE_QUEUE,
   memoryCaptureRevision,
 } from "../../infrastructure/redis/memory-capture-dispatcher.js";
-import { processMemoryCapture } from "../../modules/memory/application/process-memory-capture.js";
+import { memoryPlugin } from "../../infrastructure/runtime/plugins/memory-plugin.js";
+import { MEMORY_CAPTURE_CAPABILITY } from "../../infrastructure/runtime/capabilities/memory.js";
 import * as schema from "../../infrastructure/postgres/schema.js";
 import { WeKnoraKnowledgeClient } from "../../infrastructure/knowledge/weknora-knowledge-client.js";
 import { RuntimeKernel } from "../../infrastructure/runtime/kernel/index.js";
@@ -36,6 +37,8 @@ import { KNOWLEDGE_SEARCH_CAPABILITY } from "../../infrastructure/runtime/capabi
 import { TEXT_MODEL_CAPABILITY } from "../../infrastructure/runtime/capabilities/text-model.js";
 import { weknoraKnowledgePlugin } from "../../infrastructure/knowledge/weknora-knowledge-provider.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
+import { discoverAgentPlugins } from "../../infrastructure/solutions/agent-plugin-discovery.js";
+import { readModelSettingsRuntime } from "../../modules/operations/application/model-settings.js";
 import {
   MapSkillRegistry,
   type AgentSkill,
@@ -54,7 +57,41 @@ await runProcess({
       logger.warn("Model Runtime is not configured; Agent Worker is idle");
       return () => undefined;
     }
-    const model = config.model;
+    // 平台大模型设置（Operator Control Plane）：DB 覆盖 env 默认值。
+    // 修改后需重启 worker 生效（启动时读取一次）。
+    const modelSettings = await readModelSettingsRuntime(postgres.db, {
+      textModel: {
+        name: config.model.name,
+        baseUrl: config.model.baseUrl,
+        ...(config.model.apiKey !== undefined
+          ? { apiKey: config.model.apiKey }
+          : {}),
+      },
+      visionModel: {
+        name: config.vision?.name ?? "mimo-v2.5",
+        baseUrl: config.vision?.baseUrl ?? "",
+        ...(config.vision?.apiKey !== undefined
+          ? { apiKey: config.vision.apiKey }
+          : {}),
+      },
+      asrModel: {
+        name: config.asr?.model ?? config.vision?.asrModel ?? "mimo-v2.5",
+        baseUrl: config.asr?.baseUrl ?? config.vision?.baseUrl ?? "",
+        ...(config.asr?.apiKey !== undefined
+          ? { apiKey: config.asr.apiKey }
+          : config.vision?.apiKey !== undefined
+            ? { apiKey: config.vision.apiKey }
+            : {}),
+      },
+    });
+    const model = {
+      ...config.model,
+      baseUrl: modelSettings.textModel.baseUrl,
+      ...(modelSettings.textModel.apiKey !== undefined
+        ? { apiKey: modelSettings.textModel.apiKey }
+        : {}),
+      name: modelSettings.textModel.name as typeof config.model.name,
+    };
     // 创建 OpenAI 兼容的 LLM 客户端
     const client = new OpenAiCompatibleClient({
       baseUrl: model.baseUrl,
@@ -69,41 +106,94 @@ await runProcess({
     const kernel = new RuntimeKernel();
     kernel.register(openAiTextModelPlugin(client));
     if (weknora) kernel.register(weknoraKnowledgePlugin(weknora));
+    // 记忆插件（D6 插件化下沉）：capture/recall 能力经 kernel 注册
+    kernel.register(
+      memoryPlugin({
+        db: postgres.db,
+        modelClient: client,
+        model: model.name,
+      }),
+    );
     await kernel.start();
     const textModel = kernel.get(TEXT_MODEL_CAPABILITY);
+    const memoryCapture = kernel.get(MEMORY_CAPTURE_CAPABILITY);
     const knowledgeSearch = weknora
       ? kernel.get(KNOWLEDGE_SEARCH_CAPABILITY)
       : undefined;
-    // Skill Registry: populated by installed Solution plugins. The loader
-    // accepts a plugin module exporting `skill` (an AgentSkill). Without a
-    // plugin, the registry stays empty and the platform runs without skills.
+    // Skill / Execution Strategy registries: populated from Solution plugins.
+    // Module contract: `skill` (an AgentSkill), and/or `strategy` (an
+    // AgentExecutionStrategy), `createStrategy` (factory receiving { db } so
+    // the strategy gets database access for AI employee prompt resolution),
+    // plus optional `preResolveAiEmployeePrompt`. Without any plugin, the
+    // registries stay empty and the built-in generic platform prompt is used.
+    // Priority: explicit SKILL_PLUGIN_PATH / STRATEGY_PLUGIN_PATH overrides;
+    // otherwise plugins are discovered from the Solution Store's active
+    // junctions (manifest artifacts with targetProcess: "agent-worker").
+    type AgentPluginModule = {
+      skill?: AgentSkill;
+      strategy?: AgentExecutionStrategy;
+      createStrategy?: (ctx: { db: unknown }) => AgentExecutionStrategy;
+      preResolveAiEmployeePrompt?: (
+        db: unknown,
+        contactId: string,
+        conversationId: string,
+      ) => Promise<void>;
+    };
     const skillRegistry = new MapSkillRegistry();
-    const skillPluginPath = process.env.SKILL_PLUGIN_PATH;
-    if (skillPluginPath) {
-      const skillModule = (await import(
-        pathToFileURL(skillPluginPath).href
-      )) as {
-        skill?: AgentSkill;
-      };
-      if (skillModule.skill) {
-        skillRegistry.register(skillModule.skill);
-      }
-    }
-
-    // Execution Strategy Registry: populated by installed Solution plugins.
-    // The loader accepts a plugin module exporting `strategy` (an
-    // AgentExecutionStrategy). Without a plugin, the built-in generic
-    // platform prompt is used.
     const strategyRegistry = new MapExecutionStrategyRegistry();
-    const strategyPluginPath = process.env.STRATEGY_PLUGIN_PATH;
-    if (strategyPluginPath) {
-      const strategyModule = (await import(
-        pathToFileURL(strategyPluginPath).href
-      )) as {
-        strategy?: AgentExecutionStrategy;
-      };
-      if (strategyModule.strategy) {
-        strategyRegistry.register(strategyModule.strategy);
+    // Optional pre-resolve hook for AI employee prompt resolution.
+    let preResolveAiEmployeePrompt:
+      | ((contactId: string, conversationId: string) => Promise<void>)
+      | undefined;
+    const registerAgentPluginModule = (
+      module: AgentPluginModule,
+      source: string,
+    ) => {
+      if (module.skill) {
+        skillRegistry.register(module.skill);
+      }
+      // Prefer factory-created strategy (has database access for AI employee prompts)
+      if (module.createStrategy) {
+        strategyRegistry.register(module.createStrategy({ db: postgres.db }));
+      } else if (module.strategy) {
+        strategyRegistry.register(module.strategy);
+      }
+      if (module.preResolveAiEmployeePrompt) {
+        preResolveAiEmployeePrompt = (contactId, conversationId) =>
+          module.preResolveAiEmployeePrompt!(
+            postgres.db,
+            contactId,
+            conversationId,
+          );
+      }
+      logger.info({ source }, "agent worker plugin loaded");
+    };
+
+    if (process.env.SKILL_PLUGIN_PATH || process.env.STRATEGY_PLUGIN_PATH) {
+      const skillPath = process.env.SKILL_PLUGIN_PATH;
+      if (skillPath) {
+        registerAgentPluginModule(
+          (await import(pathToFileURL(skillPath).href)) as AgentPluginModule,
+          skillPath,
+        );
+      }
+      const strategyPath = process.env.STRATEGY_PLUGIN_PATH;
+      if (strategyPath) {
+        registerAgentPluginModule(
+          (await import(pathToFileURL(strategyPath).href)) as AgentPluginModule,
+          strategyPath,
+        );
+      }
+    } else {
+      for (const found of await discoverAgentPlugins()) {
+        if (!found.module) {
+          logger.warn(
+            { err: found.error, artifactId: found.artifactId },
+            "agent worker plugin failed to load",
+          );
+          continue;
+        }
+        registerAgentPluginModule(found.module as AgentPluginModule, found.url);
       }
     }
     // 对话轮次执行器，确保同一对话的任务串行执行
@@ -129,7 +219,14 @@ await runProcess({
             postgres.db,
             textModel,
             activeModel,
-            { knowledgeSearch, skillRegistry, strategyRegistry },
+            {
+              knowledgeSearch,
+              skillRegistry,
+              strategyRegistry,
+              ...(preResolveAiEmployeePrompt
+                ? { preResolveAiEmployeePrompt }
+                : {}),
+            },
           );
           await executor.execute({
             turnId,
@@ -151,7 +248,7 @@ await runProcess({
         const revision = memoryCaptureRevision(job.data);
         // 同样使用对话级别锁，避免与 Agent Turn 并发冲突
         await conversationTurns.run(conversationId, async () => {
-          await processMemoryCapture(postgres.db, textModel, model.name, {
+          await memoryCapture.process(postgres.db, {
             conversationId,
             revision,
           });

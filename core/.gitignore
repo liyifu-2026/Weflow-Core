@@ -13,3 +13,6 @@ coverage/
 .mimocode/
 *.log
 *.tsbuildinfo
+
+# Local dev-process logs (tsx watch stdout/stderr capture)
+.dev-logs/
