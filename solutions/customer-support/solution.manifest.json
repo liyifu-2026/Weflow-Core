@@ -4,7 +4,7 @@
   "metadata": {
     "id": "weflow.customer-support",
     "name": "Customer Support Solution",
-    "version": "1.2.4",
+    "version": "1.2.5",
     "publisher": "weflow"
   },
   "compatibility": {
@@ -175,6 +175,15 @@
       "group": "客服业务",
       "adminOnly": true,
       "hidden": true
+    },
+    {
+      "id": "support-pipeline",
+      "title": "AI 链路配置",
+      "path": "/support/pipeline",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "engine",
+      "group": "客服业务",
+      "adminOnly": true
     },
     {
       "id": "support-operations",
