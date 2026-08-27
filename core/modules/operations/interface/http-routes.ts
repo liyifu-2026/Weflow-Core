@@ -1,18 +1,14 @@
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gte,
-  inArray,
-  isNotNull,
-  lte,
-} from "drizzle-orm";
+/**
+ * Operations module — HTTP route handlers.
+ *
+ * These are pure HTTP adapters. They authenticate, validate input with Zod,
+ * delegate to application-layer functions, and map results to HTTP responses.
+ * They must NOT import from infrastructure/postgres/schema or call Drizzle ORM.
+ */
 import type { FastifyInstance } from "fastify";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
-import * as schema from "../../../infrastructure/postgres/schema.js";
+import type * as schema from "../../../infrastructure/postgres/schema.js";
 import {
   requireAdminIdentity,
   requireBusinessIdentity,
@@ -25,11 +21,30 @@ import {
   readRuntimeSettings,
   rollbackRuntimeSettings,
   updateRuntimeSettings,
+  readOperatorStatus,
+  readRuntimeSettingsAudit,
+  buildRuntimeConsole,
   TEXT_MODEL_ALLOWLIST,
   VISION_MODEL_ALLOWLIST,
   type RuntimeSettings,
 } from "../application/runtime-settings.js";
-import { listStoreOverviews } from "../../../infrastructure/solutions/solution-store.js";
+import {
+  readModelSettings,
+  updateModelSettings,
+  MODEL_NAME_ALLOWLIST,
+  VISION_MODEL_NAME_ALLOWLIST,
+  type ModelSettingsDefaults,
+  type ModelSettingsPatch,
+} from "../application/model-settings.js";
+import { buildDashboardCards } from "../application/dashboard-cards.js";
+import {
+  readAdminOverview,
+  readRuntimeStatuses,
+  readAuditEvents,
+  readAuditOptions,
+  readAgentTurns,
+  listStoreOverviews,
+} from "../application/admin-overview.js";
 
 const runtimeSettingsPatchSchema = z.object({
   agentEnabled: z.boolean().optional(),
@@ -41,94 +56,53 @@ const runtimeSettingsPatchSchema = z.object({
   visionModel: z.enum(VISION_MODEL_ALLOWLIST).optional(),
 });
 
-async function readOperatorStatus(db: NodePgDatabase<typeof schema>) {
-  const settings = await readRuntimeSettings(db);
-  const cursorFreshThreshold = new Date(Date.now() - 15_000);
-  const [cursor, turnCounts, handoffCount, lastCompleted] = await Promise.all([
-    db
-      .select({ updatedAt: schema.channelCursors.updatedAt })
-      .from(schema.channelCursors)
-      .where(eq(schema.channelCursors.source, "channel-host"))
-      .limit(1),
-    db
-      .select({ status: schema.agentTurns.status, value: count() })
-      .from(schema.agentTurns)
-      .where(inArray(schema.agentTurns.status, ["queued", "running"]))
-      .groupBy(schema.agentTurns.status),
-    db
-      .select({ value: count() })
-      .from(schema.handoffStates)
-      .where(
-        inArray(schema.handoffStates.status, ["pending", "transfer_pending"]),
-      ),
-    db
-      .select({ completedAt: schema.agentTurns.completedAt })
-      .from(schema.agentTurns)
-      .where(eq(schema.agentTurns.status, "completed"))
-      .orderBy(desc(schema.agentTurns.completedAt))
-      .limit(1),
-  ]);
-  const queued = turnCounts.find((row) => row.status === "queued");
-  const running = turnCounts.find((row) => row.status === "running");
-  return {
-    channelOnline: Boolean(
-      cursor[0] && cursor[0].updatedAt > cursorFreshThreshold,
-    ),
-    agentEnabled: settings.agentEnabled,
-    autoSendEnabled: settings.autoSendEnabled,
-    queuedTurnCount: queued?.value ?? 0,
-    runningTurnCount: running?.value ?? 0,
-    pendingHandoffCount: handoffCount[0]?.value ?? 0,
-    lastCompletedTurnAt: lastCompleted[0]?.completedAt ?? null,
-  };
-}
-
-async function readRuntimeSettingsAudit(db: NodePgDatabase<typeof schema>) {
-  return db
-    .select({
-      auditId: schema.auditEvents.auditId,
-      actorUsername: schema.users.username,
-      eventType: schema.auditEvents.eventType,
-      subjectId: schema.auditEvents.subjectId,
-      metadata: schema.auditEvents.metadata,
-      createdAt: schema.auditEvents.createdAt,
-    })
-    .from(schema.auditEvents)
-    .leftJoin(
-      schema.users,
-      eq(schema.users.userId, schema.auditEvents.actorUserId),
-    )
-    .where(
-      inArray(schema.auditEvents.eventType, [
-        "operator.runtime_settings_updated",
-        "operator.runtime_settings_rolled_back",
-      ]),
-    )
-    .orderBy(desc(schema.auditEvents.createdAt))
-    .limit(50);
-}
-
-async function buildRuntimeConsole(db: NodePgDatabase<typeof schema>) {
-  const [settings, status, audit] = await Promise.all([
-    readRuntimeSettings(db),
-    readOperatorStatus(db),
-    readRuntimeSettingsAudit(db),
-  ]);
-  return {
-    settings,
-    allowlists: {
-      text: TEXT_MODEL_ALLOWLIST,
-      vision: VISION_MODEL_ALLOWLIST,
-    },
-    status,
-    audit,
-  };
-}
+const modelSettingsPatchSchema = z
+  .object({
+    textModel: z
+      .object({
+        name: z.enum(MODEL_NAME_ALLOWLIST).optional(),
+        baseUrl: z.string().trim().min(1).max(500).optional(),
+        apiKey: z.string().trim().max(1_000).optional(),
+      })
+      .optional(),
+    visionModel: z
+      .object({
+        name: z.enum(VISION_MODEL_NAME_ALLOWLIST).optional(),
+        baseUrl: z.string().trim().min(1).max(500).optional(),
+        apiKey: z.string().trim().max(1_000).optional(),
+      })
+      .optional(),
+    asrModel: z
+      .object({
+        name: z.string().trim().min(1).max(200).optional(),
+        baseUrl: z.string().trim().min(1).max(500).optional(),
+        apiKey: z.string().trim().max(1_000).optional(),
+      })
+      .optional(),
+    /** 分流/直答模型槽位：供应商模型名自由命名（如 Qwen/Qwen2.5-7B-Instruct） */
+    triageModel: z
+      .object({
+        name: z.string().trim().min(1).max(200).optional(),
+        baseUrl: z.string().trim().min(1).max(500).optional(),
+        apiKey: z.string().trim().max(1_000).optional(),
+      })
+      .optional(),
+    fastModel: z
+      .object({
+        name: z.string().trim().min(1).max(200).optional(),
+        baseUrl: z.string().trim().min(1).max(500).optional(),
+        apiKey: z.string().trim().max(1_000).optional(),
+      })
+      .optional(),
+  })
+  .strict()
+  .refine((patch) => Object.keys(patch).length > 0);
 
 export function registerOperationsRoutes(
   server: FastifyInstance,
   db: NodePgDatabase<typeof schema>,
   capabilities: RuntimeCapabilities,
+  modelDefaults: ModelSettingsDefaults,
 ): void {
   server.get("/api/v1/system/status", async (request, reply) => {
     if (!(await requireBusinessIdentity(db, request, reply))) return;
@@ -137,66 +111,12 @@ export function registerOperationsRoutes(
 
   server.get("/api/v1/admin/overview", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
-    const since = new Date(Date.now() - 24 * 60 * 60_000);
-    const [conversationRows, handoffRows, failedTurnRows] = await Promise.all([
-      db.select({ value: count() }).from(schema.conversations),
-      db
-        .select({ value: count() })
-        .from(schema.handoffStates)
-        .where(eq(schema.handoffStates.status, "pending")),
-      db
-        .select({ value: count() })
-        .from(schema.agentTurns)
-        .where(
-          and(
-            eq(schema.agentTurns.status, "failed"),
-            gte(schema.agentTurns.createdAt, since),
-          ),
-        ),
-    ]);
-    return {
-      conversations: conversationRows[0]?.value ?? 0,
-      pendingHandoffs: handoffRows[0]?.value ?? 0,
-      failedTurns24h: failedTurnRows[0]?.value ?? 0,
-      capabilities,
-    };
+    return readAdminOverview(db, capabilities);
   });
 
   server.get("/api/v1/admin/runtime", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
-    const statuses = await db
-      .select({ status: schema.agentTurns.status, value: count() })
-      .from(schema.agentTurns)
-      .groupBy(schema.agentTurns.status);
-    return {
-      components: [
-        { key: "core", name: "Weflow Core", status: "ready" },
-        {
-          key: "channel-host",
-          name: "Channel Host",
-          status: capabilities.channelHostConfigured
-            ? "configured"
-            : "not_configured",
-        },
-        {
-          key: "model",
-          name: "Model Runtime",
-          status: capabilities.modelConfigured
-            ? "configured"
-            : "not_configured",
-        },
-        {
-          key: "knowledge",
-          name: "知识服务",
-          status: capabilities.knowledgeConfigured
-            ? "configured"
-            : "not_configured",
-        },
-      ],
-      turnCounts: Object.fromEntries(
-        statuses.map((item) => [item.status, item.value]),
-      ),
-    };
+    return readRuntimeStatuses(db, capabilities);
   });
 
   server.get("/api/v1/admin/audit", async (request, reply) => {
@@ -213,68 +133,20 @@ export function registerOperationsRoutes(
       .safeParse(request.query);
     if (!query.success)
       return reply.code(400).send({ error: "invalid_request" });
-    const events = await db
-      .select({
-        auditId: schema.auditEvents.auditId,
-        actorUserId: schema.auditEvents.actorUserId,
-        actorUsername: schema.users.username,
-        eventType: schema.auditEvents.eventType,
-        subjectType: schema.auditEvents.subjectType,
-        subjectId: schema.auditEvents.subjectId,
-        sourceIp: schema.auditEvents.sourceIp,
-        metadata: schema.auditEvents.metadata,
-        createdAt: schema.auditEvents.createdAt,
-      })
-      .from(schema.auditEvents)
-      .leftJoin(
-        schema.users,
-        eq(schema.users.userId, schema.auditEvents.actorUserId),
-      )
-      .where(
-        and(
-          query.data.eventType
-            ? eq(schema.auditEvents.eventType, query.data.eventType)
-            : undefined,
-          query.data.actor
-            ? eq(schema.users.username, query.data.actor)
-            : undefined,
-          query.data.from
-            ? gte(schema.auditEvents.createdAt, new Date(query.data.from))
-            : undefined,
-          query.data.to
-            ? lte(schema.auditEvents.createdAt, new Date(query.data.to))
-            : undefined,
-        ),
-      )
-      .orderBy(desc(schema.auditEvents.createdAt))
-      .limit(query.data.limit)
-      .offset(query.data.offset);
-    return { events, hasMore: events.length === query.data.limit };
+    const { limit, offset, eventType, actor, from, to } = query.data;
+    return readAuditEvents(db, {
+      limit,
+      offset,
+      ...(eventType !== undefined ? { eventType } : {}),
+      ...(actor !== undefined ? { actor } : {}),
+      ...(from !== undefined ? { from } : {}),
+      ...(to !== undefined ? { to } : {}),
+    });
   });
 
   server.get("/api/v1/admin/audit/options", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
-    const [eventTypeRows, actorRows] = await Promise.all([
-      db
-        .selectDistinct({ eventType: schema.auditEvents.eventType })
-        .from(schema.auditEvents)
-        .orderBy(asc(schema.auditEvents.eventType)),
-      db
-        .selectDistinct({ username: schema.users.username })
-        .from(schema.auditEvents)
-        .leftJoin(
-          schema.users,
-          eq(schema.users.userId, schema.auditEvents.actorUserId),
-        )
-        .where(isNotNull(schema.users.username))
-        .orderBy(asc(schema.users.username)),
-    ]);
-    return {
-      eventTypes: eventTypeRows.map((row) => row.eventType),
-      actors: actorRows
-        .map((row) => row.username)
-        .filter((username): username is string => Boolean(username)),
-    };
+    return readAuditOptions(db);
   });
 
   server.get("/api/v1/admin/agent-turns", async (request, reply) => {
@@ -284,23 +156,10 @@ export function registerOperationsRoutes(
       .safeParse(request.query);
     if (!query.success)
       return reply.code(400).send({ error: "invalid_request" });
-    const turns = await db
-      .select({
-        turnId: schema.agentTurns.turnId,
-        conversationId: schema.agentTurns.conversationId,
-        status: schema.agentTurns.status,
-        model: schema.agentTurns.model,
-        errorCode: schema.agentTurns.errorCode,
-        createdAt: schema.agentTurns.createdAt,
-        completedAt: schema.agentTurns.completedAt,
-      })
-      .from(schema.agentTurns)
-      .orderBy(desc(schema.agentTurns.createdAt))
-      .limit(query.data.limit);
-    return { turns };
+    return readAgentTurns(db, query.data.limit);
   });
 
-  // ---------- Operator Control Plane（Phase 3） ----------
+  // ---------- Operator Control Plane ----------
 
   server.get("/api/v1/admin/runtime-settings", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
@@ -325,6 +184,34 @@ export function registerOperationsRoutes(
       actorUserId: identity.user.userId,
       sourceIp: request.ip,
       patch: body.data as Partial<RuntimeSettings>,
+    });
+    return result;
+  });
+
+  // ---------- Platform Model Settings ----------
+
+  server.get("/api/v1/admin/model-settings", async (request, reply) => {
+    if (!(await requireAdminIdentity(db, request, reply))) return;
+    return {
+      settings: await readModelSettings(db, modelDefaults),
+      allowlists: {
+        text: MODEL_NAME_ALLOWLIST,
+        vision: VISION_MODEL_NAME_ALLOWLIST,
+      },
+    };
+  });
+
+  server.patch("/api/v1/admin/model-settings", async (request, reply) => {
+    const identity = await requireAdminIdentity(db, request, reply);
+    if (!identity) return;
+    const body = modelSettingsPatchSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.code(400).send({ error: "invalid_request" });
+    const result = await updateModelSettings(db, {
+      actorUserId: identity.user.userId,
+      sourceIp: request.ip,
+      patch: body.data as ModelSettingsPatch,
+      defaults: modelDefaults,
     });
     return result;
   });
@@ -363,6 +250,16 @@ export function registerOperationsRoutes(
       buildSystemStatus(capabilities),
     ]);
     return { solutions, cards: [], systemStatus };
+  });
+
+  server.get("/api/v1/admin/dashboard/cards", async (request, reply) => {
+    if (!(await requireAdminIdentity(db, request, reply))) return;
+    return { cards: await buildDashboardCards(db) };
+  });
+
+  server.get("/api/v1/admin/solutions/health", async (request, reply) => {
+    if (!(await requireAdminIdentity(db, request, reply))) return;
+    return { solutions: [] };
   });
 
   server.get("/api/v1/admin/stream", async (request, reply) => {

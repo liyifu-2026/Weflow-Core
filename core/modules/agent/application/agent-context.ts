@@ -21,11 +21,13 @@ import { readRuntimeSettings } from "../../operations/application/runtime-settin
 
 /**
  * 构建 Agent 上下文
- * @returns history: 消息历史（user/assistant 格式），prompt: 包含状态和记忆的提示文本
+ * @param chatType 会话类型：private（私聊）或 group（群聊）
+ * @returns history: 消息历史（user/assistant 格式）， prompt: 包含状态和记忆的提示文本
  */
 export async function buildAgentContext(
   db: NodePgDatabase<typeof schema>,
   conversationId: string,
+  chatType: "private" | "group" = "private",
 ): Promise<{
   history: { role: "user" | "assistant"; content: string }[];
   prompt: string;
@@ -78,6 +80,10 @@ export async function buildAgentContext(
   };
   const now = new Date();
   const nowText = formatCurrentTime(now);
+  const chatTypeHint =
+    chatType === "group"
+      ? "\n当前会话类型：群聊（回复应简洁，避免包含私人信息或针对特定联系人的个性化内容）"
+      : "\n当前会话类型：私聊";
   return {
     history: history.map((message) => ({
       role: message.direction === "inbound" ? "user" : "assistant",
@@ -94,7 +100,7 @@ export async function buildAgentContext(
                   ? "[对方发来一条语音，转写不可用]"
                   : message.text,
     })),
-    prompt: `\n\n当前时间：${nowText}\n\n上一人工接管周期结果（受控上下文；不含内部转交链）：${JSON.stringify(
+    prompt: `${chatTypeHint}\n\n当前时间：${nowText}\n\n上一人工接管周期结果（受控上下文；不含内部转交链）：${JSON.stringify(
       previousHumanCycle,
     )}\n\n本批次消息摘要（由程序生成，不重复询问其中已确认的信息）：${JSON.stringify(
       batchSummary,

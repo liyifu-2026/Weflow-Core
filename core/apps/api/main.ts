@@ -11,6 +11,7 @@ import multipart from "@fastify/multipart";
 import { LocalFileStorage } from "../../infrastructure/file_storage/local-file-storage.js";
 import { registerCors } from "../../infrastructure/http/cors.js";
 import { startAgentTurnDispatcher } from "../../infrastructure/redis/agent-turn-dispatcher.js";
+import { loadInstalledBackendPlugins } from "../../infrastructure/solutions/backend-plugin-loader.js";
 import { startMemoryCaptureDispatcher } from "../../infrastructure/redis/memory-capture-dispatcher.js";
 import { startMediaProcessingDispatcher } from "../../infrastructure/redis/media-processing-dispatcher.js";
 import {
@@ -45,6 +46,8 @@ import { registerKnowledgeProviderRoutes } from "../../modules/knowledge-provide
 import { registerKnoraBridgeRoutes } from "../../modules/knora-bridge/interface/http-routes.js";
 import { registerOperationsRoutes } from "../../modules/operations/interface/http-routes.js";
 import { registerSolutionStoreRoutes } from "../../modules/solution/interface/store-routes.js";
+import { registerSolutionMarketplaceRoutes } from "../../modules/solution/interface/marketplace-routes.js";
+import { startSolutionAutoUpdate } from "../../infrastructure/solutions/solution-auto-update.js";
 import { loadInstalledSolutionPlugins } from "../../infrastructure/solutions/solution-plugin-loader.js";
 import { adaptSolutionPlugin } from "../../infrastructure/solutions/solution-plugin-adapter.js";
 import { inspectKnowledgeEngine } from "../../modules/knowledge-provider/application/boundary.js";
@@ -66,7 +69,7 @@ await runProcess({
   name: "core-api",
   healthPort: (config) => config.corePort,
   /** 配置 HTTP 服务器，注册所有业务模块的路由 */
-  configureServer: async (server, { config, postgres }) => {
+  configureServer: async (server, { config, postgres, logger }) => {
     registerCors(server, config.corsOrigins);
     await server.register(multipart, {
       limits: { fileSize: 100 * 1_024 * 1_024, files: 1 },
@@ -76,7 +79,7 @@ await runProcess({
       postgres.db,
       new LocalFileStorage(`${config.fileStorageRoot}/identity`),
     );
-    registerConversationRoutes(server, postgres.db);
+    registerConversationRoutes(server, postgres.db, config.channelHost);
     registerConsoleEventRoutes(server, postgres.db);
     registerContactProfileRoutes(server, postgres.db);
     registerContactAvatarRoutes(
@@ -113,13 +116,17 @@ await runProcess({
       encKey: config.knoraBridge.encKey,
       tenantId: config.knoraBridge.tenantId,
       emailDomain: config.knoraBridge.emailDomain,
+      origin: config.knoraBridge.origin,
     });
-    registerOperationsRoutes(server, postgres.db, {
-      channelHostConfigured: Boolean(config.channelHost),
-      modelConfigured: Boolean(config.model),
-      knowledgeConfigured: Boolean(config.weknora),
-      inspectKnowledge: () => inspectKnowledgeEngine(config.weknora),
-      inspectChannelHost: async () => {
+    registerOperationsRoutes(
+      server,
+      postgres.db,
+      {
+        channelHostConfigured: Boolean(config.channelHost),
+        modelConfigured: Boolean(config.model),
+        knowledgeConfigured: Boolean(config.weknora),
+        inspectKnowledge: () => inspectKnowledgeEngine(config.weknora),
+        inspectChannelHost: async () => {
         if (!config.channelHost)
           return { status: "not_configured" as const, summary: "尚未配置" };
         try {
@@ -166,10 +173,70 @@ await runProcess({
           };
         }
       },
-    });
+      },
+      {
+        textModel: {
+          name: config.model?.name ?? "deepseek-v4-flash",
+          baseUrl: config.model?.baseUrl ?? "https://api.deepseek.com",
+          ...(config.model?.apiKey !== undefined
+            ? { apiKey: config.model.apiKey }
+            : {}),
+        },
+        visionModel: {
+          name: config.vision?.name ?? "mimo-v2.5",
+          baseUrl: config.vision?.baseUrl ?? "",
+          ...(config.vision?.apiKey !== undefined
+            ? { apiKey: config.vision.apiKey }
+            : {}),
+        },
+        asrModel: {
+          name: config.asr?.model ?? config.vision?.asrModel ?? "mimo-v2.5",
+          baseUrl: config.asr?.baseUrl ?? config.vision?.baseUrl ?? "",
+          ...(config.asr?.apiKey !== undefined
+            ? { apiKey: config.asr.apiKey }
+            : config.vision?.apiKey !== undefined
+              ? { apiKey: config.vision.apiKey }
+              : {}),
+        },
+        ...(config.triage
+          ? {
+              triageModel: {
+                name: config.triage.model,
+                baseUrl: config.triage.baseUrl,
+                apiKey: config.triage.apiKey,
+              },
+            }
+          : {}),
+        ...(config.fast
+          ? {
+              fastModel: {
+                name: config.fast.model,
+                baseUrl: config.fast.baseUrl,
+                apiKey: config.fast.apiKey,
+              },
+            }
+          : {}),
+      },
+    );
     // Solution Store 是安装事实的唯一来源：这里只投影只读状态与
     // consoleExtensions；安装/激活通过 weflowctl 完成。
     registerSolutionStoreRoutes(server, postgres.db);
+    // npm 风格插件市场：列出 @weflow-leaif/* 可用包并提供安装/更新入口。
+    // npm token 通过 WEFLOW_NPM_TOKEN 注入（与 weflowctl 一致）。
+    registerSolutionMarketplaceRoutes(server, postgres.db, {
+      ...(process.env.WEFLOW_NPM_TOKEN !== undefined
+        ? { npmToken: process.env.WEFLOW_NPM_TOKEN }
+        : {}),
+      ...(process.env.WEFLOW_NPM_REGISTRY !== undefined
+        ? { registryBase: process.env.WEFLOW_NPM_REGISTRY }
+        : {}),
+    });
+    // 业务 Solution 的 backend 插件（BFF）：注册已安装 Solution 的业务路由
+    // （如 AI Employees / 业务 handoff 操作）。加载失败只降级告警。
+    await loadInstalledBackendPlugins(server, {
+      db: postgres.db,
+      logger,
+    });
   },
   /** 启动后台调度器和正式 Channel Host 轮询器，返回清理函数 */
   start: async ({ config, logger, postgres }) => {
@@ -269,7 +336,9 @@ await runProcess({
         logger,
         intervalMs: config.channelHost.pollIntervalMs,
         sendOutbound: (db) =>
-          processOutboundMessages(db, channelSendOperations),
+          processOutboundMessages(db, channelSendOperations, {
+            fileStorageRoot: config.fileStorageRoot,
+          }),
       });
       const stopChannelHostMediaPoller = startChannelMediaPoller({
         db: postgres.db,
@@ -295,12 +364,16 @@ await runProcess({
         intervalMs: 60_000,
         syncContacts: syncChannelContactProfiles,
       });
+      // Solution 自动升级轮询（P2.2）：按 ~/.weflow/config.json 的
+      // update.enabled/strategy 定期查 registry 并升级；默认每小时。
+      const stopSolutionAutoUpdate = startSolutionAutoUpdate({ logger });
       return async () => {
         stopMobileHandoffMaintenance();
         stopChannelHostPoller();
         stopChannelHostOutboundPoller();
         stopChannelHostMediaPoller();
         stopChannelHostContactPoller();
+        stopSolutionAutoUpdate();
         stopAgentTurnDispatcher();
         stopMemoryCaptureDispatcher();
         stopMemoryMaintenance();
@@ -313,8 +386,11 @@ await runProcess({
     logger.info(
       "Channel Host is not configured; background channel polling is disabled",
     );
+    // 无 Channel Host 时仍启动 Solution 自动升级轮询
+    const stopSolutionAutoUpdate = startSolutionAutoUpdate({ logger });
     return async () => {
       stopMobileHandoffMaintenance();
+      stopSolutionAutoUpdate();
       stopAgentTurnDispatcher();
       stopMemoryCaptureDispatcher();
       stopMemoryMaintenance();

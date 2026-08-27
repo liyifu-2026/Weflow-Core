@@ -3,21 +3,32 @@
  *
  * The worker owns queue/process lifecycle only. This module owns the decision
  * of whether a turn starts from a fresh model decision or resumes a persisted
- * tool checkpoint. The older process modules remain compatibility adapters for
- * existing application tests while their implementation is being collapsed
- * behind this entry point.
+ * tool checkpoint, and is the only Agent Turn entry point (ADR-0001).
+ *
+ * 分层（ADR-0001 重构后）：
+ * - 本文件：turn 状态机编排（终态短路、CAS 领取、恢复路径分派）
+ * - turn-runner.ts：全新决策路径与工具恢复路径的执行编排
+ * - reply-policy.ts：回复策略评估、系统提示词、Execution Strategy 与 Skill 提示
+ * - turn-utils.ts：状态/错误/会话类型纯工具
  */
-import { eq } from "drizzle-orm";
+
+import { and, desc, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { TextModel } from "../../model/contracts/text-model.js";
-import type { KnowledgeSearch } from "../../knowledge/contracts/knowledge-search.js";
+import type {
+  KnowledgeSearch,
+} from "../../knowledge/contracts/knowledge-search.js";
 import type { SkillRegistry } from "../contracts/agent-skill.js";
 import type { ExecutionStrategyRegistry } from "../contracts/execution-strategy.js";
-import { processAgentTurn } from "./process-agent-turn.js";
-import { processPlannedToolTurn } from "./process-planned-tool-turn.js";
-import { recordAgentTurnEvent } from "./agent-turn-events.js";
 import { AgentTurnService } from "./agent-turn-service.js";
+import { recordAgentTurnEvent } from "./agent-turn-events.js";
+import { processAgentTurn, processPlannedToolTurn } from "./turn-runner.js";
+import {
+  commitAgentTurnHandoff,
+} from "./agent-turn-outcome-command.js";
+import type { TriageVerdict } from "./triage-classifier.js";
+import { isTerminal, normalizeStatus } from "./turn-utils.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
@@ -53,6 +64,27 @@ export class AgentTurnExecutor {
       knowledgeSearch?: KnowledgeSearch | undefined;
       skillRegistry?: SkillRegistry | undefined;
       strategyRegistry?: ExecutionStrategyRegistry | undefined;
+      /**
+       * Optional hook called before strategy.buildModelRequest to pre-resolve
+       * AI employee prompts from the database (populates strategy cache).
+       */
+      preResolveAiEmployeePrompt?: (
+        contactId: string,
+        conversationId: string,
+      ) => Promise<void>;
+      /**
+       * 预判分流（Triage）：可选；未提供时零行为变化。
+       * - classify 由组合根注入策略（关键词/开关）与判定模型，永不抛错；
+       * - fast 直答档位同样走 processAgentTurn 全套闸门。
+       */
+      triage?: {
+        classify: (context: {
+          triggerText: string;
+          recentInboundTexts: string[];
+        }) => Promise<TriageVerdict>;
+        fastClient?: TextModel | undefined;
+        fastModel?: string | undefined;
+      };
     } = {},
   ) {}
 
@@ -113,6 +145,7 @@ export class AgentTurnExecutor {
         this.dependencies.knowledgeSearch,
         this.dependencies.skillRegistry,
         this.dependencies.strategyRegistry,
+        this.dependencies.preResolveAiEmployeePrompt,
       );
     } else if (before.status === "queued") {
       const claimed = await turnService.claim(input.turnId, this.model, [
@@ -144,11 +177,65 @@ export class AgentTurnExecutor {
           this.dependencies.knowledgeSearch,
           this.dependencies.skillRegistry,
           this.dependencies.strategyRegistry,
+          this.dependencies.preResolveAiEmployeePrompt,
         );
       } else {
-        await processAgentTurn(this.db, this.modelClient, this.model, input, {
-          ...this.dependencies,
-          claimed: true,
+        // 预判分流：规则 + 极速 LLM 分类，高危转人工 / simple 走直答档。
+        // classify 内部 fail-open 永不抛错；未注入 triage 时零行为变化。
+        let decisionClient = this.modelClient;
+        let decisionModel = this.model;
+        if (this.dependencies.triage) {
+          const verdict = await this.dependencies.triage.classify(
+            await this.loadTriageContext(
+              input.turnId,
+              before.conversationId,
+            ),
+          );
+          await recordAgentTurnEvent(this.db, {
+            turnId: before.turnId,
+            conversationId: before.conversationId,
+            eventType: "triaged",
+            payload: {
+              route: verdict.route,
+              tier: verdict.tier,
+              reason: verdict.reason,
+              degraded: verdict.degraded,
+            },
+          });
+          if (verdict.route === "human") {
+            await commitAgentTurnHandoff(this.db, {
+              conversationId: before.conversationId,
+              turnId: before.turnId,
+              reason: "triage_high_risk",
+            });
+            return this.resultAfterExecution(before, resumed);
+          }
+          if (
+            verdict.route === "auto" &&
+            verdict.tier === "simple" &&
+            !verdict.degraded &&
+            this.dependencies.triage.fastClient &&
+            this.dependencies.triage.fastModel
+          ) {
+            // 直答：同一 processAgentTurn 全套闸门，仅替换模型档位；
+            // 若直答决策仍要求工具，下方恢复路径回到主力档执行。
+            decisionClient = this.dependencies.triage.fastClient;
+            decisionModel = this.dependencies.triage.fastModel;
+          }
+        }
+        await processAgentTurn(this.db, decisionClient, decisionModel, input, {
+          ...(this.dependencies.knowledgeSearch
+            ? { knowledgeSearch: this.dependencies.knowledgeSearch }
+            : {}),
+          ...(this.dependencies.skillRegistry
+            ? { skillRegistry: this.dependencies.skillRegistry }
+            : {}),
+          ...(this.dependencies.strategyRegistry
+            ? { strategyRegistry: this.dependencies.strategyRegistry }
+            : {}),
+          ...(this.dependencies.preResolveAiEmployeePrompt
+            ? { preResolveAiEmployeePrompt: this.dependencies.preResolveAiEmployeePrompt }
+            : {}),
         });
 
         const afterDecision = await this.loadTurn(input.turnId);
@@ -174,6 +261,7 @@ export class AgentTurnExecutor {
               this.dependencies.knowledgeSearch,
               this.dependencies.skillRegistry,
               this.dependencies.strategyRegistry,
+              this.dependencies.preResolveAiEmployeePrompt,
             );
           }
         }
@@ -215,6 +303,48 @@ export class AgentTurnExecutor {
     return rows[0];
   }
 
+  /** 加载预判分流所需的触发消息与近期入站文本（查询失败视为无上下文）。 */
+  private async loadTriageContext(
+    turnId: string,
+    conversationId: string,
+  ): Promise<{
+    triggerText: string;
+    recentInboundTexts: string[];
+  }> {
+    try {
+      const [turn] = await this.db
+        .select({ triggerMessageId: schema.agentTurns.triggerMessageId })
+        .from(schema.agentTurns)
+        .where(eq(schema.agentTurns.turnId, turnId))
+        .limit(1);
+      const triggerMessageId = turn?.triggerMessageId;
+      const [trigger] = triggerMessageId
+        ? await this.db
+            .select({ text: schema.messages.text })
+            .from(schema.messages)
+            .where(eq(schema.messages.messageId, triggerMessageId))
+            .limit(1)
+        : [];
+      const recent = await this.db
+        .select({ text: schema.messages.text })
+        .from(schema.messages)
+        .where(
+          and(
+            eq(schema.messages.conversationId, conversationId),
+            eq(schema.messages.direction, "inbound"),
+          ),
+        )
+        .orderBy(desc(schema.messages.occurredAt))
+        .limit(5);
+      return {
+        triggerText: trigger?.text ?? "",
+        recentInboundTexts: recent.map((row) => row.text).reverse(),
+      };
+    } catch {
+      return { triggerText: "", recentInboundTexts: [] };
+    }
+  }
+
   private async resultAfterExecution(
     before: { turnId: string; conversationId: string; status: string },
     resumed: boolean,
@@ -229,41 +359,5 @@ export class AgentTurnExecutor {
   }
 }
 
-export async function getAgentTurnConversationId(
-  db: Database,
-  turnId: string,
-): Promise<string> {
-  const rows = await db
-    .select({ conversationId: schema.agentTurns.conversationId })
-    .from(schema.agentTurns)
-    .where(eq(schema.agentTurns.turnId, turnId))
-    .limit(1);
-  if (!rows[0]) throw new Error(`agent turn ${turnId} does not exist`);
-  return rows[0].conversationId;
-}
-
-function isTerminal(status: string): boolean {
-  return [
-    "completed",
-    "failed",
-    "superseded",
-    "suppressed_policy",
-    "suppressed_handoff",
-  ].includes(status);
-}
-
-function normalizeStatus(status: string): AgentTurnExecutionStatus {
-  if (
-    status === "completed" ||
-    status === "failed" ||
-    status === "superseded" ||
-    status === "suppressed_policy" ||
-    status === "suppressed_handoff" ||
-    status === "queued" ||
-    status === "tool_planned" ||
-    status === "running"
-  ) {
-    return status;
-  }
-  return "unknown";
-}
+/** 根据轮次 ID 查询所属会话 ID（公共 API，保持向后兼容） */
+export { getAgentTurnConversationId } from "./turn-utils.js";

@@ -162,7 +162,7 @@ describe("Channel Host event poller", () => {
     await pollChannelEventsOnce({
       source,
       db: {},
-      logger: { warn },
+      logger: { warn, error: vi.fn(), info: vi.fn() },
       dependencies: {
         currentCursor: () => Promise.resolve(checkpoint),
         ingestEvents: (_db, events, nextCursor) => {
@@ -202,7 +202,7 @@ describe("Channel Host event poller", () => {
     await pollChannelEventsOnce({
       source,
       db: {},
-      logger: { warn },
+      logger: { warn, error: vi.fn(), info: vi.fn() },
       dependencies: {
         currentCursor: () => Promise.resolve(checkpoint),
         ingestEvents: (_db, _events, nextCursor) => {
@@ -237,7 +237,7 @@ describe("Channel Host event poller", () => {
     await pollChannelEventsOnce({
       source,
       db: {},
-      logger: { warn },
+      logger: { warn, error: vi.fn(), info: vi.fn() },
       dependencies: {
         currentCursor: () => Promise.resolve(checkpoint),
         ingestEvents: (_db, _events, nextCursor) => {

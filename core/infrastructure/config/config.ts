@@ -55,10 +55,30 @@ const environmentSchema = z.object({
   VISION_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(60_000),
   /** 语音转写模型（复用视觉端点与密钥；实测端点不支持音频时可覆盖为 mimo-v2.5-asr） */
   ASR_MODEL: z.string().min(1).default("mimo-v2.5"),
+  /** 专用 ASR 端点（OpenAI 兼容 audio/transcriptions，如硅基流动）；配置后优先于视觉端点 */
+  ASR_BASE_URL: z.url().optional(),
+  ASR_API_KEY: z.string().min(1).optional(),
+  ASR_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(60_000),
+  /** 预判分流模型（极速小模型）：Agent Turn 进入主决策前做人工/自动、简单/标准分流判定 */
+  TRIAGE_BASE_URL: z.url().default("https://api.siliconflow.cn/v1"),
+  TRIAGE_MODEL: z.string().min(1).default("Qwen/Qwen2.5-7B-Instruct"),
+  TRIAGE_API_KEY: z.string().min(1).optional(),
+  TRIAGE_TIMEOUT_MS: z.coerce.number().int().min(500).default(3_000),
+  /** 直答模型：分流判定为 simple 且运营开启直答时用于生成客户回复 */
+  FAST_BASE_URL: z.url().default("https://api.siliconflow.cn/v1"),
+  FAST_MODEL: z.string().min(1).default("THUDM/GLM-4-9B-0414"),
+  FAST_API_KEY: z.string().min(1).optional(),
+  FAST_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(15_000),
   WEKNORA_BASE_URL: z.url().default("http://localhost/api/v1"),
   WEKNORA_API_KEY: z.string().min(1).optional(),
   WEKNORA_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(15_000),
   WEKNORA_KNOWLEDGE_BASE_IDS: z.string().trim().optional(),
+  /**
+   * WeKnora 站点 origin（不带 /api/v1），用于把浏览器 302 到 WeKnora UI 进行代管登录。
+   * 未配置时回退到 WEKNORA_BASE_URL 去掉 /api/v1 后缀；两值都不可用时桥接仍可工作
+   * （launch / exchange 不依赖 origin），仅 /knora/redirect 会返回 503。
+   */
+  WEKNORA_ORIGIN: z.url().optional(),
   /** CORS 白名单（逗号分隔的完整 origin）；不配置则完全不开放跨域 */
   CORS_ORIGINS: z.string().trim().optional(),
   /** WeKnora 桥接：账号凭证加密密钥（缺失时桥接路由返回 503） */
@@ -113,6 +133,33 @@ export type RuntimeConfig = {
         asrModel: string;
       }
     | undefined;
+  /** 专用 ASR 端点（OpenAI 兼容 audio/transcriptions）；未配置时回落 vision.asrModel */
+  asr:
+    | {
+        baseUrl: string;
+        apiKey: string;
+        model: string;
+        timeoutMs: number;
+      }
+    | undefined;
+  /** 预判分流模型端点（未配 key 时 Triage 功能 fail-open 关闭） */
+  triage:
+    | {
+        baseUrl: string;
+        apiKey: string;
+        model: string;
+        timeoutMs: number;
+      }
+    | undefined;
+  /** 直答模型端点（simple 档直答；未配置时该支路关闭） */
+  fast:
+    | {
+        baseUrl: string;
+        apiKey: string;
+        model: string;
+        timeoutMs: number;
+      }
+    | undefined;
   weknora:
     | {
         baseUrl: string;
@@ -128,6 +175,8 @@ export type RuntimeConfig = {
     encKey: string | undefined;
     tenantId: number;
     emailDomain: string;
+    /** WeKnora 站点 origin（无 /api/v1 后缀），用于 302 跳转到 WeKnora UI 走代管登录 */
+    origin: string | undefined;
   };
 };
 
@@ -142,7 +191,9 @@ function secretValue(
     | "CHANNEL_HOST_TOKEN"
     | "MODEL_API_KEY"
     | "VISION_API_KEY"
-    | "WEKNORA_API_KEY",
+    | "WEKNORA_API_KEY"
+    | "TRIAGE_API_KEY"
+    | "FAST_API_KEY",
 ): string | undefined {
   const file = process.env[`${name}_FILE`]?.trim();
   if (file) {
@@ -161,6 +212,8 @@ export function loadConfig(): RuntimeConfig {
     MODEL_API_KEY: secretValue("MODEL_API_KEY"),
     VISION_API_KEY: secretValue("VISION_API_KEY"),
     WEKNORA_API_KEY: secretValue("WEKNORA_API_KEY"),
+    TRIAGE_API_KEY: secretValue("TRIAGE_API_KEY"),
+    FAST_API_KEY: secretValue("FAST_API_KEY"),
   });
   if (
     Boolean(parsed.CHANNEL_HOST_BASE_URL) !== Boolean(parsed.CHANNEL_HOST_TOKEN)
@@ -217,6 +270,31 @@ export function loadConfig(): RuntimeConfig {
           asrModel: parsed.ASR_MODEL,
         }
       : undefined,
+    asr:
+      parsed.ASR_API_KEY && parsed.ASR_BASE_URL
+        ? {
+            baseUrl: parsed.ASR_BASE_URL.replace(/\/$/, ""),
+            apiKey: parsed.ASR_API_KEY,
+            model: parsed.ASR_MODEL,
+            timeoutMs: parsed.ASR_TIMEOUT_MS,
+          }
+        : undefined,
+    triage: parsed.TRIAGE_API_KEY
+      ? {
+          baseUrl: parsed.TRIAGE_BASE_URL.replace(/\/$/, ""),
+          apiKey: parsed.TRIAGE_API_KEY,
+          model: parsed.TRIAGE_MODEL,
+          timeoutMs: parsed.TRIAGE_TIMEOUT_MS,
+        }
+      : undefined,
+    fast: parsed.FAST_API_KEY
+      ? {
+          baseUrl: parsed.FAST_BASE_URL.replace(/\/$/, ""),
+          apiKey: parsed.FAST_API_KEY,
+          model: parsed.FAST_MODEL,
+          timeoutMs: parsed.FAST_TIMEOUT_MS,
+        }
+      : undefined,
     weknora: parsed.WEKNORA_API_KEY
       ? {
           baseUrl: parsed.WEKNORA_BASE_URL.replace(/\/$/, ""),
@@ -235,8 +313,22 @@ export function loadConfig(): RuntimeConfig {
       encKey: parsed.KNORA_ACCOUNT_ENC_KEY,
       tenantId: parsed.KNORA_TENANT_ID,
       emailDomain: parsed.KNORA_ACCOUNT_EMAIL_DOMAIN,
+      origin: resolveWeknoraOrigin(parsed.WEKNORA_ORIGIN, parsed.WEKNORA_BASE_URL),
     },
   };
+}
+
+/**
+ * 解析 WeKnora 站点 origin：优先用显式配置的 WEKNORA_ORIGIN；
+ * 否则从 WEKNORA_BASE_URL 去掉末尾的 /api/v1（不区分大小写）。
+ * 返回 undefined 表示桥接 redirect 不可用，但 launch/exchange 仍可工作。
+ */
+function resolveWeknoraOrigin(
+  explicit: string | undefined,
+  baseUrl: string,
+): string | undefined {
+  const candidate = (explicit ?? "").trim() || baseUrl.replace(/\/$/, "");
+  return candidate.replace(/\/api\/v1\/?$/i, "") || undefined;
 }
 
 function parseKnowledgeBaseIds(

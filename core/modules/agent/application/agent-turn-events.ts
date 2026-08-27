@@ -9,6 +9,7 @@ export type AgentTurnEventType =
   | "tool_execution_reclaimed"
   | "tool_checkpoint_persisted"
   | "context_built"
+  | "triaged"
   | "policy_decided"
   | "knowledge_retrieved"
   | "tool_completed"

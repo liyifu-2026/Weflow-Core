@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { lockConversationOwnership } from "../../../infrastructure/postgres/ownership-lock.js";
+import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
 import { createHandoffInTransaction } from "../../handoff/application/handoff-service.js";
 import {
   agentHandoffClientRequestId,
@@ -294,6 +295,20 @@ export async function commitAgentTurnOutcome(
       segments: input.responseSegments,
       variant: input.variant,
     });
+    // Real-time：Agent 出站消息落库后即时向 Console SSE 推送 agent_message，
+    // 前端收到后回拉 Transcript；不依赖 Channel Host 的回执，避免「发送后等几秒才出现」。
+    // 仅在新创建时推送；幂等回放（已存在 batch）不再重复触发，否则会造成消息闪烁。
+    if (reply.created) {
+      const occurredAt = new Date().toISOString();
+      for (const message of reply.messages) {
+        conversationEvents.publish({
+          type: "agent_message",
+          conversationId: input.conversationId,
+          messageId: message.messageId,
+          occurredAt,
+        });
+      }
+    }
     await scheduleMemoryCaptureInTransaction(transaction, {
       conversationId: input.conversationId,
       contactId: profiles[0].contactId,

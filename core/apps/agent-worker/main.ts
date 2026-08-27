@@ -40,6 +40,13 @@ import { readRuntimeSettings } from "../../modules/operations/application/runtim
 import { discoverAgentPlugins } from "../../infrastructure/solutions/agent-plugin-discovery.js";
 import { readModelSettingsRuntime } from "../../modules/operations/application/model-settings.js";
 import {
+  classifyForTriage,
+  extractTriagePolicy,
+} from "../../modules/agent/application/triage-classifier.js";
+import {
+  createCachedExtensionSettingsReader,
+} from "../../modules/solution/application/read-extension-settings.js";
+import {
   MapSkillRegistry,
   type AgentSkill,
 } from "../../modules/agent/contracts/agent-skill.js";
@@ -83,6 +90,24 @@ await runProcess({
             ? { apiKey: config.vision.apiKey }
             : {}),
       },
+      ...(config.triage
+        ? {
+            triageModel: {
+              name: config.triage.model,
+              baseUrl: config.triage.baseUrl,
+              apiKey: config.triage.apiKey,
+            },
+          }
+        : {}),
+      ...(config.fast
+        ? {
+            fastModel: {
+              name: config.fast.model,
+              baseUrl: config.fast.baseUrl,
+              apiKey: config.fast.apiKey,
+            },
+          }
+        : {}),
     });
     const model = {
       ...config.model,
@@ -99,6 +124,36 @@ await runProcess({
       model: model.name,
       timeoutMs: model.timeoutMs,
     });
+
+    // Triage 预判分流：策略来自客服 Solution 的扩展设置（30s 缓存），
+    // 未安装/未配置时回落默认策略（enabled=false → 整层短路，零行为变化）。
+    // 模型槽位启动时读取一次（DB 可覆盖 env）；改动模型设置需重启 worker。
+    const readPipelineSettings = createCachedExtensionSettingsReader(
+      postgres.db,
+      { solutionId: "weflow.customer-support", extensionId: "support-pipeline" },
+    );
+    const triageClient =
+      config.triage && modelSettings.triageModel
+        ? new OpenAiCompatibleClient({
+            baseUrl: modelSettings.triageModel.baseUrl,
+            apiKey: modelSettings.triageModel.apiKey ?? "",
+            model: modelSettings.triageModel.name,
+            timeoutMs: config.triage.timeoutMs,
+          })
+        : undefined;
+    const fastClient =
+      config.fast && modelSettings.fastModel
+        ? new OpenAiCompatibleClient({
+            baseUrl: modelSettings.fastModel.baseUrl,
+            apiKey: modelSettings.fastModel.apiKey ?? "",
+            model: modelSettings.fastModel.name,
+            timeoutMs: config.fast.timeoutMs,
+          })
+        : undefined;
+    const fastModelName = modelSettings.fastModel?.name;
+    if (!triageClient) {
+      logger.info("Triage classifier disabled (no model endpoint configured)");
+    }
     // 可选的 WeKnora 知识库客户端
     const weknora = config.weknora
       ? new WeKnoraKnowledgeClient(config.weknora)
@@ -225,6 +280,32 @@ await runProcess({
               strategyRegistry,
               ...(preResolveAiEmployeePrompt
                 ? { preResolveAiEmployeePrompt }
+                : {}),
+              ...(triageClient
+                ? {
+                    triage: {
+                      classify: async (
+                        context: {
+                          triggerText: string;
+                          recentInboundTexts: string[];
+                        },
+                      ) =>
+                        classifyForTriage({
+                          policy: extractTriagePolicy(
+                            await readPipelineSettings(),
+                          ),
+                          client: triageClient,
+                          ...(modelSettings.triageModel
+                            ? { model: modelSettings.triageModel.name }
+                            : {}),
+                          triggerText: context.triggerText,
+                          recentInboundTexts: context.recentInboundTexts,
+                        }),
+                      ...(fastClient && fastModelName
+                        ? { fastClient, fastModel: fastModelName }
+                        : {}),
+                    },
+                  }
                 : {}),
             },
           );

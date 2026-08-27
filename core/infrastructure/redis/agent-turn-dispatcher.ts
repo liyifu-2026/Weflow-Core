@@ -5,6 +5,9 @@
  * - 排除有运行中轮次或待回复消息的会话
  * - 同一会话的多个排队轮次只保留最新的（静默窗口机制）
  * - 使用 SHA256 生成稳定的队列 Job ID
+ * 调度决策（静默窗口/排除窗口/失效阈值）定义于
+ * modules/conversations/application/agent-turn-scheduling-policy.ts，
+ * 本文件只负责 Redis 执行与 PostgreSQL 读写。
  */
 import {
   and,
@@ -24,9 +27,28 @@ import type { Logger } from "pino";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../postgres/schema.js";
 import { createJobQueue, type JobEnvelope } from "./job-queue.js";
+import {
+  AGENT_PENDING_REPLY_WINDOW_MS,
+  AGENT_TURN_QUIET_WINDOW_MS,
+  PENDING_AGENT_REPLY_SEND_STATES,
+  STALE_RUNNING_TURN_MS,
+  coalesceQueuedAgentTurns,
+  pendingReplyWindowStart,
+  staleRunningTurnBefore,
+} from "../../modules/conversations/application/agent-turn-scheduling-policy.js";
+import type { QueuedAgentTurn } from "../../modules/conversations/application/agent-turn-scheduling-policy.js";
 
 /** Agent 轮次队列名称 */
 export const AGENT_TURN_QUEUE = "agent-turns";
+
+/** 调度策略常量与合并决策的既有导入路径，供历史调用方继续使用。 */
+export {
+  AGENT_PENDING_REPLY_WINDOW_MS,
+  AGENT_TURN_QUIET_WINDOW_MS,
+  STALE_RUNNING_TURN_MS,
+  coalesceQueuedAgentTurns,
+};
+export type { QueuedAgentTurn };
 
 /** 分发器配置选项 */
 type DispatcherOptions = {
@@ -36,60 +58,6 @@ type DispatcherOptions = {
   intervalMs?: number;
   now?: () => Date;
 };
-
-/** 静默窗口时间（毫秒），在此窗口内的多个轮次会被合并 */
-export const AGENT_TURN_QUIET_WINDOW_MS = 3_000;
-
-/**
- * 待发送 Agent 回复的排除窗口（毫秒）。
- * dispatcher 会跳过存在"最近窗口内"未确认 Agent 回复的会话，
- * 避免与正在发出的回复叠加；超过窗口的 pending/unknown 消息视为
- * 渠道确认丢失的死消息，不再阻塞该会话的新轮次。
- */
-export const AGENT_PENDING_REPLY_WINDOW_MS = 10 * 60_000;
-
-/** 运行中或工具待执行轮次被视为崩溃失效的时长阈值（毫秒）。 */
-export const STALE_RUNNING_TURN_MS = 5 * 60_000;
-
-/** 排队中的 Agent 轮次 */
-export type QueuedAgentTurn = {
-  turnId: string;
-  conversationId: string;
-  traceId: string;
-  createdAt: Date;
-};
-
-/**
- * 合并排队的 Agent 轮次
- * 同一会话只保留最新轮次，旧轮次标记为 superseded
- * 仅当最新轮次超过静默窗口后才标记为 ready
- */
-export function coalesceQueuedAgentTurns(
-  turns: QueuedAgentTurn[],
-  now: Date,
-  quietWindowMs = AGENT_TURN_QUIET_WINDOW_MS,
-): { ready: QueuedAgentTurn[]; superseded: QueuedAgentTurn[] } {
-  const byConversation = new Map<string, QueuedAgentTurn[]>();
-  for (const turn of turns) {
-    const conversationTurns = byConversation.get(turn.conversationId) ?? [];
-    conversationTurns.push(turn);
-    byConversation.set(turn.conversationId, conversationTurns);
-  }
-
-  const ready: QueuedAgentTurn[] = [];
-  const superseded: QueuedAgentTurn[] = [];
-  for (const conversationTurns of byConversation.values()) {
-    conversationTurns.sort(compareTurns);
-    const latest = conversationTurns.at(-1);
-    if (!latest) continue;
-    superseded.push(...conversationTurns.slice(0, -1));
-    if (now.getTime() - latest.createdAt.getTime() >= quietWindowMs) {
-      ready.push(latest);
-    }
-  }
-  ready.sort(compareTurns);
-  return { ready, superseded };
-}
 
 /** 启动 Agent 轮次分发器 */
 export function startAgentTurnDispatcher(
@@ -103,8 +71,8 @@ export function startAgentTurnDispatcher(
       try {
         // 恢复 worker 崩溃后的 Agent Turn：running 重置为 queued；
         // 已持久化的工具阶段回到 queued，由 AgentTurnExecutor 继续执行。
-        const staleBefore = new Date(
-          (options.now?.() ?? new Date()).getTime() - STALE_RUNNING_TURN_MS,
+        const staleBefore = staleRunningTurnBefore(
+          options.now?.() ?? new Date(),
         );
         const recoveredToolTurns = await recoverStalePlannedTurns(
           options.db,
@@ -122,9 +90,8 @@ export function startAgentTurnDispatcher(
         // coalesced using the quiet window below.
         const runningTurns = alias(schema.agentTurns, "running_agent_turns");
         const pendingReplies = alias(schema.messages, "pending_agent_replies");
-        const pendingReplySince = new Date(
-          (options.now?.() ?? new Date()).getTime() -
-            AGENT_PENDING_REPLY_WINDOW_MS,
+        const pendingReplySince = pendingReplyWindowStart(
+          options.now?.() ?? new Date(),
         );
         const turns = await options.db
           .select({
@@ -163,9 +130,7 @@ export function startAgentTurnDispatcher(
                       ),
                       eq(pendingReplies.actorType, "agent"),
                       inArray(pendingReplies.sendState, [
-                        "pending",
-                        "submitting",
-                        "unknown",
+                        ...PENDING_AGENT_REPLY_SEND_STATES,
                       ]),
                       // 只排除最近窗口内的待确认回复；过期消息视为
                       // 渠道确认丢失，不再阻塞新轮次
@@ -266,7 +231,7 @@ export async function recoverStalePlannedTurns(
   db: NodePgDatabase<typeof schema>,
   now: Date,
 ): Promise<string[]> {
-  const staleBefore = new Date(now.getTime() - STALE_RUNNING_TURN_MS);
+  const staleBefore = staleRunningTurnBefore(now);
   const reclaimed = await db
     .update(schema.toolExecutions)
     .set({
@@ -389,11 +354,6 @@ export async function requeueCompletedToolTurns(
     )
     .returning({ turnId: schema.agentTurns.turnId });
   return rows.map((row) => row.turnId);
-}
-
-function compareTurns(left: QueuedAgentTurn, right: QueuedAgentTurn): number {
-  const createdAt = left.createdAt.getTime() - right.createdAt.getTime();
-  return createdAt === 0 ? left.turnId.localeCompare(right.turnId) : createdAt;
 }
 
 async function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
