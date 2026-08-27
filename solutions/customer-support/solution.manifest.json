@@ -4,7 +4,7 @@
   "metadata": {
     "id": "weflow.customer-support",
     "name": "Customer Support Solution",
-    "version": "1.0.0",
+    "version": "1.2.4",
     "publisher": "weflow"
   },
   "compatibility": {
@@ -12,70 +12,87 @@
     "pluginSdk": "^1.0.0"
   },
   "dependencies": {
-    "capabilities": ["knowledge.retrieval"],
+    "capabilities": [
+      "knowledge.retrieval"
+    ],
     "solutions": []
   },
   "artifacts": [
     {
       "id": "customer-support-strategy",
-      "type": "plugin",
-      "ref": "npm:@weflow/customer-support-strategy",
-      "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "kind": "plugin",
+      "ref": "file:./plugins/customer-support-strategy",
+      "targetProcess": "agent-worker"
     },
     {
       "id": "product-troubleshooting",
-      "type": "plugin",
-      "ref": "npm:@weflow/product-troubleshooting",
-      "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      "kind": "plugin",
+      "ref": "file:./plugins/product-troubleshooting",
+      "targetProcess": "agent-worker"
     },
     {
       "id": "support-web",
       "type": "app",
-      "ref": "npm:@weflow/support-web",
-      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      "ref": "file:./apps/support-web"
     },
     {
       "id": "mobile",
       "type": "app",
-      "ref": "artifacts/mobile.tgz",
-      "digest": "sha256:180915c25febe89ab3dc8312bcf3fa39e1299b86e860650afb86246c7af135ee"
+      "ref": "file:./apps/mobile"
+    },
+    {
+      "id": "operations-web",
+      "type": "app",
+      "ref": "file:./apps/operations-web"
     }
   ],
   "permissions": [
     {
-      "id": "read-conversations",
-      "resource": "conversations",
-      "action": "read"
+      "id": "agent.strategy.register",
+      "resource": "agent.strategy",
+      "action": "write",
+      "description": "Register the support execution strategy."
     },
     {
-      "id": "reply-conversations",
-      "resource": "conversations",
-      "action": "write"
+      "id": "agent.skill.register",
+      "resource": "agent.skill",
+      "action": "write",
+      "description": "Register product troubleshooting behavior."
+    },
+    {
+      "id": "channel.wechat.use",
+      "resource": "channel.wechat",
+      "action": "execute",
+      "description": "Receive and send support messages through the configured channel."
     }
   ],
-  "configuration": {},
+  "configuration": {
+    "defaults": {
+      "enabled": true,
+      "autoSendEnabled": true,
+      "handoff_notice": "已为您转接人工客服"
+    }
+  },
   "secretSlots": [
     {
       "name": "support_bff_api_key",
       "kind": "env",
-      "required": true
+      "required": false
     }
   ],
-  "resources": [
-    {
-      "id": "support-schema",
-      "type": "schema",
-      "ref": "support"
-    }
-  ],
+  "resources": [],
   "executionProfiles": [
     {
       "id": "customer-support-v1",
       "strategyRef": "weflow.customer-support/structured-v1",
       "maxModelCalls": 2,
-      "maxToolCalls": 1,
+      "maxToolCalls": 3,
       "timeoutSeconds": 60,
-      "allowedTools": ["query_contact_profile", "retrieve_knowledge"],
+      "allowedTools": [
+        "query_contact_profile",
+        "retrieve_knowledge",
+        "fetch_url"
+      ],
       "skills": [
         {
           "id": "weflow.customer-support/product-troubleshooting",
@@ -88,128 +105,109 @@
     {
       "id": "support-web",
       "type": "web",
-      "entry": "/support"
+      "entry": "apps/support-web"
     },
     {
       "id": "mobile",
       "type": "mobile",
-      "entry": "/mobile"
+      "entry": "apps/mobile"
     }
   ],
-  "healthChecks": [
-    {
-      "id": "support-bff",
-      "name": "Support BFF",
-      "type": "http",
-      "target": "http://127.0.0.1:3200/healthz",
-      "port": 3200,
-      "timeoutSeconds": 5
-    },
-    {
-      "id": "support-web",
-      "name": "Support Web",
-      "type": "http",
-      "target": "http://127.0.0.1:5174/support/",
-      "port": 5174,
-      "timeoutSeconds": 5
-    },
-    {
-      "id": "mobile",
-      "name": "Mobile App",
-      "type": "http",
-      "target": "http://127.0.0.1:8081",
-      "port": 8081,
-      "timeoutSeconds": 5
-    }
-  ],
-  "backend": {
-    "entry": "backend/customer-support/index.js"
-  },
   "consoleExtensions": [
     {
-      "id": "support-console",
-      "title": "客服工作台",
-      "entry": "/plugins/customer-support/apps/support-web/dist/support-console.js",
-      "nav": {
-        "group": "业务",
-        "label": "客服工作台",
-        "icon": "conversations",
-        "order": 10
-      },
-      "settings": true,
-      "settingsContributions": [
-        {
-          "id": "bff-api-key",
-          "category": "security",
-          "label": "Support BFF API Key",
-          "order": 10,
-          "schema": [
-            {
-              "key": "support_bff_api_key",
-              "label": "Support BFF API Key",
-              "type": "secret",
-              "required": true
-            }
-          ]
-        },
-        {
-          "id": "handoff-notice",
-          "category": "general",
-          "label": "转人工提示语",
-          "order": 20,
-          "schema": [
-            {
-              "key": "handoff_notice",
-              "label": "转人工提示语",
-              "type": "text",
-              "default": "已为您转接人工客服"
-            }
-          ]
-        },
-        {
-          "id": "external-services",
-          "category": "integrations",
-          "label": "客服外部服务配置",
-          "order": 30,
-          "schema": [
-            { "key": "web_search_enabled", "label": "启用联网搜索", "type": "boolean", "default": false },
-            { "key": "web_search_base_url", "label": "联网搜索 Base URL", "type": "text", "placeholder": "https://api.example.com/v1" },
-            { "key": "web_search_api_key", "label": "联网搜索 API Key", "type": "secret" },
-            { "key": "web_search_model", "label": "联网搜索模型", "type": "text", "placeholder": "gpt-4o-mini" },
-            { "key": "voice_transcription_enabled", "label": "启用语音转写", "type": "boolean", "default": false },
-            { "key": "voice_transcription_base_url", "label": "语音转写 Base URL", "type": "text", "placeholder": "https://api.example.com/v1" },
-            { "key": "voice_transcription_api_key", "label": "语音转写 API Key", "type": "secret" },
-            { "key": "voice_transcription_model", "label": "语音转写模型", "type": "text", "placeholder": "mimo-v2.5-asr" }
-          ]
-        }
-      ],
-      "dashboardContributions": [
-        {
-          "id": "today-consultations",
-          "title": "今日咨询量",
-          "defaultPosition": { "x": 0, "y": 0, "w": 3, "h": 2 },
-          "refreshInterval": 30000
-        },
-        {
-          "id": "pending-handoffs",
-          "title": "待处理人工会话",
-          "defaultPosition": { "x": 3, "y": 0, "w": 3, "h": 2 },
-          "refreshInterval": 30000
-        },
-        {
-          "id": "solution-status",
-          "title": "客服方案状态",
-          "defaultPosition": { "x": 6, "y": 0, "w": 3, "h": 2 },
-          "refreshInterval": 30000
-        }
-      ],
-      "apiRoutes": [
-        {
-          "prefix": "/customer-support",
-          "target": "http://127.0.0.1:3200/customer-support"
-        }
-      ],
-      "eventSubscriptions": ["customer_message", "handoff_created"]
+      "id": "support-conversations",
+      "title": "会话",
+      "path": "/support/conversations",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "conversations",
+      "group": "客服业务"
+    },
+    {
+      "id": "support-knowledge",
+      "title": "知识",
+      "path": "/support/knowledge",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "knowledge",
+      "group": "客服业务"
+    },
+    {
+      "id": "support-ai-employees",
+      "title": "AI 员工",
+      "path": "/support/ai-employees",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "agent",
+      "group": "客服业务",
+      "hidden": true
+    },
+    {
+      "id": "support-ai-employees-prompt",
+      "title": "AI 员工提示词",
+      "path": "/support/ai-employees/:definitionId/prompt",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "agent",
+      "group": "客服业务",
+      "hidden": true
+    },
+    {
+      "id": "support-policies",
+      "title": "回复策略",
+      "path": "/support/policies",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "policy",
+      "group": "客服业务",
+      "hidden": true
+    },
+    {
+      "id": "support-admin",
+      "title": "管理",
+      "path": "/support/admin",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "settings",
+      "group": "客服业务",
+      "adminOnly": true
+    },
+    {
+      "id": "support-whitelist",
+      "title": "白名单配置",
+      "path": "/support/whitelist",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "users",
+      "group": "客服业务",
+      "adminOnly": true,
+      "hidden": true
+    },
+    {
+      "id": "support-operations",
+      "title": "运行",
+      "path": "/support/operations",
+      "entry": "apps/operations-web/dist/operations-console.js",
+      "icon": "engine",
+      "group": "客服业务",
+      "adminOnly": true
+    }
+  ],
+  "healthChecks": [],
+  "dashboardContributions": [
+    {
+      "id": "today-conversations",
+      "title": "今日会话",
+      "metric": "today_conversations",
+      "unit": "个",
+      "href": "/extensions/weflow.customer-support/support-conversations"
+    },
+    {
+      "id": "pending-handoffs",
+      "title": "待人工处理",
+      "metric": "pending_handoffs",
+      "unit": "个",
+      "href": "/extensions/weflow.customer-support/support-conversations"
+    },
+    {
+      "id": "knowledge-status",
+      "title": "知识库",
+      "metric": "active_solutions",
+      "unit": "个方案",
+      "href": "/extensions/weflow.customer-support/support-knowledge"
     }
   ]
 }

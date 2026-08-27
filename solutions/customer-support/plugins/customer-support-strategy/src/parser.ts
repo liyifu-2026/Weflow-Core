@@ -2,7 +2,7 @@ import type {
   AgentAction,
   AgentActionMeta,
   HandoffBriefing,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 
 /**
  * Customer Support model response parser.
@@ -37,6 +37,21 @@ export function parseCustomerSupportResponse(text: string): AgentAction {
         requestedFacts: normalizeStringArray(raw.missing_fields),
         ...(meta ? { meta } : {}),
       };
+    case "retrieve_knowledge": {
+      const query =
+        typeof raw.knowledge_query === "string"
+          ? raw.knowledge_query.trim()
+          : "";
+      if (!query) {
+        throw new Error("retrieve_knowledge action requires knowledge_query");
+      }
+      return {
+        kind: "use_tool",
+        tool: "retrieve_knowledge",
+        arguments: { query },
+        ...(meta ? { meta } : {}),
+      };
+    }
     case "call_tool": {
       const tool = asRecord(raw.tool);
       if (typeof tool?.name !== "string") {
@@ -154,73 +169,6 @@ function normalizeBriefing(
 
 function buildMeta(raw: Record<string, unknown>): AgentActionMeta | undefined {
   const meta: AgentActionMeta = {};
-  if (typeof raw.intent === "string") meta.intent = raw.intent;
-  if (typeof raw.stage === "string") meta.stage = raw.stage;
-  if (Array.isArray(raw.missing_fields)) {
-    meta.missingFields = normalizeStringArray(raw.missing_fields);
-  }
-  if (isRecord(raw.extracted_facts)) {
-    const extracted: Record<string, string> = {};
-    for (const [key, value] of Object.entries(raw.extracted_facts)) {
-      if (typeof value === "string") extracted[key] = value;
-    }
-    if (Object.keys(extracted).length > 0) meta.extractedFacts = extracted;
-  }
-  if (Array.isArray(raw.facts_to_store)) {
-    meta.factsToStore = raw.facts_to_store.flatMap((item) => {
-      const record = asRecord(item);
-      if (!record || typeof record.field !== "string") return [];
-      return [
-        {
-          field: record.field,
-          ...(typeof record.subject === "string"
-            ? { subject: record.subject }
-            : {}),
-          ...(typeof record.value === "string" ? { value: record.value } : {}),
-          status:
-            typeof record.status === "string" ? record.status : "confirmed",
-          source:
-            typeof record.source === "string" ? record.source : "customer",
-          ...(typeof record.granularity === "string"
-            ? { granularity: record.granularity }
-            : {}),
-        },
-      ];
-    });
-  }
-  if (Array.isArray(raw.questions)) {
-    meta.questions = raw.questions.flatMap((item) => {
-      const record = asRecord(item);
-      if (!record || typeof record.field !== "string") return [];
-      return [
-        {
-          field: record.field,
-          ...(typeof record.subject === "string"
-            ? { subject: record.subject }
-            : {}),
-          reason: typeof record.reason === "string" ? record.reason : "missing",
-          ...(typeof record.requires_granularity === "string"
-            ? { requiresGranularity: record.requires_granularity }
-            : {}),
-        },
-      ];
-    });
-  }
-  if (Array.isArray(raw.actions)) {
-    meta.actions = raw.actions.flatMap((item) => {
-      const record = asRecord(item);
-      if (!record || typeof record.action !== "string") return [];
-      return [
-        {
-          action: record.action,
-          result: typeof record.result === "string" ? record.result : "suggested",
-          ...(typeof record.subject === "string"
-            ? { subject: record.subject }
-            : {}),
-        },
-      ];
-    });
-  }
   if (Array.isArray(raw.claims)) {
     meta.claims = raw.claims.flatMap((item) => {
       const record = asRecord(item);
@@ -233,9 +181,6 @@ function buildMeta(raw: Record<string, unknown>): AgentActionMeta | undefined {
         },
       ];
     });
-  }
-  if (typeof raw.active_issue_changed === "boolean") {
-    meta.activeIssueChanged = raw.active_issue_changed;
   }
   if (typeof raw.requires_human === "boolean") {
     meta.requiresHuman = raw.requires_human;
@@ -270,8 +215,4 @@ function buildMeta(raw: Record<string, unknown>): AgentActionMeta | undefined {
     meta.noActionReason = raw.no_action_reason;
   }
   return Object.keys(meta).length > 0 ? meta : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
