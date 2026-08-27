@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   ChannelEvent,
   ChannelEventSource,
@@ -114,5 +114,140 @@ describe("Channel Host event poller", () => {
       "channel:room-rollback:1",
     ]);
     expect(checkpoint).toBe("1");
+  });
+
+  it("replays from 0 when the Host maxCursor rewinds below the local checkpoint", async () => {
+    const requests: string[] = [];
+    let checkpoint = "100";
+    const source: ChannelEventSource = {
+      pullEvents: ({ afterCursor }) => {
+        const cursor = afterCursor ?? "missing";
+        requests.push(cursor);
+        if (cursor === "100") {
+          // Ledger wiped and rebuilt: numbering restarted at 50, far below
+          // the local checkpoint — the events after 100 will never come.
+          return Promise.resolve({
+            events: [],
+            nextCursor: "100",
+            hasMore: false,
+            maxCursor: "50",
+            epoch: "abc123",
+          });
+        }
+        return Promise.resolve({
+          events: [
+            {
+              eventId: "channel:room-rewind:51",
+              cursor: "51",
+              conversationRef: "room-rewind",
+              channelMessageId: "51",
+              senderRef: "wxid-contact",
+              kind: "text",
+              content: "post-rewind message",
+              occurredAt: "2026-08-17T00:00:00Z",
+              observedAt: "2026-08-17T00:00:01Z",
+              isSelf: false,
+            },
+          ],
+          nextCursor: "51",
+          hasMore: false,
+          maxCursor: "51",
+          epoch: "abc123",
+        });
+      },
+    };
+    const ingested: string[] = [];
+    const warn = vi.fn();
+
+    await pollChannelEventsOnce({
+      source,
+      db: {},
+      logger: { warn },
+      dependencies: {
+        currentCursor: () => Promise.resolve(checkpoint),
+        ingestEvents: (_db, events, nextCursor) => {
+          ingested.push(...events.map((event) => event.eventId));
+          checkpoint = nextCursor;
+          return Promise.resolve();
+        },
+      },
+    });
+
+    expect(requests).toEqual(["100", "0"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ localCursor: "100", hostMaxCursor: "50" }),
+      expect.stringContaining("rewound"),
+    );
+    expect(ingested).toEqual(["channel:room-rewind:51"]);
+    expect(checkpoint).toBe("51");
+  });
+
+  it("leaves behaviour unchanged when the Host omits maxCursor", async () => {
+    const requests: string[] = [];
+    let checkpoint = "100";
+    const source: ChannelEventSource = {
+      pullEvents: ({ afterCursor }) => {
+        const cursor = afterCursor ?? "missing";
+        requests.push(cursor);
+        return Promise.resolve({
+          events: [],
+          nextCursor: "100",
+          hasMore: false,
+        });
+      },
+    };
+    const warn = vi.fn();
+
+    await pollChannelEventsOnce({
+      source,
+      db: {},
+      logger: { warn },
+      dependencies: {
+        currentCursor: () => Promise.resolve(checkpoint),
+        ingestEvents: (_db, _events, nextCursor) => {
+          checkpoint = nextCursor;
+          return Promise.resolve();
+        },
+      },
+    });
+
+    expect(requests).toEqual(["100"]);
+    expect(warn).not.toHaveBeenCalled();
+    expect(checkpoint).toBe("100");
+  });
+
+  it("does not replay when the Host maxCursor is at or above the checkpoint", async () => {
+    const requests: string[] = [];
+    let checkpoint = "4";
+    const source: ChannelEventSource = {
+      pullEvents: ({ afterCursor }) => {
+        const cursor = afterCursor ?? "missing";
+        requests.push(cursor);
+        return Promise.resolve({
+          events: [],
+          nextCursor: "4",
+          hasMore: false,
+          maxCursor: "50",
+        });
+      },
+    };
+    const warn = vi.fn();
+
+    await pollChannelEventsOnce({
+      source,
+      db: {},
+      logger: { warn },
+      dependencies: {
+        currentCursor: () => Promise.resolve(checkpoint),
+        ingestEvents: (_db, _events, nextCursor) => {
+          checkpoint = nextCursor;
+          return Promise.resolve();
+        },
+      },
+    });
+
+    expect(requests).toEqual(["4"]);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

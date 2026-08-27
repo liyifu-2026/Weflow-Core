@@ -16,6 +16,8 @@ export type ChannelEvent = {
   readonly eventId: string;
   readonly cursor: string;
   readonly conversationRef: string;
+  /** 账号维度（多微信账号隔离，ADR-0005）。缺省/null = 平台默认账号 "default"。 */
+  readonly account?: string | null;
   readonly channelMessageId?: string | null;
   readonly senderRef?: string | null;
   readonly kind: string;
@@ -28,12 +30,22 @@ export type ChannelEvent = {
   readonly occurredAt?: string | null;
   readonly observedAt: string;
   readonly isSelf: boolean;
+  /** 群聊中被 @ 提及（ADR-0006）；缺省/缺字段 = 未提及 */
+  readonly mentioned?: boolean | null;
+  /** 入站引用回复的原消息（ADR-0006）；缺省/null = 无引用 */
+  readonly replyToChannelMessageId?: string | null;
 };
 
 export type ChannelEventsPage = {
   readonly events: readonly ChannelEvent[];
   readonly nextCursor: string;
   readonly hasMore: boolean;
+  /** Host 侧当前已分配的最高 cursor（字符串化）。
+   *  供消费者检测事件库被清空/重建后编号回卷到自身水位之下。 */
+  readonly maxCursor?: string;
+  /** Host 事件库代次标识（store 重建后变化），持久化于 host_metadata。
+   *  供消费者检测事件库被整体换新（即使 cursor 恰好对齐）。 */
+  readonly epoch?: string;
 };
 
 export type PullChannelEventsInput = {
@@ -75,16 +87,35 @@ export type ChannelSendPayload =
     }
   | {
       readonly kind: "file";
-      readonly fileRef: string;
+      readonly path: string;
       readonly fileName?: string;
     }
   | {
       readonly kind: "image" | "voice";
-      readonly mediaRef: string;
+      readonly path: string;
+    }
+  | {
+      readonly kind: "reply";
+      readonly text: string;
+      readonly replyToChannelMessageId: string;
+    }
+  | {
+      readonly kind: "mention";
+      readonly text: string;
+      readonly mentionContactRefs: readonly string[];
+    }
+  | {
+      readonly kind: "poke";
     };
 
+// executing 是 Channel Host 的中间态（已认领、GUI 发送中），
+// 对 Core 语义等价于 pending；对账时必须能解析，否则 outbound cycle 中断。
 export type ChannelSendOperationState =
-  "pending" | "confirmed" | "unknown" | "failed";
+  | "pending"
+  | "executing"
+  | "confirmed"
+  | "unknown"
+  | "failed";
 
 export type ChannelSendOperation = {
   readonly operationId: string;
@@ -100,6 +131,8 @@ export type ChannelSendOperation = {
 export type CreateChannelSendOperationInput = {
   readonly operationId: string;
   readonly conversationRef: string;
+  /** 账号维度（多微信账号隔离，ADR-0005）；缺省 = 平台默认账号 "default" */
+  readonly account?: string | null;
   readonly payload: ChannelSendPayload;
 };
 
@@ -117,6 +150,8 @@ export interface ChannelSendOperations {
  */
 export type ChannelContact = {
   readonly contactRef: string;
+  /** 账号维度（多微信账号隔离，ADR-0005）。缺省/null = 平台默认账号 "default"。 */
+  readonly account?: string | null;
   readonly displayName: string;
   readonly nickname: string | null;
   readonly remark: string | null;

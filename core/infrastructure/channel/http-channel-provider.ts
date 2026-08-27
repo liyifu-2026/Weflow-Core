@@ -33,6 +33,7 @@ import type {
 import type {
   ChannelSendOperation,
   ChannelSendOperations,
+  ChannelSendPayload,
   CreateChannelSendOperationInput,
 } from "../../modules/channel/contracts/channel-send-operations.js";
 import type { PluginDefinition } from "../runtime/kernel/index.js";
@@ -46,6 +47,8 @@ const hostEventSchema = z
     eventId: z.string().min(1),
     cursor: z.string().min(1),
     conversationRef: z.string().min(1),
+    /** 账号维度（ADR-0005 多账号隔离）；缺省回落 "default" */
+    account: z.string().nullable().optional(),
     channelMessageId: z.string().nullable().optional(),
     senderRef: z.string().nullable().optional(),
     kind: z.string().min(1),
@@ -53,6 +56,10 @@ const hostEventSchema = z
     mediaRef: z.string().nullable().optional(),
     fileName: z.string().nullable().optional(),
     mimeType: z.string().nullable().optional(),
+    /** 群聊被 @ 提及（ADR-0006）；缺省 = 未提及 */
+    mentioned: z.boolean().nullable().optional(),
+    /** 入站引用原消息（ADR-0006）；缺省 = 无引用 */
+    replyToChannelMessageId: z.string().nullable().optional(),
     occurredAt: z.string().nullable().optional(),
     observedAt: z.string().min(1),
     isSelf: z.boolean(),
@@ -64,12 +71,19 @@ const hostEventsResponseSchema = z
     events: z.array(hostEventSchema),
     nextCursor: z.string().min(1),
     hasMore: z.boolean(),
+    // Store diagnostics (optional, backward compatible): let consumers
+    // detect a wiped/rebuilt ledger whose numbering restarted below their
+    // watermark (maxCursor) or whose generation changed (epoch).
+    maxCursor: z.string().optional(),
+    epoch: z.string().optional(),
   })
   .strict();
 
 const hostContactSchema = z
   .object({
     contactRef: z.string().min(1),
+    /** 账号维度（ADR-0005 多账号隔离）；缺省回落 "default" */
+    account: z.string().nullable().optional(),
     displayName: z.string().min(1),
     nickname: z.string().nullable(),
     remark: z.string().nullable(),
@@ -93,11 +107,18 @@ const hostSendOperationSchema = z
     conversationRef: z.string().min(1),
     payload: z
       .object({
-        kind: z.literal("text"),
-        text: z.string(),
+        kind: z.enum(["text", "reply", "mention", "poke", "image", "file", "voice"]),
+        text: z.string().optional(),
+        replyToChannelMessageId: z.string().optional(),
+        mentionContactRefs: z.array(z.string()).optional(),
+        path: z.string().optional(),
+        fileName: z.string().optional(),
       })
       .strict(),
-    state: z.enum(["pending", "confirmed", "unknown", "failed"]),
+    // executing 是 Channel Host 内部的中间态（已认领、GUI 发送中），
+    // 对 Core 语义等价于 pending（仍在途）；缺失会导致 GET 对账时
+    // Zod 校验失败并中断整个 outbound cycle。
+    state: z.enum(["pending", "executing", "confirmed", "unknown", "failed"]),
     error: z.string().nullable(),
     channelMessageId: z.string().nullable(),
     createdAt: z.string().min(1),
@@ -179,6 +200,10 @@ export class HttpChannelProvider
         events: payload.events.map(toChannelEvent),
         nextCursor: payload.nextCursor,
         hasMore: payload.hasMore,
+        ...(payload.maxCursor !== undefined
+          ? { maxCursor: payload.maxCursor }
+          : {}),
+        ...(payload.epoch !== undefined ? { epoch: payload.epoch } : {}),
       };
     } catch (error) {
       throw new ChannelProviderError(
@@ -220,9 +245,6 @@ export class HttpChannelProvider
   public async create(
     input: CreateChannelSendOperationInput,
   ): Promise<ChannelSendOperation> {
-    if (input.payload.kind !== "text") {
-      throw new Error("channel_send_payload_unsupported:text_only");
-    }
     const response = await this.#request(
       `${this.#baseUrl}/api/v1/channel/send`,
       {
@@ -231,7 +253,10 @@ export class HttpChannelProvider
           authorization: `Bearer ${this.#token}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify(input),
+        body: JSON.stringify({
+          ...input,
+          ...(input.account ? { account: input.account } : {}),
+        }),
       },
     );
     return parseSendOperation(response);
@@ -395,6 +420,7 @@ function toChannelContact(
 ): ChannelContact {
   return {
     contactRef: contact.contactRef,
+    account: contact.account ?? "default",
     displayName: contact.displayName,
     nickname: contact.nickname,
     remark: contact.remark,
@@ -409,6 +435,7 @@ function toChannelEvent(event: z.infer<typeof hostEventSchema>): ChannelEvent {
     eventId: event.eventId,
     cursor: event.cursor,
     conversationRef: event.conversationRef,
+    account: event.account ?? "default",
     channelMessageId: event.channelMessageId ?? null,
     senderRef: event.senderRef ?? null,
     kind: event.kind,
@@ -416,6 +443,8 @@ function toChannelEvent(event: z.infer<typeof hostEventSchema>): ChannelEvent {
     mediaRef: event.mediaRef ?? null,
     fileName: event.fileName ?? null,
     mimeType: event.mimeType ?? null,
+    mentioned: event.mentioned ?? null,
+    replyToChannelMessageId: event.replyToChannelMessageId ?? null,
     occurredAt: event.occurredAt ?? null,
     observedAt: event.observedAt,
     isSelf: event.isSelf,
@@ -425,10 +454,45 @@ function toChannelEvent(event: z.infer<typeof hostEventSchema>): ChannelEvent {
 function parseSendOperation(value: unknown): ChannelSendOperation {
   try {
     const operation = hostSendOperationSchema.parse(value);
+    const payload: ChannelSendPayload = (() => {
+      switch (operation.payload.kind) {
+        case "reply":
+          return {
+            kind: "reply",
+            text: operation.payload.text ?? "",
+            replyToChannelMessageId:
+              operation.payload.replyToChannelMessageId ?? "",
+          };
+        case "mention":
+          return {
+            kind: "mention",
+            text: operation.payload.text ?? "",
+            mentionContactRefs: operation.payload.mentionContactRefs ?? [],
+          };
+        case "poke":
+          return { kind: "poke" };
+        case "image":
+        case "voice":
+          return {
+            kind: operation.payload.kind,
+            path: operation.payload.path ?? "",
+          };
+        case "file":
+          return {
+            kind: "file",
+            path: operation.payload.path ?? "",
+            ...(operation.payload.fileName
+              ? { fileName: operation.payload.fileName }
+              : {}),
+          };
+        default:
+          return { kind: "text", text: operation.payload.text ?? "" };
+      }
+    })();
     return {
       operationId: operation.operationId,
       conversationRef: operation.conversationRef,
-      payload: operation.payload,
+      payload,
       state: operation.state,
       ...(operation.error ? { error: operation.error } : {}),
       ...(operation.channelMessageId

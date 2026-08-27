@@ -17,7 +17,7 @@ export type ChannelEventPollerOptions<Database> = {
   source: ChannelEventSource;
   db: Database;
   intervalMs?: number;
-  logger?: Pick<Logger, "error" | "info">;
+  logger?: Pick<Logger, "error" | "info" | "warn">;
   dependencies: ChannelEventPollerDependencies<Database>;
 };
 
@@ -29,6 +29,22 @@ export async function pollChannelEventsOnce<Database>(
     afterCursor: cursor,
     limit: 100,
   });
+  // Self-heal: a Host ledger that was wiped/rebuilt restarts its numbering
+  // below our checkpoint; pulling "after N" would then stall forever. When
+  // the Host reports a maxCursor below the local cursor, replay from 0 —
+  // ingestion is idempotent by eventId, so replaying is safe.
+  if (page.maxCursor !== undefined && Number(page.maxCursor) < Number(cursor)) {
+    options.logger?.warn(
+      {
+        localCursor: cursor,
+        hostMaxCursor: page.maxCursor,
+        ...(page.epoch !== undefined ? { hostEpoch: page.epoch } : {}),
+      },
+      "Channel Host cursor rewound below the local checkpoint; replaying from 0",
+    );
+    cursor = "0";
+    page = await options.source.pullEvents({ afterCursor: "0", limit: 100 });
+  }
   await options.dependencies.ingestEvents(
     options.db,
     [...page.events],
