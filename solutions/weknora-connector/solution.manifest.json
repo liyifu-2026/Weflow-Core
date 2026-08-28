@@ -1,0 +1,59 @@
+{
+  "apiVersion": "weflow.io/v1",
+  "kind": "Solution",
+  "metadata": {
+    "id": "weflow.weknora-connector",
+    "name": "WeKnora Connector",
+    "version": "1.0.1",
+    "publisher": "weflow"
+  },
+  "compatibility": {
+    "platform": ">=1.0.0 <2.0.0",
+    "pluginSdk": "^1.0.0"
+  },
+  "dependencies": {
+    "capabilities": [
+      "knowledge.retrieval"
+    ],
+    "solutions": []
+  },
+  "artifacts": [],
+  "permissions": [],
+  "configuration": {
+    "defaults": {
+      "weknora_base_url": "http://127.0.0.1:8080/api/v1",
+      "weknora_timeout_ms": "15000",
+      "weknora_knowledge_base_ids": ""
+    }
+  },
+  "secretSlots": [
+    {
+      "name": "weknora_api_key",
+      "kind": "env",
+      "required": false
+    }
+  ],
+  "resources": [],
+  "executionProfiles": [],
+  "applications": [],
+  "healthChecks": [
+    {
+      "id": "weknora-health",
+      "name": "WeKnora 知识库服务",
+      "type": "http",
+      "target": "http://127.0.0.1:8080/health",
+      "port": 8080,
+      "timeoutSeconds": 5
+    }
+  ],
+  "consoleExtensions": [
+    {
+      "id": "weknora-connector-settings",
+      "title": "WeKnora 对接配置",
+      "path": "/weknora-connector/settings",
+      "entry": "apps/settings/settings.js",
+      "group": "业务",
+      "icon": "knowledge"
+    }
+  ]
+}

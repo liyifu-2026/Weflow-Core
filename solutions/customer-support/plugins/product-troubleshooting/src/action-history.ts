@@ -8,7 +8,7 @@
  * 本模块只做状态建模,不写库、不调模型。
  */
 
-import type { ActionRecord } from "@weflow/contracts";
+import type { ActionRecord } from "@weflow-leaif/contracts";
 import { DEFAULT_SUBJECT } from "./case-facts.js";
 
 /** 动作历史保留:7 天内、最多 20 条 */

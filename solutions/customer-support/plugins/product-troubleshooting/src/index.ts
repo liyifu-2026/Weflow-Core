@@ -1,4 +1,4 @@
-import type { SkillRegistration } from "@weflow/plugin-sdk";
+import type { SkillRegistration } from "@weflow-leaif/plugin-sdk";
 import { ProductTroubleshootingSkill } from "./product-troubleshooting-skill.js";
 
 /**

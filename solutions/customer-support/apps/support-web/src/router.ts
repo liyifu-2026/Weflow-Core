@@ -8,7 +8,6 @@ import { useWeflowAuthStore } from "./auth-store";
 import ConversationsV2 from "./views/ConversationsV2.vue";
 import KnowledgeV2 from "./views/KnowledgeV2.vue";
 import AdminView from "./views/AdminView.vue";
-import PoliciesV2 from "./views/PoliciesV2.vue";
 import AiEmployeesView from "./views/AiEmployeesView.vue";
 import WhitelistView from "./views/WhitelistView.vue";
 import PipelineView from "./views/PipelineView.vue";
@@ -52,12 +51,6 @@ export function createSupportRouter(pinia?: Pinia): Router {
         path: "/support/admin",
         name: "supportAdmin",
         component: AdminView,
-        meta: { admin: true },
-      },
-      {
-        path: "/support/admin/policies",
-        name: "supportPolicies",
-        component: PoliciesV2,
         meta: { admin: true },
       },
       {

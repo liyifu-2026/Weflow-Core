@@ -1,56 +1,38 @@
 {
   "apiVersion": "weflow.io/v1",
-  "kind": "SolutionLock",
   "solutionId": "weflow.customer-support",
-  "solutionVersion": "1.0.0",
-  "manifestDigest": "sha256:453f8ee023677f9d014a79a1a2289c9cf2a84481bc5fa41e6fa0d84cc8601b07",
-  "dependencies": [],
-  "artifacts": [
+  "solutionVersion": "1.3.0",
+  "manifestDigest": "sha256:985026267997c764bae0472f42dc1ff7e5cf02bd930ee5a6db451f7b843c0199",
+  "resolvedArtifacts": [
     {
       "id": "customer-support-strategy",
       "ref": "artifacts/customer-support-strategy.tgz",
-      "registry": "file",
-      "digest": "sha256:fe24487df1ac326d5238c3841dba5fa3fd1a1d38fe112e48b6da917dc853bb7b",
-      "size": 7246,
-      "platform": "linux",
-      "architecture": "x64"
+      "digest": "sha256:b4bf74972d2d9d79bfbe9f26e3b41f9d2abe0d4720ec4daaaada246c55089e2c",
+      "size": 12695
     },
     {
       "id": "product-troubleshooting",
       "ref": "artifacts/product-troubleshooting.tgz",
-      "registry": "file",
-      "digest": "sha256:8e6f69688b43b267927a9bde215a186012a3625416add56423aec3d32a2cfd32",
-      "size": 23016,
-      "platform": "linux",
-      "architecture": "x64"
+      "digest": "sha256:754a2e8c295e4135549d3e1a02fe67154839ac7da734eab58b0fbd3dc3eb764c",
+      "size": 23000
     },
     {
       "id": "support-web",
       "ref": "artifacts/support-web.tgz",
-      "registry": "file",
-      "digest": "sha256:ae901eb5cee5e200ae40e5d6d3841dd1d1470944d11028e5adac87ace1ca345f",
-      "size": 54305,
-      "platform": "linux",
-      "architecture": "x64"
-    },
-    {
-      "id": "support-schema",
-      "ref": "artifacts/support-schema.sql",
-      "registry": "file",
-      "digest": "sha256:dee984ba08817582027f97dacb1199c4d99009abc6fbb1d7dca11cca0bb5983c",
-      "size": 29
+      "digest": "sha256:87b4dda17fca1e0969b2a8392e64f434394db48c8e56718bd633605c38907532",
+      "size": 495939
     },
     {
       "id": "mobile",
       "ref": "artifacts/mobile.tgz",
-      "registry": "file",
-      "digest": "sha256:180915c25febe89ab3dc8312bcf3fa39e1299b86e860650afb86246c7af135ee",
-      "size": 18,
-      "platform": "android",
-      "architecture": "universal"
+      "digest": "sha256:1716819f10a8e7abdabdc73119a40899c65fee71165529eec925f7b87b204ac6",
+      "size": 4268710
+    },
+    {
+      "id": "operations-web",
+      "ref": "artifacts/operations-web.tgz",
+      "digest": "sha256:16afed8d541ff56d9f9a5cfecb5ab6145f67053c3141c74c3c62ac1010ff6df6",
+      "size": 282686
     }
-  ],
-  "targetPlatform": "linux",
-  "targetArchitecture": "x64",
-  "sbom": "sbom.json"
+  ]
 }

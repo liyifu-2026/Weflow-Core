@@ -4,7 +4,7 @@
   "metadata": {
     "id": "weflow.customer-support",
     "name": "Customer Support Solution",
-    "version": "1.2.5",
+    "version": "1.3.0",
     "publisher": "weflow"
   },
   "compatibility": {
@@ -131,33 +131,6 @@
       "group": "客服业务"
     },
     {
-      "id": "support-ai-employees",
-      "title": "AI 员工",
-      "path": "/support/ai-employees",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "agent",
-      "group": "客服业务",
-      "hidden": true
-    },
-    {
-      "id": "support-ai-employees-prompt",
-      "title": "AI 员工提示词",
-      "path": "/support/ai-employees/:definitionId/prompt",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "agent",
-      "group": "客服业务",
-      "hidden": true
-    },
-    {
-      "id": "support-policies",
-      "title": "回复策略",
-      "path": "/support/policies",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "policy",
-      "group": "客服业务",
-      "hidden": true
-    },
-    {
       "id": "support-admin",
       "title": "管理",
       "path": "/support/admin",
@@ -178,7 +151,7 @@
     },
     {
       "id": "support-pipeline",
-      "title": "AI 链路配置",
+      "title": "接待编排",
       "path": "/support/pipeline",
       "entry": "apps/support-web/dist/support-console.js",
       "icon": "engine",
@@ -190,7 +163,7 @@
       "title": "运行",
       "path": "/support/operations",
       "entry": "apps/operations-web/dist/operations-console.js",
-      "icon": "engine",
+      "icon": "runtime",
       "group": "客服业务",
       "adminOnly": true
     }

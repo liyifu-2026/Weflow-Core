@@ -15,7 +15,7 @@ import type {
   CaseFact,
   CaseFactGranularity,
   CaseFacts,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 import {
   DEFAULT_SUBJECT,
   factKey,

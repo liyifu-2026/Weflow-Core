@@ -1,8 +1,8 @@
 {
-  "name": "@weflow/customer-support-strategy",
+  "name": "@weflow-leaif/customer-support-strategy",
   "version": "1.0.0",
   "description": "Customer Support Execution Strategy plugin for Weflow.",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,10 +12,11 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.build.json --noEmit"
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test .test-dist/reception-plan.test.js"
   },
   "dependencies": {
-    "@weflow/contracts": "link:../../../../../weflow/packages/contracts"
+    "@weflow-leaif/contracts": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "24.1.0",

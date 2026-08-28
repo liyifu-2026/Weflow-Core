@@ -6,6 +6,7 @@
  * domain service without hardcoding them into Core.
  */
 import { createHandoffService } from "./handoff-service.js";
+import { createAiEmployeesService } from "./ai-employees-service.js";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,7 @@ function writeJsonFile(path, value) {
 export async function registerRoutes(server, ctx) {
   const { db, schema, count, eq, gte, inArray, desc } = ctx;
   const handoffService = createHandoffService(ctx);
+  const aiEmployeesService = createAiEmployeesService(ctx);
 
   server.get("/customer-support/status", async () => {
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -261,5 +263,195 @@ export async function registerRoutes(server, ctx) {
     return next;
   });
 
+  // -------- AI Employees (definitions, versions, workspace default, bindings) -------
 
+  function sendServiceResult(reply, result, okStatus) {
+    if (!result || result.status === "ok") {
+      reply.code(okStatus ?? 200);
+      return reply.send(result ?? { status: "ok" });
+    }
+    const codes = {
+      invalid_request: 400,
+      ai_employee_key_exists: 409,
+      ai_employee_not_found: 404,
+      ai_employee_not_editable: 409,
+      ai_employee_not_archivable: 409,
+      ai_employee_not_versionable: 409,
+      ai_employee_version_not_editable: 409,
+      ai_employee_version_not_publishable: 409,
+      ai_employee_version_not_rollbackable: 409,
+      ai_employee_default_invalid: 400,
+      contact_agent_binding_invalid: 400,
+    };
+    return reply
+      .code(codes[result.status] ?? 400)
+      .send({ error: result.status, reason: result.reason });
+  }
+
+  server.get("/api/v1/agent/ai-employees", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    return aiEmployeesService.listDefinitions();
+  });
+
+  server.post("/api/v1/agent/ai-employees", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    if (user.user.role !== "admin") {
+      return reply.code(403).send({ error: "admin_required" });
+    }
+    const body = request.body ?? {};
+    const result = await aiEmployeesService.createDefinition({
+      key: body.key,
+      name: body.name,
+      description: body.description ?? null,
+      prompt: body.prompt,
+    });
+    if (result.status !== "ok") return sendServiceResult(reply, result);
+    reply.code(201);
+    return reply.send(result);
+  });
+
+  server.patch("/api/v1/agent/ai-employees/:definitionId", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    if (user.user.role !== "admin") {
+      return reply.code(403).send({ error: "admin_required" });
+    }
+    const definitionId = String(request.params?.definitionId ?? "");
+    const result = await aiEmployeesService.updateDefinition(
+      definitionId,
+      request.body ?? {},
+    );
+    if (result.status !== "ok") return sendServiceResult(reply, result);
+    return reply.send(result);
+  });
+
+  server.post(
+    "/api/v1/agent/ai-employees/:definitionId/archive",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      if (user.user.role !== "admin") {
+        return reply.code(403).send({ error: "admin_required" });
+      }
+      const definitionId = String(request.params?.definitionId ?? "");
+      const result = await aiEmployeesService.archiveDefinition(definitionId);
+      if (result.status !== "ok") return sendServiceResult(reply, result);
+      return reply.send(result);
+    },
+  );
+
+  server.post(
+    "/api/v1/agent/ai-employees/:definitionId/versions",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      if (user.user.role !== "admin") {
+        return reply.code(403).send({ error: "admin_required" });
+      }
+      const definitionId = String(request.params?.definitionId ?? "");
+      const body = request.body ?? {};
+      const result = await aiEmployeesService.createVersion(definitionId, body.prompt);
+      if (result.status !== "ok") return sendServiceResult(reply, result);
+      reply.code(201);
+      return reply.send(result);
+    },
+  );
+
+  server.patch(
+    "/api/v1/agent/ai-employees/versions/:versionId",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      if (user.user.role !== "admin") {
+        return reply.code(403).send({ error: "admin_required" });
+      }
+      const versionId = String(request.params?.versionId ?? "");
+      const body = request.body ?? {};
+      const result = await aiEmployeesService.updateVersion(versionId, body.prompt);
+      if (result.status !== "ok") return sendServiceResult(reply, result);
+      return reply.send(result);
+    },
+  );
+
+  server.post(
+    "/api/v1/agent/ai-employees/versions/:versionId/publish",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      if (user.user.role !== "admin") {
+        return reply.code(403).send({ error: "admin_required" });
+      }
+      const versionId = String(request.params?.versionId ?? "");
+      const result = await aiEmployeesService.publishVersion(versionId);
+      if (result.status !== "ok") return sendServiceResult(reply, result);
+      return reply.send(result);
+    },
+  );
+
+  server.post(
+    "/api/v1/agent/ai-employees/versions/:versionId/rollback",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      if (user.user.role !== "admin") {
+        return reply.code(403).send({ error: "admin_required" });
+      }
+      const versionId = String(request.params?.versionId ?? "");
+      const result = await aiEmployeesService.rollbackVersion(versionId);
+      if (result.status !== "ok") return sendServiceResult(reply, result);
+      return reply.send(result);
+    },
+  );
+
+  server.get("/api/v1/agent/workspace-default", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    return aiEmployeesService.getWorkspaceDefault();
+  });
+
+  server.put("/api/v1/agent/workspace-default", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    if (user.user.role !== "admin") {
+      return reply.code(403).send({ error: "admin_required" });
+    }
+    const body = request.body ?? {};
+    await aiEmployeesService.setWorkspaceDefault(body.definitionId ?? null);
+    return aiEmployeesService.getWorkspaceDefault();
+  });
+
+  server.get("/api/v1/agent/contact-bindings", async (request, reply) => {
+    const user = await requireUser(request, reply);
+    if (!user) return;
+    return aiEmployeesService.listContactBindings();
+  });
+
+  server.put(
+    "/api/v1/agent/contact-bindings/:contactId",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      const contactId = String(request.params?.contactId ?? "");
+      const body = request.body ?? {};
+      const result = await aiEmployeesService.setContactBinding(
+        contactId,
+        body.definitionId,
+      );
+      if (result.status !== "ok") return sendServiceResult(reply, result);
+      return reply.send(result);
+    },
+  );
+
+  server.delete(
+    "/api/v1/agent/contact-bindings/:contactId",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      const contactId = String(request.params?.contactId ?? "");
+      await aiEmployeesService.removeContactBinding(contactId);
+      return { ok: true };
+    },
+  );
 }

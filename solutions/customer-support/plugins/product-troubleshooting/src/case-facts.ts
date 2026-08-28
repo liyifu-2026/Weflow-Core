@@ -16,7 +16,7 @@ import type {
   CaseFacts,
   CaseFactSource,
   CaseFactStatus,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 
 export const DEFAULT_SUBJECT = "default";
 

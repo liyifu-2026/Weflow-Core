@@ -1,0 +1,364 @@
+/**
+ * 运行控制台共享样式 — 设计令牌 + 基础组件类。
+ *
+ * 在 ExtensionHost 嵌入模式下，Console 的 shell 已提供 --wf-* 变量，
+ * 本文件只需补充运行控制台自身的组件样式。
+ * 独立开发模式下，本文件提供完整的设计令牌。
+ */
+
+/* ── 设计令牌（独立开发模式的 fallback） ── */
+:root {
+  color-scheme: light;
+  --wf-bg: #f7f8f7;
+  --wf-surface: #ffffff;
+  --wf-surface-elevated: #ffffff;
+  --wf-surface-soft: #f3f5f3;
+  --wf-surface-inset: #eef1ef;
+  --wf-surface-hover: #f0f3f1;
+  --wf-text: #181b19;
+  --wf-text-secondary: #6b716d;
+  --wf-text-muted: #969c98;
+  --wf-border: rgba(24, 27, 25, 0.08);
+  --wf-border-strong: rgba(24, 27, 25, 0.15);
+  --wf-primary: #16775b;
+  --wf-primary-hover: #10664d;
+  --wf-primary-soft: rgba(22, 119, 91, 0.075);
+  --wf-on-primary: #ffffff;
+  --wf-danger: #b5443e;
+  --wf-danger-soft: rgba(181, 68, 62, 0.075);
+  --wf-focus: rgba(22, 119, 91, 0.2);
+  --wf-overlay: rgba(16, 20, 18, 0.45);
+  --wf-shadow-overlay: 0 18px 48px rgba(14, 21, 18, 0.16);
+  --wf-space-1: 4px;
+  --wf-space-2: 8px;
+  --wf-space-3: 12px;
+  --wf-space-4: 16px;
+  --wf-space-5: 24px;
+  --wf-radius-small: 5px;
+  --wf-radius-control: 8px;
+  --wf-radius-popover: 12px;
+  --wf-radius-dialog: 14px;
+  --wf-motion-fast: 160ms;
+  --wf-ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --wf-type-title: 22px;
+  --wf-type-section: 15px;
+  --wf-type-body: 14px;
+  --wf-type-secondary: 13px;
+  --wf-type-meta: 12px;
+  color: var(--wf-text);
+  background: var(--wf-bg);
+  font-family: "PingFang SC", "HarmonyOS Sans SC", Geist, system-ui, sans-serif;
+  font-size: 14px;
+  font-synthesis: none;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --wf-bg: #111412;
+  --wf-surface: #181c19;
+  --wf-surface-elevated: #1e2320;
+  --wf-surface-soft: #1c211e;
+  --wf-surface-inset: #141815;
+  --wf-surface-hover: #222824;
+  --wf-text: #edf1ee;
+  --wf-text-secondary: #aab2ad;
+  --wf-text-muted: #7f8882;
+  --wf-border: rgba(237, 241, 238, 0.08);
+  --wf-border-strong: rgba(237, 241, 238, 0.16);
+  --wf-primary: #48a889;
+  --wf-primary-hover: #58b998;
+  --wf-primary-soft: rgba(72, 168, 137, 0.11);
+  --wf-on-primary: #ffffff;
+  --wf-danger: #e17b74;
+  --wf-danger-soft: rgba(225, 123, 116, 0.1);
+  --wf-focus: rgba(72, 168, 137, 0.24);
+  --wf-overlay: rgba(0, 0, 0, 0.64);
+  --wf-shadow-overlay: 0 20px 52px rgba(0, 0, 0, 0.44);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { min-height: 100%; margin: 0; }
+body { background: var(--wf-bg); color: var(--wf-text); }
+button, input, textarea, select { font: inherit; }
+button { color: inherit; }
+::selection { color: var(--wf-text); background: var(--wf-primary-soft); }
+
+/* ── 页面 ── */
+.wf-page {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+/* ── Page Header ── */
+.wf-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.wf-page-head h1 {
+  margin: 0;
+  font-size: var(--wf-type-title);
+  font-weight: 700;
+}
+.wf-page-head .wf-page-subtitle {
+  margin: 4px 0 0;
+  color: var(--wf-text-secondary);
+  font-size: var(--wf-type-secondary);
+}
+.wf-page-head .wf-eyebrow {
+  margin: 0 0 4px;
+  color: var(--wf-text-muted);
+  font-size: var(--wf-type-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Panel ── */
+.wf-panel {
+  background: var(--wf-surface);
+  border: 1px solid var(--wf-border);
+  border-radius: var(--wf-radius-popover);
+  overflow: hidden;
+}
+.wf-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--wf-border);
+}
+.wf-panel-head h2 {
+  margin: 0;
+  font-size: var(--wf-type-section);
+  font-weight: 600;
+}
+.wf-panel-caption {
+  color: var(--wf-text-muted);
+  font-size: var(--wf-type-meta);
+}
+.wf-panel-body {
+  padding: 16px 20px;
+}
+
+/* ── Status badge ── */
+.wf-status {
+  font-size: var(--wf-type-meta);
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.wf-status.good {
+  color: var(--wf-primary);
+  background: var(--wf-primary-soft);
+}
+.wf-status.bad {
+  color: var(--wf-danger);
+  background: var(--wf-danger-soft);
+}
+
+/* ── Config list ── */
+.wf-config-list {
+  display: flex;
+  flex-direction: column;
+}
+.wf-config-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--wf-border);
+}
+.wf-config-row:last-child { border-bottom: 0; }
+.wf-config-row strong {
+  font-size: var(--wf-type-body);
+}
+.wf-config-row .wf-muted {
+  display: block;
+  margin-top: 2px;
+  color: var(--wf-text-muted);
+  font-size: var(--wf-type-meta);
+}
+.wf-mono {
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-size: var(--wf-type-secondary);
+}
+
+/* ── Button ── */
+.wf-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border: 1px solid var(--wf-border-strong);
+  border-radius: var(--wf-radius-control);
+  background: var(--wf-surface);
+  color: var(--wf-text);
+  font-size: var(--wf-type-secondary);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--wf-motion-fast) var(--wf-ease-out);
+}
+.wf-button:hover {
+  background: var(--wf-surface-hover);
+}
+.wf-button.primary {
+  background: var(--wf-primary);
+  color: var(--wf-on-primary);
+  border-color: var(--wf-primary);
+}
+.wf-button.primary:hover {
+  background: var(--wf-primary-hover);
+}
+.wf-button.danger {
+  background: var(--wf-danger);
+  color: var(--wf-on-primary);
+  border-color: var(--wf-danger);
+}
+.wf-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ── Select ── */
+.wf-select {
+  padding: 6px 10px;
+  border: 1px solid var(--wf-border-strong);
+  border-radius: var(--wf-radius-control);
+  background: var(--wf-surface);
+  color: var(--wf-text);
+  font-size: var(--wf-type-secondary);
+}
+.wf-model-select {
+  min-width: 180px;
+}
+
+/* ── Modal ── */
+.wf-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--wf-overlay);
+}
+.wf-modal {
+  background: var(--wf-surface-elevated);
+  border: 1px solid var(--wf-border-strong);
+  border-radius: var(--wf-radius-dialog);
+  box-shadow: var(--wf-shadow-overlay);
+  width: 90%;
+  max-width: 420px;
+}
+.wf-modal-narrow { max-width: 380px; }
+.wf-modal-body { padding: 24px 24px 16px; }
+.wf-modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 24px 20px;
+  border-top: 1px solid var(--wf-border);
+}
+
+/* ── Notices ── */
+.wf-error {
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  border: 1px solid var(--wf-danger);
+  border-radius: var(--wf-radius-control);
+  background: var(--wf-danger-soft);
+  color: var(--wf-danger);
+  font-size: var(--wf-type-secondary);
+}
+.wf-notice {
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  border: 1px solid var(--wf-primary);
+  border-radius: var(--wf-radius-control);
+  background: var(--wf-primary-soft);
+  color: var(--wf-primary);
+  font-size: var(--wf-type-secondary);
+}
+
+/* ── Skeleton ── */
+.wf-skeleton { padding: 20px 0; }
+.wf-skeleton-title {
+  width: 120px;
+  height: 20px;
+  margin-bottom: 12px;
+  border-radius: 4px;
+  background: var(--wf-surface-soft);
+  animation: wf-shimmer 1.2s infinite;
+}
+.wf-skeleton-line {
+  width: 100%;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--wf-surface-soft);
+  animation: wf-shimmer 1.2s infinite;
+}
+@keyframes wf-shimmer {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ── Empty state ── */
+.wf-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--wf-text-muted);
+  font-size: var(--wf-type-secondary);
+}
+.wf-empty-compact { padding: 12px 0; }
+
+/* ── Audit stream ── */
+.wf-audit-stream {
+  display: flex;
+  flex-direction: column;
+}
+.wf-audit-event {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--wf-border);
+  font-size: var(--wf-type-meta);
+}
+.wf-audit-event:last-child { border-bottom: 0; }
+.wf-audit-time {
+  flex-shrink: 0;
+  min-width: 140px;
+  color: var(--wf-text-muted);
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+}
+.wf-muted { color: var(--wf-text-muted); }
+
+/* ── Kill Switch section ── */
+.wf-kill-switch {
+  background: var(--wf-surface);
+  border: 1px solid var(--wf-border-strong);
+  border-radius: var(--wf-radius-popover);
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.wf-kill-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.wf-kill-impact {
+  margin: 0 0 14px;
+  color: var(--wf-text-secondary);
+  font-size: var(--wf-type-secondary);
+}
+.wf-run-label {
+  color: var(--wf-text-secondary);
+  font-size: var(--wf-type-secondary);
+  margin-right: 8px;
+}
+.wf-run-good { color: var(--wf-primary); }
+.wf-run-bad { color: var(--wf-danger); }

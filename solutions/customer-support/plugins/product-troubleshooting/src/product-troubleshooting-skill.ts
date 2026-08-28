@@ -11,7 +11,7 @@ import type {
   AskedFieldRecord,
   CaseFacts,
   KnowledgeEvidence,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 import {
   classifyKnowledgeEvidence,
   type KnowledgeClassification,

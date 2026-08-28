@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- 品牌蓝底板渐变：左上亮、右下深，增加体积感 -->
+    <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <!-- 气泡内部渐变：白色到淡蓝，柔和亲和 -->
+    <linearGradient id="bubble" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EFF6FF"/>
+    </linearGradient>
+    <!-- AI 星芒：蓝→青渐变，呼应底板 -->
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#0EA5E9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 品牌蓝圆角底板（深色系统下系统自动裁切圆角，蓝底即应用底色） -->
+  <rect width="512" height="512" rx="112" fill="url(#base)"/>
+
+  <!-- 气泡：白色，大圆角，带尾巴；居中放大占比更友好 -->
+  <path d="M 186 152
+           H 326
+           A 44 44 0 0 1 370 196
+           V 268
+           A 44 44 0 0 1 326 312
+           H 226
+           L 168 356
+           C 163 359.5 158.5 356 160 350.5
+           L 170 312
+           A 44 44 0 0 1 142 268
+           V 196
+           A 44 44 0 0 1 186 152 Z"
+        fill="url(#bubble)"/>
+
+  <!-- AI 星芒（四角星）：蓝青渐变，圆角曲线更柔和 -->
+  <path d="M 256 178
+           C 258 226 262 232 310 240
+           C 262 248 258 254 256 302
+           C 254 254 250 248 202 240
+           C 250 232 254 226 256 178 Z"
+        fill="url(#spark)"/>
+
+  <!-- 两个小星点：让星芒更像「AI 闪念」，增加活泼感 -->
+  <circle cx="330" cy="186" r="9" fill="#0EA5E9" opacity="0.9"/>
+  <circle cx="344" cy="208" r="5" fill="#2563EB" opacity="0.55"/>
+</svg>

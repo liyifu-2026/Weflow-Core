@@ -1,0 +1,34 @@
+{
+  "name": "@weflow-leaif/weknora-connector",
+  "version": "1.0.1",
+  "description": "WeKnora Connector settings UI for the Weflow Console. Loads through the platform ExtensionHost to configure WeKnora knowledge-base integration (base URL, API key, knowledge-base whitelist, timeout).",
+  "private": false,
+  "type": "module",
+  "main": "./settings.js",
+  "module": "./settings.js",
+  "exports": {
+    ".": {
+      "import": "./settings.js",
+      "default": "./settings.js"
+    }
+  },
+  "files": [
+    "settings.js",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "node verify-export.cjs"
+  },
+  "keywords": [
+    "weflow",
+    "weknora",
+    "knowledge-base",
+    "extension",
+    "console"
+  ],
+  "license": "UNLICENSED",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

@@ -1,8 +1,8 @@
 {
-  "name": "@weflow/product-troubleshooting",
+  "name": "@weflow-leaif/product-troubleshooting",
   "version": "1.0.0",
   "description": "Product Troubleshooting Skill plugin for Weflow Customer Support.",
-  "private": true,
+  "private": false,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,8 +14,8 @@
     "typecheck": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
-    "@weflow/contracts": "link:../../../../../weflow/packages/contracts",
-    "@weflow/plugin-sdk": "link:../../../../../weflow/packages/plugin-sdk"
+    "@weflow-leaif/contracts": "^1.0.0",
+    "@weflow-leaif/plugin-sdk": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "24.1.0",

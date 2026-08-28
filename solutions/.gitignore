@@ -7,11 +7,20 @@
 /*.tgz
 .tmp/
 .dev-secrets/
+.dist/
+
+# npm auth (local-only, contains tokens)
+**/.npmrc
+
+# Build artifacts / debug captures
+*.apk
+*.png
 
 # Node / TypeScript
 node_modules/
 dist/
 dist-test/
+.test-dist/
 .pnpm-store/
 .npm-cache/
 coverage/

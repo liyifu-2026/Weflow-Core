@@ -8,9 +8,9 @@ importers:
 
   .:
     dependencies:
-      '@weflow/contracts':
-        specifier: link:../../../../../weflow/packages/contracts
-        version: link:../../../../../weflow/packages/contracts
+      '@weflow-leaif/contracts':
+        specifier: ^1.0.0
+        version: 1.0.0
     devDependencies:
       '@types/node':
         specifier: 24.1.0
@@ -24,6 +24,14 @@ packages:
   '@types/node@24.1.0':
     resolution: {integrity: sha512-ut5FthK5moxFKH2T1CUOC6ctR67rQRvvHdFLCD2Ql6KXmMuCrjsSsRI9UsLCm9M18BMwClv4pn327UvB7eeO1w==}
 
+  '@weflow-leaif/contracts@1.0.0':
+    resolution: {integrity: sha512-QMsuHaBXKq+iQ7CHvmnL6FNrSdbbOY2/UQOp0VgqLHOVL8Pushc0G+lvwzhjDMRzptpemvlRBqYs5IAB2wzN5g==}
+    engines: {node: '>=24 <25'}
+
+  '@weflow-leaif/solution-sdk@1.0.0':
+    resolution: {integrity: sha512-Icnqn6mua5kdFDMd5OvdXeDiuA8jndvl+MbHxBwLwwvcp1OKykfAT8sVjpiXgGbTlWTNEHRmL6wSRUFeJDfqnQ==}
+    engines: {node: '>=24 <25'}
+
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
@@ -32,12 +40,25 @@ packages:
   undici-types@7.8.0:
     resolution: {integrity: sha512-9UJ2xGDvQ43tYyVMpuHlsgApydB8ZKfVYTsLDhXkFL/6gfkp+U8xTGdh8pMJv1SpZna0zxG1DwsKZsreLbXBxw==}
 
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
 snapshots:
 
   '@types/node@24.1.0':
     dependencies:
       undici-types: 7.8.0
 
+  '@weflow-leaif/contracts@1.0.0':
+    dependencies:
+      '@weflow-leaif/solution-sdk': 1.0.0
+
+  '@weflow-leaif/solution-sdk@1.0.0':
+    dependencies:
+      zod: 4.4.3
+
   typescript@5.9.3: {}
 
   undici-types@7.8.0: {}
+
+  zod@4.4.3: {}

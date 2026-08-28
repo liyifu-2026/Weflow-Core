@@ -1,7 +1,7 @@
 {
-  "name": "@weflow/support-web",
+  "name": "@weflow-leaif/support-web",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,9 @@
     "preview": "vite preview --port 4174"
   },
   "dependencies": {
-    "vue": "^3.5.13"
+    "pinia": "^4.0.3",
+    "vue": "^3.5.13",
+    "vue-router": "^5.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.6",
@@ -22,5 +24,9 @@
     "onlyBuiltDependencies": [
       "esbuild"
     ]
-  }
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "dist/support-console.js"
 }

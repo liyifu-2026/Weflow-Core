@@ -1,6 +1,13 @@
 <script setup lang="ts">
+/**
+ * Authenticated image message.
+ *
+ * mediaId → authenticated fetch → Blob → object URL → thumbnail.
+ * The object URL is revoked on unmount; the full-screen overlay is a single
+ * layer (never nested inside drawers). A 404/403 renders a friendly fallback
+ * instead of guessing from text.
+ */
 import { onMounted, onUnmounted, ref } from "vue";
-import SupportIcon from "./SupportIcon.vue";
 
 const props = defineProps<{ mediaId: string; alt?: string }>();
 
@@ -28,6 +35,7 @@ async function load() {
   }
 }
 
+/** 全屏打开时优先加载原图（高清），失败降级为已加载的缩略图 */
 async function openFullscreen() {
   fullscreen.value = true;
   if (fullscreenUrl.value) return;
@@ -54,25 +62,45 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <span class="media-message">
-    <span v-if="state === 'loading'" class="media-placeholder">正在加载图片…</span>
-    <span v-else-if="state === 'failed'" class="media-placeholder">图片暂时无法加载</span>
-    <button v-else class="media-thumb" type="button" :aria-label="alt || '查看图片'" @click="openFullscreen">
+  <span class="wf-media-message">
+    <span v-if="state === 'loading'" class="wf-media-placeholder">
+      正在加载图片…
+    </span>
+    <span v-else-if="state === 'failed'" class="wf-media-placeholder">
+      图片暂时无法加载
+    </span>
+    <button
+      v-else
+      class="wf-media-thumb"
+      type="button"
+      :aria-label="alt || '查看图片'"
+      @click="openFullscreen"
+    >
       <img :src="objectUrl" :alt="alt || '客户发送的图片'" />
     </button>
   </span>
-  <div v-if="fullscreen" class="media-fullscreen" role="dialog" aria-modal="true" @click="fullscreen = false">
-    <img :src="fullscreenUrl || objectUrl" :alt="alt || '客户发送的图片'" @click.stop />
-    <button class="media-close" aria-label="关闭" @click="fullscreen = false"><SupportIcon name="close" :size="18" /></button>
+
+  <button
+    v-if="fullscreen"
+    class="wf-drawer-backdrop"
+    aria-label="关闭图片"
+    @click="fullscreen = false"
+  ></button>
+  <div
+    v-if="fullscreen"
+    class="wf-media-fullscreen"
+    role="dialog"
+    aria-modal="true"
+    @click="fullscreen = false"
+  >
+    <img
+      :src="fullscreenUrl || objectUrl"
+      :alt="alt || '客户发送的图片'"
+      @click.stop
+    />
+    <button class="wf-icon-button wf-media-close" aria-label="关闭" @click="fullscreen = false">
+      ×
+    </button>
   </div>
 </template>
 
-<style scoped>
-.media-message { display: inline-block; }
-.media-placeholder { padding: 8px 12px; color: var(--text-muted); font-size: 12px; }
-.media-thumb { padding: 0; border: 0; background: transparent; cursor: pointer; }
-.media-thumb img { max-width: 280px; max-height: 280px; border-radius: 10px; display: block; }
-.media-fullscreen { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: rgba(0, 0, 0, 0.72); }
-.media-fullscreen img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
-.media-close { position: fixed; top: 16px; right: 16px; width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.2); color: #ffffff; cursor: pointer; }
-</style>

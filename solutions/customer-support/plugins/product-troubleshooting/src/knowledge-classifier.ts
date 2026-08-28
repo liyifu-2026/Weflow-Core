@@ -10,7 +10,7 @@
  * 知识不足(no_result)≠ 自动转人工:是否继续推进由 Planner 结合 Case State 决定。
  */
 
-import type { KnowledgeEvidence } from "@weflow/contracts";
+import type { KnowledgeEvidence } from "@weflow-leaif/contracts";
 
 export type KnowledgeMatchState =
   | "no_result"
