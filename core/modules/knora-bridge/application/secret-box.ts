@@ -30,7 +30,7 @@ export function makeSecretBox(encKey: string): SecretBox {
     },
     decrypt(enc: string): string {
       const data = Buffer.from(enc, "base64");
-      if (data.length < 12 + 16 + 1) {
+      if (data.length < 12 + 16) {
         throw new Error("knora secret box: ciphertext too short");
       }
       const iv = data.subarray(0, 12);

@@ -10,7 +10,7 @@ import {
   digestArtifactPath,
   verifyArtifactRef,
   type SolutionLockV1,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";
 
 let dir: string;
 

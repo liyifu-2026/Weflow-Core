@@ -15,8 +15,8 @@
   },
   "dependencies": {
     "@weflow/admin-sdk": "link:../admin-sdk",
-    "@weflow/contracts": "link:../contracts",
-    "@weflow/plugin-sdk": "link:../plugin-sdk"
+    "@weflow-leaif/contracts": "link:../contracts",
+    "@weflow-leaif/plugin-sdk": "link:../plugin-sdk"
   },
   "devDependencies": {
     "typescript": "5.9.3"

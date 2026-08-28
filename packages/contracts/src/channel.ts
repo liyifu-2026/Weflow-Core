@@ -34,6 +34,12 @@ export type ChannelEvent = {
   readonly mentioned?: boolean | null;
   /** 入站引用回复的原消息（ADR-0006）；缺省/null = 无引用 */
   readonly replyToChannelMessageId?: string | null;
+  /**
+   * 历史回溯事件（空库 Backfill 合成）：Core 摄取时只入库展示，
+   * 绝不触发 Agent Turn / 记忆捕获 / 通知 / 媒体转写排队等任何副作用。
+   * 缺省/false = 实时捕获事件（行为不变）。
+   */
+  readonly historical?: boolean | null;
 };
 
 export type ChannelEventsPage = {
@@ -78,6 +84,8 @@ export interface ChannelMediaSource {
   resolveFile(mediaRef: string): Promise<ChannelMediaResult>;
   /** 语音（kind=voice）走同一 media 端点；Host 只提供其声明支持的音频格式。 */
   resolveAudio(mediaRef: string): Promise<ChannelMediaResult>;
+  /** 视频（kind=video）走同一 media 端点；Host 返回 video/mp4。 */
+  resolveVideo?(mediaRef: string): Promise<ChannelMediaResult>;
 }
 
 export type ChannelSendPayload =
@@ -91,7 +99,7 @@ export type ChannelSendPayload =
       readonly fileName?: string;
     }
   | {
-      readonly kind: "image" | "voice";
+      readonly kind: "image";
       readonly path: string;
     }
   | {
@@ -106,6 +114,15 @@ export type ChannelSendPayload =
     }
   | {
       readonly kind: "poke";
+    }
+  | {
+      /** 撤回最后一条己方消息（2 分钟窗口由微信判定） */
+      readonly kind: "recall";
+    }
+  | {
+      /** 转发语音条：已落盘 .silk 文件路径（仅转发，不含录音） */
+      readonly kind: "voice";
+      readonly path: string;
     };
 
 // executing 是 Channel Host 的中间态（已认领、GUI 发送中），
@@ -172,3 +189,60 @@ export interface ChannelContactSource {
     limit?: number;
   }): Promise<ChannelContactsPage>;
 }
+
+/**
+ * Channel 协议快照 —— 跨语言（Core TS / Host Python）对齐的单一权威。
+ * 由 weflow/scripts/sync-channel-protocol.mjs 生成 host 侧 channel_protocol.py，
+ * 禁止在 Python 侧手抄本快照中的任何字面量。
+ */
+export const CHANNEL_PROTOCOL = {
+  /**
+   * 协议版本：任何枚举/错误码变更都必须递增。
+   * v4：出站新增 `recall`（撤回最后一条己方消息，2 分钟窗口）与受限 `voice`（转发已落盘 .silk 语音条）；
+   *      入站 `ChannelEvent.kind` 新增 `video`（local_type 43，video/mp4 落盘）。
+   * v3：移除未实现的出站 `voice` 发送能力（仅保留入站 `kind=voice` SILK 语音事件与 audio/x-silk 媒体拉取）。
+   * v2：ChannelEvent 新增可选 `historical` 标记（空库 Backfill 回溯事件）。
+   */
+  protocolVersion: 4,
+  sendOperationStates: [
+    "pending",
+    "executing",
+    "confirmed",
+    "unknown",
+    "failed",
+  ] as const,
+  sendKinds: [
+    "text",
+    "file",
+    "image",
+    "reply",
+    "mention",
+    "poke",
+    "recall",
+    "voice",
+  ] as const,
+  mediaStates: ["ready", "pending", "not_found", "failed"] as const,
+  /** Host 侧可能返回的错误码全集（HTTP 层与发送层） */
+  errorCodes: [
+    "send_operation_identity_conflict",
+    "media_pending",
+    "media_not_found",
+    "not_found",
+    "channel_contacts_unavailable",
+    "invalid_request",
+    "channel_host_error",
+    "wechat_send_not_confirmed",
+    "at_requires_at_least_one_member",
+    "recall_window_expired",
+    "recall_not_found",
+    "recall_unsupported",
+    "video_not_found",
+    "voice_path_invalid",
+    "reply_target_not_latest",
+    "mention_member_not_found",
+  ] as const,
+} as const;
+
+export type ChannelProtocol = typeof CHANNEL_PROTOCOL;
+
+export type ChannelProtocolVersion = (typeof CHANNEL_PROTOCOL)["protocolVersion"];

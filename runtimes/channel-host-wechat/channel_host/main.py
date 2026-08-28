@@ -9,6 +9,7 @@ from typing import Callable, Optional
 
 from wechatauto import MediaDownloader, WeChatDB
 
+from .backfill import BackfillRunner, load_backfill_config
 from .event_store import EventStore
 from .host import WeChatChannelHost
 from .http_host import ChannelHostHttpServer
@@ -79,6 +80,9 @@ def main() -> None:
         logger=lambda message: print(f"[media-key] {message}"),
     )
     event_store.recover_send_operation_leases()
+    # ADR-0005：多微信账号隔离——本实例账号由 WECHAT_ACCOUNT 标识，
+    # 事件/联系人携带该值，发送请求校验一致后才执行。
+    account = os.getenv("WECHAT_ACCOUNT") or None
     host = WeChatChannelHost(
         db,
         event_store,
@@ -86,8 +90,19 @@ def main() -> None:
         message_chat_discovery_interval_seconds=float(
             os.getenv("CHANNEL_HOST_MESSAGE_CHAT_DISCOVERY_INTERVAL_SECONDS", "30")
         ),
+        account=account,
     )
     sender = WeChatChannelSender(db)
+    # 空库历史回溯：store 纪元内无任何捕获时，把微信历史会话/消息合成
+    # historical 事件回溯入库（绝不外发/建 Turn/记忆/通知）。手动端点
+    # POST /api/v1/channel/backfill 复用同一 runner。
+    backfill_config = load_backfill_config()
+    backfill_runner = BackfillRunner(
+        host,
+        event_store,
+        backfill_config,
+        logger=lambda message: print(f"[backfill] {message}"),
+    )
     http_server = ChannelHostHttpServer(
         event_store,
         token=token,
@@ -96,6 +111,8 @@ def main() -> None:
         media_resolver=media_resolver,
         contact_reader=db.list_contacts,
         key_refresh=key_service.refresh,
+        account=account,
+        backfill_runner=backfill_runner,
     )
     http_server.start()
     key_service.start()
@@ -103,7 +120,13 @@ def main() -> None:
     interval = float(os.getenv("CHANNEL_HOST_POLL_INTERVAL_SECONDS", "1"))
     try:
         print(f"Channel Host listening at {http_server.base_url}")
+        # 空库判定必须在 bootstrap 之前：bootstrap 会写入各会话水位，
+        # 之后 source_checkpoints 非空，空库信号即消失。
+        auto_backfill = backfill_runner.should_auto_run()
         host.bootstrap()
+        if auto_backfill:
+            print("[backfill] empty store detected; starting historical backfill")
+            backfill_runner.start_async(auto=False)
         while not stop.wait(interval):
             try:
                 host.poll_once()

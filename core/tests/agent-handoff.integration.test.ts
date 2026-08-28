@@ -8,7 +8,7 @@ import {
   type Postgres,
 } from "../infrastructure/postgres/client.js";
 import * as schema from "../infrastructure/postgres/schema.js";
-import { processAgentTurn } from "../modules/agent/application/process-agent-turn.js";
+import { AgentTurnExecutor } from "../modules/agent/application/agent-turn-executor.js";
 import { registerHandoffRoutes } from "../modules/handoff/interface/http-routes.js";
 import { createClosedUser } from "../modules/identity/application/identity-service.js";
 import { registerIdentityRoutes } from "../modules/identity/interface/http-routes.js";
@@ -110,9 +110,6 @@ integration("agent automatic handoff", () => {
       .delete(schema.messages)
       .where(eq(schema.messages.conversationId, conversationId));
     await postgres.db
-      .delete(schema.caseStates)
-      .where(eq(schema.caseStates.conversationId, conversationId));
-    await postgres.db
       .delete(schema.conversations)
       .where(eq(schema.conversations.conversationId, conversationId));
     await postgres.db
@@ -159,14 +156,9 @@ integration("agent automatic handoff", () => {
           Response.json({ choices: [{ message: { content: response } }] }),
         ),
     });
-    await processAgentTurn(postgres.db, client, "test", {
-      turnId,
-      traceId: turnId,
-    });
-    await processAgentTurn(postgres.db, client, "test", {
-      turnId,
-      traceId: turnId,
-    });
+    const executor = new AgentTurnExecutor(postgres.db, client, "test");
+    await executor.execute({ turnId, traceId: turnId });
+    await executor.execute({ turnId, traceId: turnId });
     const handoff = await postgres.db
       .select()
       .from(schema.handoffStates)

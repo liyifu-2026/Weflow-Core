@@ -20,7 +20,7 @@
     "typeRoots": ["../../core/node_modules/@types", "../../node_modules/@types"],
     "baseUrl": ".",
     "paths": {
-      "@weflow/contracts": ["../contracts/dist/index.d.ts"]
+      "@weflow-leaif/contracts": ["../contracts/dist/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"],

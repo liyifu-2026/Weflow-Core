@@ -9,6 +9,8 @@ export type WeflowUser = {
   mustChangePassword: boolean;
   /** 操作员头像相对路径（无头像为 null/undefined，兼容旧响应） */
   avatarUrl?: string | null;
+  /** 当前选中的平台预设头像 id（未选为 null；选择器展示选中态） */
+  avatarPreset?: string | null;
   /** 信息名片显示名（空 = 展示 username） */
   displayName?: string | null;
   /** 操作员自选专家标签（专家队列 key 列表） */
@@ -97,9 +99,20 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
       body: form,
     });
     if (user.value) {
-      user.value = { ...user.value, avatarUrl: result.avatarUrl };
+      // 上传与预设二选一：上传生效后预设被服务端清除，本地同步
+      user.value = { ...user.value, avatarUrl: result.avatarUrl, avatarPreset: null };
     }
     return result.avatarUrl;
+  }
+
+  /** 选择/清除平台预设头像（null = 恢复默认哈希预设） */
+  async function selectAvatarPreset(preset: string | null): Promise<WeflowUser> {
+    const result = await api<{ user: WeflowUser }>("/api/v1/auth/avatar", {
+      method: "PATCH",
+      body: JSON.stringify({ preset }),
+    });
+    user.value = result.user;
+    return result.user;
   }
 
   return {
@@ -114,5 +127,6 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
     fetchTagVocabulary,
     updateProfile,
     uploadAvatar,
+    selectAvatarPreset,
   };
 });

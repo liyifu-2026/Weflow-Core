@@ -14,6 +14,12 @@ const MAX_CONTACTS = 10_000;
 /** 平台通道标识（与 ingest-channel-events 保持一致） */
 const CHANNEL_KIND = "channel";
 
+/** 归一化账号标识（ADR-0005）：空值回落 "default" */
+function normalizeAccount(account: string | null | undefined): string {
+  const trimmed = account?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "default";
+}
+
 /** 从 Channel Host 分页拉取联系人资料并同步到 Contact Profile，返回同步数量。 */
 export async function syncChannelContactProfiles(
   db: NodePgDatabase<typeof schema>,
@@ -28,11 +34,17 @@ export async function syncChannelContactProfiles(
     });
     for (const contact of result.contacts) {
       const now = new Date();
+      const account = normalizeAccount(contact.account);
       const rows = await db
         .insert(contactProfiles)
         .values({
-          contactId: contactIdForChannel(CHANNEL_KIND, contact.contactRef),
+          contactId: contactIdForChannel(
+            CHANNEL_KIND,
+            contact.contactRef,
+            account,
+          ),
           channel: CHANNEL_KIND,
+          channelAccount: account,
           channelContactId: contact.contactRef,
           channelDisplayName: contact.displayName,
           channelNickname: contact.nickname,
@@ -42,7 +54,11 @@ export async function syncChannelContactProfiles(
           updatedAt: now,
         })
         .onConflictDoUpdate({
-          target: [contactProfiles.channel, contactProfiles.channelContactId],
+          target: [
+            contactProfiles.channel,
+            contactProfiles.channelAccount,
+            contactProfiles.channelContactId,
+          ],
           set: {
             channelDisplayName: contact.displayName,
             channelNickname: contact.nickname,

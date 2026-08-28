@@ -19,6 +19,11 @@ from .event_store import ChannelObservation, EventStore
 # sender prefixes across different group message variants.
 GROUP_SENDER_RE = re.compile(r"^(wxid_[^\s:\n]+|gh_[^\s:\n]+|\d{6,}):\s*\n")
 
+# 平台决定表情包不渲染截图，事件内容统一为文本「[表情包]<含义>」。
+EMOTION_FALLBACK_TEXT = "[表情包]表情"
+# 微信「拍一拍」系统消息捕获后的固定文案（ADR 之外的平台文案约定）。
+PAT_EVENT_TEXT = "对方拍了拍你"
+
 
 class WeChatChannelHost:
     """Poll WeChatDB directly and durably capture only text observations."""
@@ -31,6 +36,7 @@ class WeChatChannelHost:
         *,
         session_discovery_limit: int = 10000,
         message_chat_discovery_interval_seconds: float = 30.0,
+        account: Optional[str] = None,
     ):
         if session_discovery_limit < 1:
             raise ValueError("session_discovery_limit must be positive")
@@ -45,7 +51,11 @@ class WeChatChannelHost:
         self.message_chat_discovery_interval_seconds = (
             message_chat_discovery_interval_seconds
         )
+        # ADR-0005：当前实例服务的微信账号（WECHAT_ACCOUNT），写入每个事件的
+        # account 字段；未配置时保持 null，由 Core 回落 default。
+        self.account = str(account).strip() or None if account else None
         self._self_ref: Optional[str] = None
+        self._self_nickname: Optional[str] = None
         self._last_message_chat_discovery = 0.0
 
     def bootstrap(self) -> bool:
@@ -133,7 +143,10 @@ class WeChatChannelHost:
                         and not _is_image_message(message)
                         and not _is_file_message(message)
                         and not _is_voice_message(message)
+                        and not _is_video_message(message)
                         and not _is_emotion_message(message)
+                        and not _is_pat_message(message)
+                        and not _is_quoted_reply_message(message)
                     ):
                         self.event_store.advance_checkpoint(
                             conversation_ref, sort_seq
@@ -173,16 +186,40 @@ class WeChatChannelHost:
             raise ValueError("missing local_id")
         is_image = _is_image_message(message)
         is_file = not is_image and _is_file_message(message)
-        is_voice = not is_image and not is_file and _is_voice_message(message)
-        is_emotion = not is_image and not is_file and not is_voice and _is_emotion_message(message)
+        is_quoted_reply = _is_quoted_reply_message(message)
+        # 拍一拍优先于文件分支：微信 4.x 把拍一拍以 type 49 appmsg 卡片
+        # 落库（title=我拍了拍 "xxx"），若先判 file 会因解析不出附件被丢弃。
+        is_pat = _is_pat_message(message)
+        if is_pat:
+            is_file = False
+            is_quoted_reply = False
+        is_video = not is_image and not is_file and _is_video_message(message)
+        is_voice = not is_image and not is_file and not is_video and _is_voice_message(message)
+        is_emotion = (
+            not is_image
+            and not is_file
+            and not is_voice
+            and _is_emotion_message(message)
+        )
         file_name: Optional[str] = None
         mime_type: Optional[str] = None
-        if is_file:
+        if is_file and not is_quoted_reply:
             attachment = _parse_file_attachment(message.get("content"))
             if attachment is None:
                 return None
             file_name, mime_type = attachment
             content: object = file_name
+        elif is_quoted_reply:
+            # Quoted reply (type 49, appmsg type 57): treat as text with
+            # replyToChannelMessageId extracted below.
+            is_file = False
+            reply_text = _extract_quoted_reply_text(message.get("content"))
+            content = reply_text or ""
+            if not isinstance(content, str) or not content.strip():
+                # If we can't extract the text, skip this message.
+                return None
+        elif is_video:
+            content = "[视频]"
         elif is_image:
             content = "[image]"
         elif is_voice:
@@ -203,8 +240,22 @@ class WeChatChannelHost:
                 content = raw_content
             mime_type = "audio/x-silk"
         elif is_emotion:
-            raw_content = message.get("content")
-            content = raw_content if isinstance(raw_content, str) else "[动画表情]"
+            # 表情包文本化：DB 中的 content 多为加密容器/XML，仅尽力提取名称，
+            # 无法识别时统一兜底为「[表情包]表情」。
+            content = _emotion_text(message.get("content"))
+        elif is_pat:
+            pat_source = message.get("content")
+            pat_text = (
+                pat_source.decode("utf-8", "replace")
+                if isinstance(pat_source, bytes)
+                else pat_source
+            )
+            if not isinstance(pat_text, str):
+                raise ValueError("pat message content is not a string")
+            # appmsg 卡片形态：从 <title> 提取「我拍了拍 "Leaif"」原文；
+            # type 10000 系统消息形态：保留原始「xxx 拍了拍 yyy」文案。
+            title_text = _extract_pat_title(pat_text)
+            content = title_text if title_text else PAT_EVENT_TEXT
         else:
             content = message.get("content")
             if not isinstance(content, str):
@@ -229,7 +280,9 @@ class WeChatChannelHost:
             channel_message_id=local_id_text,
             sender_ref=sender_ref,
             kind=(
-                "image"
+                "video"
+                if is_video
+                else "image"
                 if is_image
                 else "file"
                 if is_file
@@ -237,6 +290,8 @@ class WeChatChannelHost:
                 if is_voice
                 else "emotion"
                 if is_emotion
+                else "pat"
+                if is_pat
                 else "text"
             ),
             content=normalized_content,
@@ -245,11 +300,16 @@ class WeChatChannelHost:
             is_self=is_self,
             media_ref=(
                 f"wechat-media:v1:{hashlib.sha256(event_id.encode()).hexdigest()}"
-                if is_image or is_file or is_voice or is_emotion
+                if is_image or is_file or is_voice or is_video or is_emotion
                 else None
             ),
             file_name=file_name,
             mime_type=mime_type,
+            account=self.account,
+            mentioned=_detect_mentioned(
+                normalized_content, is_self, self._get_self_nickname()
+            ),
+            reply_to_channel_message_id=_extract_reply_to_id(message),
         )
 
     def _get_self_ref(self) -> Optional[str]:
@@ -257,7 +317,17 @@ class WeChatChannelHost:
             info = self.db.get_self_info()
             username = info.get("username") if isinstance(info, dict) else None
             self._self_ref = str(username) if username else ""
+            # Cache the nickname while we have the info dict.
+            nick = info.get("nick_name") if isinstance(info, dict) else None
+            self._self_nickname = str(nick).strip() if nick else ""
         return self._self_ref or None
+
+    def _get_self_nickname(self) -> Optional[str]:
+        """Return the current user's display nickname for @ detection."""
+        if self._self_nickname is None:
+            # Force _get_self_ref to populate both fields.
+            self._get_self_ref()
+        return self._self_nickname or None
 
     def _session_rows(self) -> list[dict]:
         rows = self.db.get_sessions(limit=self.session_discovery_limit)
@@ -328,6 +398,12 @@ class WeChatChannelHost:
         return _required_int(rows[0], "sort_seq")
 
 
+def _is_video_message(message: dict) -> bool:
+    return message.get("type") in ("视频", "video", 43) or message.get(
+        "local_type"
+    ) in ("视频", "video", 43)
+
+
 def _is_text_message(message: dict) -> bool:
     return message.get("type") in ("文本", "text", 1) or message.get(
         "local_type"
@@ -356,6 +432,255 @@ def _is_emotion_message(message: dict) -> bool:
     return message.get("type") in ("动画表情", "表情", "emotion", 47) or message.get(
         "local_type"
     ) in ("动画表情", "表情", "emotion", 47)
+
+
+def _is_system_message(message: dict) -> bool:
+    return message.get("type") in ("系统消息", "system", 10000) or message.get(
+        "local_type"
+    ) in ("系统消息", "system", 10000)
+
+
+# 微信「拍一拍」落库有两种形态：
+# 1. type 10000 系统消息（经典路径）：「xxx」拍了拍你 / 你拍了拍「yyy」；
+# 2. type 49 appmsg 卡片（微信 4.x 实测）：title 形如 `我拍了拍 "Leaif"`。
+# 其余系统消息/卡片不捕获。
+_PAT_KEYWORD = "拍了拍"
+
+
+def _is_pat_message(message: dict) -> bool:
+    if _is_system_message(message) and _PAT_KEYWORD in _message_text(message):
+        return True
+    if _is_file_message(message):
+        text = _message_text(message)
+        # appmsg 卡片：XML 里任何位置含「拍了拍」即视为拍一拍（title 为主）
+        if text.strip().startswith("<") and _PAT_KEYWORD in text:
+            return True
+    return False
+
+
+def _is_quoted_reply_message(message: dict) -> bool:
+    """Type-49 appmsg with type 57 = quoted reply in WeChat 4.x."""
+    if not _is_file_message(message):
+        return False
+    content = message.get("content")
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", "replace")
+    if not isinstance(content, str) or not content.strip().startswith("<"):
+        return False
+    try:
+        root = ElementTree.fromstring(content.strip())
+    except ElementTree.ParseError:
+        return False
+    appmsg = root.find("appmsg")
+    if appmsg is None:
+        return False
+    type_node = appmsg.find("type")
+    return (type_node is not None
+            and (type_node.text or "").strip() == "57")
+
+
+def _extract_quoted_reply_text(content: object) -> Optional[str]:
+    """Extract the reply sender's text from a type-57 appmsg XML."""
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", "replace")
+    if not isinstance(content, str):
+        return None
+    stripped = content.strip()
+    if not stripped.startswith("<"):
+        return None
+    try:
+        root = ElementTree.fromstring(stripped)
+    except ElementTree.ParseError:
+        return None
+    appmsg = root.find("appmsg")
+    if appmsg is None:
+        return None
+    # The reply text is in <refermsg><displayname> or <title>.
+    refermsg = appmsg.find("refermsg")
+    if refermsg is not None:
+        # <refermsg><content> holds the original message text.
+        orig = refermsg.find("content")
+        if orig is not None:
+            value = (orig.text or "").strip()
+            if value:
+                return value
+    # Fallback to <title> which sometimes carries the reply summary.
+    title_node = appmsg.find("title")
+    if title_node is not None:
+        value = (title_node.text or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _message_text(message: dict) -> str:
+    content = message.get("content")
+    if isinstance(content, bytes):
+        return content.decode("utf-8", "replace")
+    if isinstance(content, str):
+        return content
+    return ""
+
+
+def _extract_pat_title(raw_content: object) -> Optional[str]:
+    """从拍一拍 appmsg 卡片提取 <title> 原文（如 `我拍了拍 "Leaif"`）。
+
+    type 10000 系统消息（非 XML）返回 None，由调用方回落固定文案。
+    """
+    if isinstance(raw_content, bytes):
+        raw_content = raw_content.decode("utf-8", "replace")
+    if not isinstance(raw_content, str):
+        return None
+    stripped = raw_content.strip()
+    if not stripped.startswith("<"):
+        return None
+    try:
+        root = ElementTree.fromstring(stripped)
+    except ElementTree.ParseError:
+        return None
+    appmsg = root.find("appmsg")
+    if appmsg is None:
+        return None
+    title_node = appmsg.find("title")
+    if title_node is not None:
+        value = (title_node.text or "").strip()
+        if value and _PAT_KEYWORD in value:
+            return value
+    return None
+
+
+# 微信摘要占位标签（不含语义，不能当表情名）
+_EMOTION_PLACEHOLDER_RE = re.compile(r"^\[(?:动画表情|表情)\]$")
+# <emoji> 节点里可能承载名称的属性（微信各版本字段不稳定，逐个尝试）
+_EMOTION_NAME_ATTRS = ("name", "title", "description")
+
+
+def _emotion_text(raw_content: object) -> str:
+    name = _extract_emotion_name(raw_content)
+    if not name:
+        return EMOTION_FALLBACK_TEXT
+    return f"[表情包]{_EMOTION_MEANINGS.get(name.lower(), name)}"
+
+
+def _extract_emotion_name(raw_content: object) -> Optional[str]:
+    if isinstance(raw_content, bytes):
+        raw_content = raw_content.decode("utf-8", "replace")
+    if not isinstance(raw_content, str):
+        return None
+    stripped = raw_content.strip()
+    if not stripped:
+        return None
+    if stripped.startswith("<"):
+        try:
+            root = ElementTree.fromstring(stripped)
+        except ElementTree.ParseError:
+            return None
+        for node in root.iter():
+            tag = str(node.tag).rsplit("}", 1)[-1].lower()
+            if tag != "emoji":
+                continue
+            for attr in _EMOTION_NAME_ATTRS:
+                name = _clean_emotion_name(node.get(attr))
+                if name:
+                    return name
+        return None
+    if _EMOTION_PLACEHOLDER_RE.match(stripped):
+        return None
+    return _clean_emotion_name(stripped)
+
+
+def _clean_emotion_name(value: Optional[str]) -> str:
+    """归一并过滤候选表情名：去括号/控制字符，拒绝 md5、URL 等垃圾值。"""
+    if not value:
+        return ""
+    name = value.strip()
+    if len(name) >= 2 and name.startswith("[") and name.endswith("]"):
+        name = name[1:-1].strip()
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
+    if not name or len(name) > 24:
+        return ""
+    lowered = name.lower()
+    if re.fullmatch(r"[0-9a-f]{16,}", lowered):
+        return ""
+    for marker in ("http", "/", "\\", "<", ">"):
+        if marker in lowered:
+            return ""
+    return name
+
+
+# 常用表情名 → 规范含义。键覆盖旧树九分类英文目录名
+# （wxbot/wechatbot-new/emojis：happy/sad/angry 等）与微信常见内置表情名；
+# 未收录的名字按原文透出为 [表情包]<名字>。
+_EMOTION_MEANINGS = {
+    # 九分类目录名
+    "happy": "开心",
+    "sad": "难过",
+    "angry": "生气",
+    "confused": "困惑",
+    "evasive": "回避",
+    "loved": "喜爱",
+    "reminded": "提醒",
+    "surprised": "惊讶",
+    "tired": "疲惫",
+    # 微信内置小黄脸与常用别名
+    "微笑": "微笑",
+    "撇嘴": "难过",
+    "色": "花痴",
+    "发呆": "发呆",
+    "得意": "得意",
+    "流泪": "流泪",
+    "害羞": "害羞",
+    "睡": "困了",
+    "大哭": "大哭",
+    "尴尬": "尴尬",
+    "发怒": "生气",
+    "调皮": "调皮",
+    "呲牙": "开心",
+    "难过": "难过",
+    "囧": "尴尬",
+    "抓狂": "抓狂",
+    "吐": "吐",
+    "偷笑": "偷笑",
+    "可爱": "可爱",
+    "白眼": "无语",
+    "饥饿": "饥饿",
+    "困": "困了",
+    "惊恐": "惊恐",
+    "流汗": "流汗",
+    "憨笑": "憨笑",
+    "悠闲": "悠闲",
+    "奋斗": "奋斗",
+    "咒骂": "生气",
+    "疑问": "疑问",
+    "晕": "晕",
+    "衰": "衰",
+    "再见": "再见",
+    "擦汗": "擦汗",
+    "鼓掌": "鼓掌",
+    "坏笑": "坏笑",
+    "鄙视": "鄙视",
+    "委屈": "委屈",
+    "快哭了": "快哭了",
+    "亲亲": "亲亲",
+    "可怜": "可怜",
+    "笑脸": "开心",
+    "开心": "开心",
+    "大笑": "大笑",
+    "抱抱": "抱抱",
+    "点赞": "点赞",
+    "握手": "握手",
+    "胜利": "胜利",
+    "抱拳": "抱拳",
+    "爱心": "爱心",
+    "心碎": "心碎",
+    "玫瑰": "玫瑰",
+    "蛋糕": "蛋糕",
+    "咖啡": "咖啡",
+    "啤酒": "干杯",
+    "猪头": "猪头",
+    "月亮": "晚安",
+    "太阳": "早安",
+}
 
 
 # 微信语音占位内容：未开启自动转文字时形如 "[语音]"、"[语音]12秒"、"[语音]5秒,未播放"
@@ -449,3 +774,72 @@ def _session_discovery_key(row: dict) -> str:
 
 def _message_chat_discovery_key(max_sort_seq: int) -> str:
     return f"message-chat:{int(max_sort_seq)}"
+
+
+def _detect_mentioned(
+    content: str, is_self: bool, self_nickname: Optional[str]
+) -> Optional[bool]:
+    """Detect whether the current user was @-mentioned in a group message.
+
+    WeChat 4.x embeds @ mentions as ``@nickname`` in the message text.
+    Only meaningful for inbound (non-self) messages; self messages and
+    conversations without a known nickname yield ``None``.
+    """
+    if is_self:
+        return None
+    if not self_nickname:
+        return None
+    if not isinstance(content, str) or not content:
+        return None
+    # Match @nickname at word boundaries; WeChat inserts a non-breaking
+    # space or regular space after the nickname token.
+    pattern = f"@{re.escape(self_nickname)}"
+    return bool(re.search(pattern, content))
+
+
+def _extract_reply_to_id(message: Optional[dict]) -> Optional[str]:
+    """Parse a type-49 appmsg XML to extract the quoted reply's local_id.
+
+    WeChat 4.x stores quoted replies as type-49 rows whose XML contains a
+    ``<refermsg>`` node with ``<localid>`` inside it.  Returns ``None`` for
+    anything that is not a parsable quoted-reply reference.
+    """
+    if message is None:
+        return None
+    content = message.get("content")
+    if isinstance(content, bytes):
+        content = content.decode("utf-8", "replace")
+    if not isinstance(content, str):
+        return None
+    stripped = content.strip()
+    if not stripped.startswith("<"):
+        return None
+    try:
+        root = ElementTree.fromstring(stripped)
+    except ElementTree.ParseError:
+        return None
+    appmsg = root.find("appmsg")
+    if appmsg is None:
+        return None
+    # Type 57 = quoted reply in WeChat 4.x appmsg protocol.
+    type_node = appmsg.find("type")
+    type_text = (type_node.text or "").strip() if type_node is not None else ""
+    if type_text != "57":
+        return None
+    refermsg = appmsg.find("refermsg")
+    if refermsg is None:
+        return None
+    localid_node = refermsg.find("localid")
+    if localid_node is not None:
+        value = (localid_node.text or "").strip()
+        if value:
+            return value
+    # Fallback: some versions use <chch> with a local_id attribute or
+    # embed the ID in a different child node.
+    for child in refermsg:
+        tag = str(child.tag).rsplit("}", 1)[-1].lower()
+        if "local" in tag and "id" in tag:
+            value = (child.text or "").strip()
+            if value:
+                return value
+    return None

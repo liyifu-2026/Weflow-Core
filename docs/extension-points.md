@@ -110,7 +110,7 @@
 - Console 从已安装方案聚合所有 `settings.contributions`，按 `category + order` 排序。
 - 每个设置项渲染：
   - 有 `component`：动态加载远程组件（`mount(container)` 或 Vue 组件）。
-  - 有 `schema`：Console 自动生成表单，调用统一设置 API 保存。
+  - 有 `schema`：Console 自动生成表单，调用系统设置 API 保存。
 - 切换分类只重新渲染该分类插槽，不刷新整页。
 
 ### 4.2 总览 Dashboard
@@ -139,7 +139,7 @@ GET /api/v1/admin/extensions
 GET /api/v1/admin/solutions/:solutionId/extensions
 ```
 
-### 5.2 统一设置存储
+### 5.2 系统设置存储
 
 - 表：`solution.extension_settings`（已建）。
 - 键名规范：`{pluginId}.{contributionId}`，避免冲突。

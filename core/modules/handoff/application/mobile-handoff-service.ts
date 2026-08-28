@@ -15,6 +15,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { lockConversationOwnership } from "../../../infrastructure/postgres/ownership-lock.js";
+import { userAvatarUrl } from "../../identity/application/identity-service.js";
 import {
   enqueueHandoffTransferNotification,
   enqueuePendingHandoffNotifications,
@@ -205,7 +206,6 @@ export async function listMobileHandoffInbox(
     LEFT JOIN identity.users target_user ON target_user.user_id = h.target_user_id
     LEFT JOIN collaboration.specialist_queues assigned_queue ON assigned_queue.queue_id = h.assigned_queue_id
     LEFT JOIN collaboration.specialist_queues target_queue ON target_queue.queue_id = h.target_queue_id
-    LEFT JOIN conversation.case_states case_state ON case_state.conversation_id = h.conversation_id
     LEFT JOIN LATERAL (
       SELECT m.occurred_at, m.text
       FROM conversation.messages m
@@ -241,9 +241,6 @@ export async function listMobileHandoffInbox(
         )
       )
     ORDER BY
-      CASE COALESCE(case_state.risk_level, 'low')
-        WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1
-      END DESC,
       COALESCE(h.pending_since, h.created_at) ASC,
       latest.occurred_at DESC NULLS LAST
     LIMIT ${limit}
@@ -300,6 +297,7 @@ export async function listMobileAssignees(db: Db, actorUserId: string) {
         string | null
       >`coalesce(${schema.users.displayName}, ${schema.users.username})`,
       username: schema.users.username,
+      updatedAt: schema.users.updatedAt,
     })
     .from(schema.users)
     .where(
@@ -310,7 +308,14 @@ export async function listMobileAssignees(db: Db, actorUserId: string) {
     )
     .orderBy(asc(schema.users.username))
     .then((users) =>
-      users.map((user) => ({ ...user, canReceiveHandoff: true })),
+      users.map((user) => ({
+        userId: user.userId,
+        displayName: user.displayName,
+        username: user.username,
+        // 客服头像相对路径（上传 > 预设 > 默认预设），供转交列表渲染
+        avatarUrl: userAvatarUrl(user),
+        canReceiveHandoff: true,
+      })),
     );
 }
 
@@ -722,19 +727,6 @@ export async function finishMobileHandoff(
         updatedAt: now,
       })
       .where(eq(schema.handoffCycles.cycleId, current.cycleId));
-    // 人工结束后重置 Case 状态：清除 requiresHuman 与 handoff 阶段，
-    // 否则 Agent 接续时上下文仍为"需要人工"，会无限转人工（P0 修复）。
-    // 注意：requiresHuman 由模型独立输出，可能与 stage='handoff' 不同步，
-    // 因此重置条件以 requiresHuman=true 为准，覆盖所有 stage 组合。
-    await transaction
-      .update(schema.caseStates)
-      .set({ requiresHuman: false, stage: "answering", updatedAt: now })
-      .where(
-        and(
-          eq(schema.caseStates.conversationId, input.conversationId),
-          eq(schema.caseStates.requiresHuman, true),
-        ),
-      );
     await transaction.insert(schema.handoffResolutionSummaryJobs).values({
       jobId: `resolution:${current.cycleId}`,
       conversationId: input.conversationId,

@@ -8,10 +8,10 @@ importers:
 
   .:
     dependencies:
-      '@weflow/contracts':
+      '@weflow-leaif/contracts':
         specifier: link:../../packages/contracts
         version: link:../../packages/contracts
-      '@weflow/solution-sdk':
+      '@weflow-leaif/solution-sdk':
         specifier: link:../../packages/solution-sdk
         version: link:../../packages/solution-sdk
       '@weflow/ui':

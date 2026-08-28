@@ -23,14 +23,3 @@ export const ERROR_CODES = [
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
-
-export interface AuditEvent {
-  eventId: string;
-  actor: string;
-  action: string;
-  resourceType: string;
-  resourceId: string;
-  occurredAt: string;
-  sourceIp?: string;
-  metadata?: Record<string, unknown>;
-}

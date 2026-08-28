@@ -67,11 +67,23 @@ export class AgentTurnExecutor {
       /**
        * Optional hook called before strategy.buildModelRequest to pre-resolve
        * AI employee prompts from the database (populates strategy cache).
+       * `triggerText` is optional and drives reception-plan keyword routing
+       * inside the Solution strategy; Core stays business-neutral.
        */
       preResolveAiEmployeePrompt?: (
         contactId: string,
         conversationId: string,
+        triggerText?: string | undefined,
       ) => Promise<void>;
+      /**
+       * Optional hook resolving the AI employee identity for the conversation.
+       * Returned opaque string is persisted as messages.actor_id on the agent
+       * reply (used by surfaces to render the employee's avatar).
+       */
+      resolveAiEmployeeId?: (
+        contactId: string,
+        conversationId: string,
+      ) => Promise<string | null | undefined>;
       /**
        * 预判分流（Triage）：可选；未提供时零行为变化。
        * - classify 由组合根注入策略（关键词/开关）与判定模型，永不抛错；
@@ -236,6 +248,9 @@ export class AgentTurnExecutor {
           ...(this.dependencies.preResolveAiEmployeePrompt
             ? { preResolveAiEmployeePrompt: this.dependencies.preResolveAiEmployeePrompt }
             : {}),
+          ...(this.dependencies.resolveAiEmployeeId
+            ? { resolveAiEmployeeId: this.dependencies.resolveAiEmployeeId }
+            : {}),
         });
 
         const afterDecision = await this.loadTurn(input.turnId);
@@ -262,6 +277,7 @@ export class AgentTurnExecutor {
               this.dependencies.skillRegistry,
               this.dependencies.strategyRegistry,
               this.dependencies.preResolveAiEmployeePrompt,
+              this.dependencies.resolveAiEmployeeId,
             );
           }
         }

@@ -7,4 +7,4 @@ export type {
   ChannelContact,
   ChannelContactsPage,
   ChannelContactSource,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";

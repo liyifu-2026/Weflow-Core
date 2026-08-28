@@ -15,7 +15,7 @@ import type {
   MaybePromise,
   PluginContext,
   PluginDefinition,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 
 export {
   capability,
@@ -24,7 +24,7 @@ export {
   type MaybePromise,
   type PluginContext,
   type PluginDefinition,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 
 export type PluginState =
   | "registered"

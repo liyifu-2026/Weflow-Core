@@ -818,9 +818,20 @@ class WeChatDB:
                 type_expression = (
                     f'"{type_column}"' if type_column is not None else "NULL"
                 )
+                # Detect avatar columns (small_head_url / big_head_url)
+                has_small_head = "small_head_url" in columns
+                has_big_head = "big_head_url" in columns
+                avatar_expression = (
+                    'small_head_url'
+                    if has_small_head
+                    else 'big_head_url'
+                    if has_big_head
+                    else 'NULL'
+                )
                 rows = conn.execute(
                     "SELECT username, nick_name, remark, alias, "
-                    f"{type_expression} AS contact_type "
+                    f"{type_expression} AS contact_type, "
+                    f"{avatar_expression} AS avatar_url "
                     "FROM contact WHERE username > ? "
                     "ORDER BY username ASC LIMIT ?",
                     (after_cursor, limit),
@@ -839,7 +850,7 @@ class WeChatDB:
                         "nickname": nickname,
                         "remark": remark,
                         "alias": row[3] or None,
-                        "avatarUrl": None,
+                        "avatarUrl": (row[5] or "").replace("http://", "https://", 1) or None,
                         "contactType": str(row[4] or "unknown"),
                     }
                 )

@@ -32,18 +32,29 @@ export type ManualReplyOutcome =
       message: typeof schema.messages.$inferSelect;
     };
 
-/** 查询人工回复消息的投递状态（pending/accepted/sent/failed） */
+/** 查询人工回复消息的投递状态（pending/accepted/sent/failed）。
+ *
+ * 客户端可能以两种稳定标识查询：
+ * - 下发时使用的 clientRequestId（UUID）——按 manual idempotency 键解析（向后兼容原契约）；
+ * - 消息自身的稳定 messageId（agent-message:… / manual-message:<sha256>）——按 messageId 解析。
+ * 前端在会话刷新后内存映射清空，会回退成用 messageId 查询，故两种都必须支持。
+ */
 export async function getManualReplyOutcome(
   db: NodePgDatabase<typeof schema>,
   input: { conversationId: string; clientRequestId: string },
 ): Promise<ManualReplyOutcome> {
+  const isMessageId =
+    input.clientRequestId.startsWith("agent-message:") ||
+    input.clientRequestId.startsWith("manual-message:");
   const rows = await db
     .select()
     .from(schema.messages)
     .where(
       and(
         eq(schema.messages.conversationId, input.conversationId),
-        eq(schema.messages.idempotencyKey, `manual:${input.clientRequestId}`),
+        isMessageId
+          ? eq(schema.messages.messageId, input.clientRequestId)
+          : eq(schema.messages.idempotencyKey, `manual:${input.clientRequestId}`),
       ),
     )
     .limit(1);
@@ -75,6 +86,14 @@ export async function createManualReply(
     clientRequestId: string;
     expectedConversationRevision?: number;
     sourceIp: string;
+    /** 引用回复的原通道消息（ADR-0006 群聊引用） */
+    replyToChannelMessageId?: string | null;
+    /** @ 提及的通道联系人（ADR-0006 群聊 @） */
+    mentionContactRefs?: string[];
+    /** 出站媒体 id（先经 POST /api/v1/media 上传；携带时消息落库为媒体消息） */
+    mediaId?: string | null;
+    /** 出站媒体文件信息（mediaId 之外的发送所需元数据） */
+    media?: { fileId: string; kind?: string } | null;
   },
 ): Promise<ManualReplyResult> {
   const result = await db.transaction(
@@ -134,12 +153,14 @@ export async function createManualReply(
           direction: "outbound",
           actorType: "user",
           actorId: input.actorUserId,
-          contentType: "text",
+          contentType: input.mediaId ? "media" : "text",
           channelType: 1,
           text: input.text,
           isSelf: true,
           processingState: "not_applicable",
           sendState: "pending",
+          replyToChannelMessageId: input.replyToChannelMessageId ?? null,
+          mentionContactRefs: input.mentionContactRefs ?? [],
           idempotencyKey: `manual:${input.clientRequestId}`,
           occurredAt: new Date(),
           traceId: `manual-reply:${messageId}`,
@@ -149,6 +170,30 @@ export async function createManualReply(
 
       const created = inserted[0];
       if (created) {
+        // 出站媒体：上传仅持有 storedFiles，这里创建 mediaAssets 关联到本条消息
+        if (input.mediaId && input.media) {
+          const now = new Date();
+          await transaction
+            .insert(schema.mediaAssets)
+            .values({
+              mediaId: input.mediaId,
+              messageId: created.messageId,
+              conversationId: input.conversationId,
+              sourceConversationId: `manual-upload:${input.media.fileId}`,
+              sourceLocalId: null,
+              sourceMediaRef: null,
+              kind: input.media.kind ?? "file",
+              status: "ready",
+              originalFileId: input.media.fileId,
+              errorCode: null,
+              description: null,
+              processedAt: now,
+              nextAttemptAt: now,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoNothing();
+        }
         await scheduleMemoryCaptureInTransaction(transaction, {
           conversationId: input.conversationId,
           contactId: conversations[0].contactId,

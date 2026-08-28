@@ -21,7 +21,7 @@ import * as schema from "../infrastructure/postgres/schema.js";
 import { OpenAiCompatibleClient } from "../infrastructure/model_runtime/openai-compatible-client.js";
 import { ingestChannelEvents } from "../modules/conversations/application/ingest-channel-events.js";
 import { readRuntimeSettings } from "../modules/operations/application/runtime-settings.js";
-import { processAgentTurn } from "../modules/agent/application/process-agent-turn.js";
+import { AgentTurnExecutor } from "../modules/agent/application/agent-turn-executor.js";
 import { buildAgentContext } from "../modules/agent/application/agent-context.js";
 import { createHandoff } from "../modules/handoff/application/handoff-service.js";
 import {
@@ -77,14 +77,8 @@ integration("media degraded turn（图片消息不得静默死亡）", () => {
   afterAll(async () => {
     for (const { conversationId, contactId } of created) {
       await postgres.db
-        .delete(schema.mediaAssets)
-        .where(eq(schema.mediaAssets.conversationId, conversationId));
-      await postgres.db
         .delete(schema.agentTurns)
         .where(eq(schema.agentTurns.conversationId, conversationId));
-      await postgres.db
-        .delete(schema.caseStates)
-        .where(eq(schema.caseStates.conversationId, conversationId));
       await postgres.db
         .delete(schema.memoryCaptureStates)
         .where(eq(schema.memoryCaptureStates.conversationId, conversationId));
@@ -100,6 +94,9 @@ integration("media degraded turn（图片消息不得静默死亡）", () => {
       await postgres.db
         .delete(schema.notificationOutbox)
         .where(eq(schema.notificationOutbox.conversationId, conversationId));
+      await postgres.db
+        .delete(schema.mediaAssets)
+        .where(eq(schema.mediaAssets.conversationId, conversationId));
       await postgres.db
         .delete(schema.messages)
         .where(eq(schema.messages.conversationId, conversationId));
@@ -223,7 +220,11 @@ integration("media degraded turn（图片消息不得静默死亡）", () => {
     if (!turn) throw new Error("degraded turn was not created");
 
     const model = stubModel([replyDecision()]);
-    await processAgentTurn(postgres.db, model, "deepseek-v4-flash", {
+    await new AgentTurnExecutor(
+      postgres.db,
+      model,
+      "deepseek-v4-flash",
+    ).execute({
       turnId: turn.turnId,
       traceId: `media:${media.mediaId}`,
     });

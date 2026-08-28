@@ -263,24 +263,17 @@ class SendOperationContractTests(unittest.TestCase):
 
         self.assertEqual(gui.target_name, "Leaif")
 
-    def test_sender_fails_without_typing_opaque_ref_into_gui(self):
-        gui_created = False
-
-        def create_gui():
-            nonlocal gui_created
-            gui_created = True
-            return FakeGui(False)
-
+    def test_sender_fails_when_nickname_unresolved_without_searching_wxid(self):
+        gui = FakeGui(False)
         sender = WeChatChannelSender(
             db=UnresolvedContactDb(),
-            gui_factory=create_gui,
+            gui_factory=lambda: gui,
         )
-
-        self.assertEqual(
-            sender.send_text("wxid-contact", "hello"),
-            SendAttempt("failed", "channel_contact_unresolved"),
-        )
-        self.assertFalse(gui_created)
+        # 无昵称记录时不应把 wxid 当搜索目标，而应干净失败且不触碰 GUI。
+        attempt = sender.send_text("wxid-contact", "hello")
+        self.assertEqual(attempt.state, "failed")
+        self.assertIn("未找到可发送目标", attempt.error or "")
+        self.assertIsNone(gui.target_name)
 
     def test_operation_survives_event_store_and_http_host_restart(self):
         with tempfile.TemporaryDirectory() as directory:

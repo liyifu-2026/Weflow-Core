@@ -12,18 +12,31 @@ type Database = NodePgDatabase<typeof schema>;
 export type UserRole = "admin" | "operator";
 
 export async function listManagedUsers(db: Database) {
-  return db
+  const rows = await db
     .select({
       userId: schema.users.userId,
       username: schema.users.username,
       role: schema.users.role,
       status: schema.users.status,
       mustChangePassword: schema.users.mustChangePassword,
+      avatarFileId: schema.users.avatarFileId,
       createdAt: schema.users.createdAt,
       updatedAt: schema.users.updatedAt,
     })
     .from(schema.users)
     .orderBy(schema.users.createdAt);
+  // 头像只暴露相对路径（与 AuthenticatedUser.avatarUrl 一致），不泄漏文件 ID；
+  // 头像端点对已知用户始终有内容（上传 > 预设 > 默认预设）
+  return rows.map((row) => ({
+    userId: row.userId,
+    username: row.username,
+    role: row.role,
+    status: row.status,
+    mustChangePassword: row.mustChangePassword,
+    avatarUrl: `/api/v1/users/${row.userId}/avatar?v=${Math.floor(row.updatedAt.getTime() / 1_000)}`,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
 }
 
 export async function createManagedUser(
@@ -103,10 +116,21 @@ export async function updateManagedUser(
         role: schema.users.role,
         status: schema.users.status,
         mustChangePassword: schema.users.mustChangePassword,
+        avatarFileId: schema.users.avatarFileId,
         createdAt: schema.users.createdAt,
         updatedAt: schema.users.updatedAt,
       });
     if (!updated) return { status: "not_found" as const };
+    const projected = {
+      userId: updated.userId,
+      username: updated.username,
+      role: updated.role,
+      status: updated.status,
+      mustChangePassword: updated.mustChangePassword,
+      avatarUrl: `/api/v1/users/${updated.userId}/avatar?v=${Math.floor(updated.updatedAt.getTime() / 1_000)}`,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    };
 
     if (input.role || input.status === "disabled") {
       await transaction
@@ -131,7 +155,7 @@ export async function updateManagedUser(
         ...(input.status ? { status: input.status } : {}),
       },
     });
-    return { status: "ok" as const, user: updated };
+    return { status: "ok" as const, user: projected };
   });
 }
 

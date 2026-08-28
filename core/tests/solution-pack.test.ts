@@ -24,7 +24,7 @@ import {
   describeSolution,
   parseSolutionLock,
   verifySolutionSignature,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";
 
 let root: string;
 let previousStore: string | undefined;

@@ -14,10 +14,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "start": "node dist/tooling/weflowctl/src/cli.js"
+    "start": "node dist/tooling/weflowctl/src/cli.js",
+    "test": "node ../../core/node_modules/tsx/dist/cli.mjs --test test/*.test.ts"
   },
   "dependencies": {
-    "@weflow/solution-sdk": "link:../../packages/solution-sdk",
+    "@weflow-leaif/solution-sdk": "link:../../packages/solution-sdk",
     "esbuild": "0.25.6",
     "semver": "7.7.2",
     "tar": "7.4.3"

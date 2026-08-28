@@ -4,6 +4,10 @@
  * launch（weflow cookie 会话）→ 一次性 code（60s，单次有效）
  * → bridge 页跨源 POST exchange（code）→ WeKnora 代管会话载荷
  * → bridge 写入 WeKnora UI 的 localStorage 后跳转目标页。
+ *
+ * redirect：浏览器 GET 入口，要求 weflow 业务身份（cookie/Bearer），
+ * 服务端预检账号后 302 到 WeKnora bridge.html，bridge.html 复用 exchange 拿到会话。
+ * 与 launch 共享同一份 code 暂存（模块级），保证两种入口都走同一审计。
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -22,11 +26,39 @@ export type KnoraBridgeOptions = {
   encKey: string | undefined;
   tenantId: number;
   emailDomain: string;
+  /** WeKnora 站点 origin（无 /api/v1 后缀）；用于 /knora/redirect 302 跳转 */
+  origin: string | undefined;
 };
 
 const CODE_TTL_MS = 60_000;
 
 type LaunchCode = { userId: string; expiresAt: number };
+
+/**
+ * 一次性 code 暂存：模块级单例，使 redirect 也能消费 launch 发出的 code。
+ * 单进程内存（与现状一致）；TTL 60s，消费即删除。测试可通过 resetLaunchCodes() 隔离。
+ */
+const codes = new Map<string, LaunchCode>();
+
+/** 签发一次性 code（60s TTL） */
+function issueCode(userId: string): string {
+  const code = randomBytes(24).toString("base64url");
+  codes.set(code, { userId, expiresAt: Date.now() + CODE_TTL_MS });
+  return code;
+}
+
+/** 消费 code：返回 userId 或 null（不存在/过期/已消费） */
+function consumeCode(code: string): string | null {
+  const entry = codes.get(code);
+  if (!entry) return null;
+  codes.delete(code);
+  return entry.expiresAt >= Date.now() ? entry.userId : null;
+}
+
+/** 测试辅助：清空 code 暂存，避免跨用例污染 */
+export function resetLaunchCodes(): void {
+  codes.clear();
+}
 
 export function registerKnoraBridgeRoutes(
   server: FastifyInstance,
@@ -43,20 +75,6 @@ export function registerKnoraBridgeRoutes(
           options.emailDomain,
         )
       : null;
-
-  // 一次性 code 暂存（单进程内存即可；TTL 60s，消费即删除）
-  const codes = new Map<string, LaunchCode>();
-  const issueCode = (userId: string): string => {
-    const code = randomBytes(24).toString("base64url");
-    codes.set(code, { userId, expiresAt: Date.now() + CODE_TTL_MS });
-    return code;
-  };
-  const consumeCode = (code: string): string | null => {
-    const entry = codes.get(code);
-    if (!entry) return null;
-    codes.delete(code);
-    return entry.expiresAt >= Date.now() ? entry.userId : null;
-  };
 
   /** 会话载荷生成 + 审计；bootstrap 需求抛给调用方按 409 处理 */
   async function resolveSession(
@@ -79,6 +97,7 @@ export function registerKnoraBridgeRoutes(
       role: user.role as "admin" | "operator",
       mustChangePassword: user.mustChangePassword,
       avatarUrl: null,
+      avatarPreset: user.avatarPreset,
       displayName: user.displayName,
       tags: user.tags,
     });
@@ -114,6 +133,60 @@ export function registerKnoraBridgeRoutes(
       return reply.code(502).send({ error: "knora_bridge_failed" });
     }
     return reply.send({ code: issueCode(identity.user.userId), expiresIn: 60 });
+  });
+
+  /**
+   * 浏览器入口：要求 weflow 业务身份（cookie / Bearer）→
+   * 预检代管账号（与 /launch 一致：注册冲突时返回 409 JSON，由前端引导一次性绑定）→
+   * 签发 code 并 302 到 WeKnora 站点 bridge.html；bridge 跨源 exchange 走与 /launch 相同的 code 暂存。
+   *
+   * target 查询参数：bridge.html 落点（默认 /）；api 参数：bridge 调 exchange 用的 weflow 源，
+   * 不传则默认用请求 origin（与现有 iframe 桥接一致）。
+   */
+  server.get("/api/v1/knora/redirect", async (request, reply) => {
+    const identity = await requireBusinessIdentity(db, request, reply);
+    if (!identity) return;
+    if (!service) {
+      return reply.code(503).send({ error: "knora_bridge_unavailable" });
+    }
+    if (!options.origin) {
+      return reply.code(503).send({
+        error: "knora_origin_unconfigured",
+        message:
+          "WeKnora 站点 origin 未配置（设置 WEKNORA_ORIGIN 或保证 WEKNORA_BASE_URL 含 /api/v1 后缀）",
+      });
+    }
+    try {
+      await service.sessionFor(identity.user);
+    } catch (reason) {
+      if (reason instanceof KnoraBootstrapRequiredError) {
+        // 与 /launch 一致：浏览器场景下用 409 JSON 暴露 expectedEmail，
+        // 前端拿到后引导 bootstrap（POST /api/v1/knora/bootstrap）。
+        return reply.code(409).send({
+          error: "knora_bootstrap_required",
+          email: reason.expectedEmail,
+        });
+      }
+      request.log.error({ err: reason }, "knora bridge redirect failed");
+      return reply.code(502).send({ error: "knora_bridge_failed" });
+    }
+    const code = issueCode(identity.user.userId);
+    const query = (request.query ?? {}) as { target?: unknown; api?: unknown };
+    const target =
+      typeof query.target === "string" && query.target.startsWith("/")
+        ? query.target
+        : "/";
+    const api =
+      typeof query.api === "string" && /^https?:\/\//.test(query.api)
+        ? query.api
+        : `${request.protocol}://${request.headers.host ?? ""}`;
+    const url = new URL(
+      `${options.origin}/bridge.html`,
+    );
+    url.searchParams.set("code", code);
+    url.searchParams.set("target", target);
+    url.searchParams.set("api", api);
+    return reply.redirect(url.toString(), 302);
   });
 
   /** 跨源端点：bridge 页凭一次性 code 换取会话载荷（无 cookie，走 CORS 白名单） */

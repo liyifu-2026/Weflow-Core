@@ -67,6 +67,35 @@
 - 搜索 `weflow/apps/console` 中的业务专属标题、路由、组件；若找不到对应的 `weflow-solutions` 业务来源，即为违规。
 - 业务 UI 必须能在 `weflow-solutions/solutions/<solution>/solution.manifest.json` 的 `consoleExtensions` 中找到声明；找不到声明却出现在 Console 中，即为违规。
 
+## Console 路由与导航审计
+
+### 新增路由规则
+
+`apps/console/src/router/index.ts` 中的每个路由必须满足以下条件之一：
+
+| 条件 | 允许的路由 |
+|------|-----------|
+| 平台认证 | `/login`, `/change-password` |
+| 平台管理 | `/system/status`, `/system/users`, `/system/audit`, `/settings`, `/platform/solutions` |
+| 平台通用 | `/`（总览）, `/help`, `/account/profile` |
+| ExtensionHost | `/extensions/:solutionId/:extensionId`, `/:pathMatch(.*)*`（catch-all） |
+| 重定向 | `/system/runtime` → `/system/status`, `/system/knowledge-engine` → `/system/status` |
+
+**禁止在 router/index.ts 中注册任何其他路由。** 业务页面必须通过 `consoleExtensions` + ExtensionHost 加载。
+
+### 侧边栏导航规则
+
+`OperationsShell.vue` 的 `groups` 数组只允许以下标签：
+
+- `"工作台"` → 仅含 `"平台总览"`
+- `"平台"` → 仅含 `"系统状态"`, `"业务方案"`, `"用户与角色"`, `"审计日志"`
+
+**禁止在 `groups` 中添加任何业务导航项。** 业务导航必须通过 `dynamicGroups`（从 `extensions.navItems` 动态生成）注入。
+
+### API 响应中立性
+
+`core/modules/operations/` 的 API 响应不得新增业务专属字段。已有字段的业务语义由 Solution 层自行解释。
+
 ## Architectural rules
 
 1. Core 通过 `channel.events`、`channel.send`、`channel.media`、`channel.contacts` 与 Channel Host 通信。

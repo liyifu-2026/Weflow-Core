@@ -150,7 +150,7 @@ Console 是 Weflow 的管理与运营工作台，当前页面包括：
 | `/system/users` | 用户与角色 | 账号发放、重置密码、禁用、撤销会话 | admin |
 | `/system/operations` | 运行 | Agent 总开关、能力开关、运行快照、SSE 实时流 | admin |
 | `/system/audit` | 审计日志 | 关键操作审计与筛选 | admin |
-| `/settings` | 统一设置 | 平台设置与已安装业务包的设置贡献项 | admin |
+| `/settings` | 系统设置 | 平台设置与已安装业务包的设置贡献项 | admin |
 | `/help` | 帮助/技术文档 | 渲染 `docs/technical-documentation.md` | 登录 |
 
 Console 是平台宿主，不拥有具体业务。业务包通过 `consoleExtensions` 动态声明侧栏、设置、Dashboard 卡片与 API 路由。

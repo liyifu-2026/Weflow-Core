@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isAgentAction } from "@weflow/contracts";
+import { isAgentAction } from "@weflow-leaif/contracts";
 import {
   createPluginHarness,
   isPluginManifest,
-} from "@weflow/plugin-sdk";
-import type { RuntimePluginManifest } from "@weflow/plugin-sdk";
+} from "@weflow-leaif/plugin-sdk";
+import type { RuntimePluginManifest } from "@weflow-leaif/plugin-sdk";
 import { parseSolutionSummary } from "@weflow/admin-sdk";
 
 describe("external consumer fixture", () => {

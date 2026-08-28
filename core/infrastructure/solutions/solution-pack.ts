@@ -33,7 +33,7 @@ import {
   type SolutionLockV1,
   type SolutionPackageDescriptor,
   type SolutionSignature,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";
 import { installSolutionToStore } from "./solution-store.js";
 import {
   artifactRef,

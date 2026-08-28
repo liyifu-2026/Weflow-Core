@@ -49,7 +49,7 @@
 
 - `apps/console/src/weflow/components/WfSwitch.vue`（新增）
   - 可复用 Switch，支持 disabled / aria / 滑动动画。
-- `apps/console/src/weflow/views/OperationsConsoleView.vue`
+- `weflow-solutions/solutions/customer-support/apps/operations-web/src/views/OperationsConsoleView.vue`（已从 Console 迁至 Solution 层）
   - 首屏改为单次聚合请求。
   - 接入 SSE 实时更新。
   - Agent 总开关、AI 自动回复、知识/记忆/图片理解改为 Switch。
@@ -144,7 +144,7 @@
 ### 前端
 
 - `apps/console/src/weflow/views/SolutionsView.vue`
-- `apps/console/src/weflow/views/OperationsConsoleView.vue`
+- `weflow-solutions/solutions/customer-support/apps/operations-web/src/views/OperationsConsoleView.vue`（已从 Console 迁至 Solution 层）
 - `apps/console/src/weflow/views/OverviewV2.vue`
 - `apps/console/src/weflow/views/AuditView.vue`
 - `apps/console/src/weflow/views/SystemStatusView.vue`

@@ -76,6 +76,8 @@ export interface AgentStrategyContext {
   facts: Record<string, unknown>;
   availableTools: string[];
   profile?: unknown;
+  /** 会话类型：私聊或群聊；Strategy 可据此差异化回复策略 */
+  chatType?: "private" | "group";
 }
 
 export interface AgentStrategyResponse {

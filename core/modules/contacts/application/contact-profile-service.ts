@@ -16,14 +16,24 @@ export type ContactProfilePatch = {
   tags?: string[] | undefined;
   agentEnabled?: boolean | undefined;
   sharedAlias?: string | null | undefined;
+  /** 黑名单：true = 不建 Agent Turn、不出现在会话列表、不推通知 */
+  blocked?: boolean | undefined;
 };
 
-/** 根据渠道和渠道联系人ID生成确定性联系人ID */
+/**
+ * 根据渠道、账号和渠道联系人ID生成确定性联系人ID（ADR-0005 多账号隔离）。
+ * default 账号保持旧格式（contact:channel:<ref>），兼容存量数据不回写；
+ * 非 default 账号携带 account 段（contact:channel:<account>:<ref>）实现隔离。
+ */
 export function contactIdForChannel(
   channel: string,
   channelContactId: string,
+  account?: string | null,
 ): string {
-  return `contact:${channel}:${channelContactId}`;
+  const acc = account && account.trim() ? account.trim() : "default";
+  return acc === "default"
+    ? `contact:${channel}:${channelContactId}`
+    : `contact:${channel}:${acc}:${channelContactId}`;
 }
 
 /** 通过会话ID查询关联的联系人资料 */
@@ -110,16 +120,16 @@ export async function updateConversationContactProfile(
       });
     }
 
-    if (input.patch.agentEnabled === false) {
+    if (input.patch.agentEnabled === false || input.patch.blocked === true) {
       await new AgentTurnService(transaction).suppressPolicyForConversation(
         input.conversationId,
-        "agent_disabled",
+        input.patch.blocked === true ? "contact_blocked" : "agent_disabled",
       );
       await transaction
         .update(schema.messages)
         .set({
           sendState: "cancelled_policy",
-          sendError: "agent_disabled",
+          sendError: input.patch.blocked === true ? "contact_blocked" : "agent_disabled",
           sendUpdatedAt: new Date(),
         })
         .where(
@@ -153,7 +163,10 @@ export async function isConversationAgentEnabled(
   conversationId: string,
 ): Promise<boolean> {
   const profiles = await db
-    .select({ agentEnabled: schema.contactProfiles.agentEnabled })
+    .select({
+      agentEnabled: schema.contactProfiles.agentEnabled,
+      blocked: schema.contactProfiles.blocked,
+    })
     .from(schema.conversations)
     .innerJoin(
       schema.contactProfiles,
@@ -161,5 +174,6 @@ export async function isConversationAgentEnabled(
     )
     .where(eq(schema.conversations.conversationId, conversationId))
     .limit(1);
-  return profiles[0]?.agentEnabled ?? false;
+  const profile = profiles[0];
+  return (profile?.agentEnabled ?? true) && !(profile?.blocked ?? false);
 }

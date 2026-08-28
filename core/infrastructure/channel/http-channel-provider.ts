@@ -36,6 +36,7 @@ import type {
   ChannelSendPayload,
   CreateChannelSendOperationInput,
 } from "../../modules/channel/contracts/channel-send-operations.js";
+import { CHANNEL_PROTOCOL } from "../../modules/channel/contracts/channel-send-operations.js";
 import type { PluginDefinition } from "../runtime/kernel/index.js";
 import { CHANNEL_EVENTS_CAPABILITY } from "../runtime/capabilities/channel-events.js";
 import { CHANNEL_MEDIA_CAPABILITY } from "../runtime/capabilities/channel-media.js";
@@ -60,6 +61,8 @@ const hostEventSchema = z
     mentioned: z.boolean().nullable().optional(),
     /** 入站引用原消息（ADR-0006）；缺省 = 无引用 */
     replyToChannelMessageId: z.string().nullable().optional(),
+    /** 历史回溯事件（空库 Backfill，协议 v2）；缺省 = 实时事件 */
+    historical: z.boolean().nullable().optional(),
     occurredAt: z.string().nullable().optional(),
     observedAt: z.string().min(1),
     isSelf: z.boolean(),
@@ -107,7 +110,7 @@ const hostSendOperationSchema = z
     conversationRef: z.string().min(1),
     payload: z
       .object({
-        kind: z.enum(["text", "reply", "mention", "poke", "image", "file", "voice"]),
+        kind: z.enum(["text", "reply", "mention", "poke", "image", "file", "recall", "voice"]),
         text: z.string().optional(),
         replyToChannelMessageId: z.string().optional(),
         mentionContactRefs: z.array(z.string()).optional(),
@@ -131,7 +134,8 @@ export class ChannelProviderError extends Error {
     public readonly code:
       | "channel_transport_unavailable"
       | "channel_http_error"
-      | "channel_protocol_invalid",
+      | "channel_protocol_invalid"
+      | "channel_protocol_mismatch",
     message: string,
     options?: ErrorOptions,
   ) {
@@ -158,6 +162,9 @@ export class HttpChannelProvider
   readonly #token: string;
   readonly #timeoutMs: number;
   readonly #fetch: typeof globalThis.fetch;
+  /** capabilities 校验结果缓存：undefined = 未校验；false = 协议失配 */
+  #protocolOk: boolean | undefined;
+  #protocolDetail: string | undefined;
 
   public constructor(options: HttpChannelProviderOptions) {
     if (!options.token) throw new Error("channel_host_token_required");
@@ -165,6 +172,81 @@ export class HttpChannelProvider
     this.#token = options.token;
     this.#timeoutMs = options.timeoutMs ?? 15_000;
     this.#fetch = options.fetch ?? globalThis.fetch;
+    this.#protocolOk = undefined;
+    this.#protocolDetail = undefined;
+  }
+
+  /**
+   * 协议对账：GET /api/v1/channel/capabilities 与 CHANNEL_PROTOCOL 比对。
+   * 失配时抛 channel_protocol_mismatch，调用方（发送循环）应暂停发送、保留队列。
+   * 结果缓存；可通过 protocolStatus() 读取（供 doctor/诊断）。
+   */
+  public async ensureProtocol(): Promise<void> {
+    if (this.#protocolOk !== undefined) {
+      if (!this.#protocolOk) {
+        throw new ChannelProviderError(
+          "channel_protocol_mismatch",
+          this.#protocolDetail ?? "host protocol mismatch",
+        );
+      }
+      return;
+    }
+    let response: Response;
+    try {
+      response = await this.#fetch(
+        `${this.#baseUrl}/api/v1/channel/capabilities`,
+        {
+          headers: { authorization: `Bearer ${this.#token}` },
+          signal: AbortSignal.timeout(this.#timeoutMs),
+        },
+      );
+    } catch (error) {
+      // host 不可达不判失配——transport 层已有自己的错误语义
+      this.#protocolOk = true;
+      this.#protocolDetail = "host unreachable; protocol check skipped";
+      return;
+    }
+    let payload: Record<string, unknown> | undefined;
+    try {
+      payload = (await response.json()) as Record<string, unknown>;
+    } catch {
+      this.#protocolOk = true;
+      this.#protocolDetail = "host returned non-JSON capabilities; check skipped";
+      return;
+    }
+    const problems: string[] = [];
+    const version = payload["protocolVersion"];
+    if (version !== CHANNEL_PROTOCOL.protocolVersion) {
+      problems.push(`protocolVersion ${String(version)} != ${String(CHANNEL_PROTOCOL.protocolVersion)}`);
+    }
+    const states = new Set(
+      Array.isArray(payload["sendOperationStates"]) ? (payload["sendOperationStates"] as string[]) : [],
+    );
+    for (const state of CHANNEL_PROTOCOL.sendOperationStates) {
+      if (!states.has(state)) problems.push(`missing sendOperationState: ${state}`);
+    }
+    const kinds = new Set(
+      Array.isArray(payload["sendKinds"]) ? (payload["sendKinds"] as string[]) : [],
+    );
+    for (const kind of CHANNEL_PROTOCOL.sendKinds) {
+      if (!kinds.has(kind)) problems.push(`missing sendKind: ${kind}`);
+    }
+    this.#protocolOk = problems.length === 0;
+    this.#protocolDetail =
+      problems.length === 0
+        ? `protocol v${String(version)} in sync`
+        : `protocol mismatch: ${problems.join("; ")}`;
+    if (!this.#protocolOk) {
+      throw new ChannelProviderError(
+        "channel_protocol_mismatch",
+        this.#protocolDetail,
+      );
+    }
+  }
+
+  /** 只读协议状态（供 dev doctor / 诊断端点） */
+  public protocolStatus(): { ok: boolean | undefined; detail: string | undefined } {
+    return { ok: this.#protocolOk, detail: this.#protocolDetail };
   }
 
   public async pullEvents(
@@ -245,6 +327,7 @@ export class HttpChannelProvider
   public async create(
     input: CreateChannelSendOperationInput,
   ): Promise<ChannelSendOperation> {
+    await this.ensureProtocol();
     const response = await this.#request(
       `${this.#baseUrl}/api/v1/channel/send`,
       {
@@ -279,6 +362,12 @@ export class HttpChannelProvider
     // 其余音频格式由对应 Channel Host 扩展白名单后再放开）。
     return this.#resolveMedia(mediaRef, {
       allowedMimeTypes: ["audio/x-silk"],
+    });
+  }
+
+  public async resolveVideo(mediaRef: string): Promise<ChannelMediaResult> {
+    return this.#resolveMedia(mediaRef, {
+      allowedMimeTypes: ["video/mp4"],
     });
   }
 
@@ -344,6 +433,7 @@ export class HttpChannelProvider
   public async get(
     operationId: string,
   ): Promise<ChannelSendOperation | undefined> {
+    await this.ensureProtocol();
     const response = await this.#request(
       `${this.#baseUrl}/api/v1/channel/send-operations/${encodeURIComponent(operationId)}`,
       { method: "GET", allowNotFound: true },
@@ -445,6 +535,7 @@ function toChannelEvent(event: z.infer<typeof hostEventSchema>): ChannelEvent {
     mimeType: event.mimeType ?? null,
     mentioned: event.mentioned ?? null,
     replyToChannelMessageId: event.replyToChannelMessageId ?? null,
+    historical: event.historical ?? null,
     occurredAt: event.occurredAt ?? null,
     observedAt: event.observedAt,
     isSelf: event.isSelf,
@@ -471,10 +562,13 @@ function parseSendOperation(value: unknown): ChannelSendOperation {
           };
         case "poke":
           return { kind: "poke" };
-        case "image":
+        case "recall":
+          return { kind: "recall" };
         case "voice":
+          return { kind: "voice", path: operation.payload.path ?? "" };
+        case "image":
           return {
-            kind: operation.payload.kind,
+            kind: "image",
             path: operation.payload.path ?? "",
           };
         case "file":

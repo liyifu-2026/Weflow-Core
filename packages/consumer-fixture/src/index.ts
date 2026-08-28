@@ -3,12 +3,12 @@ import type {
   AgentExecutionStrategy,
   RuntimeStatus,
   SolutionInstallationState,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 import type {
   PluginDefinition,
   RuntimePluginManifest,
   ToolRegistration,
-} from "@weflow/plugin-sdk";
+} from "@weflow-leaif/plugin-sdk";
 import type {
   AdminClient,
   SolutionOperation,

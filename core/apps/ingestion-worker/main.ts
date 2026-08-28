@@ -23,6 +23,7 @@ import { MimoAudioClient } from "../../infrastructure/model_runtime/mimo-audio-c
 import { processImageDescription } from "../../modules/media/application/process-image-description.js";
 import { processVoiceTranscription } from "../../modules/media/application/process-voice-transcription.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
+import { AudioTranscriptionsClient } from "../../infrastructure/model_runtime/audio-transcriptions-client.js";
 
 await runProcess({
   name: "ingestion-worker",
@@ -33,6 +34,8 @@ await runProcess({
       `${config.fileStorageRoot}/media`,
     );
     const vision = config.vision;
+    // 专用 ASR 端点（OpenAI 兼容 audio/transcriptions，如硅基流动）
+    const asr = config.asr;
     // 仅在配置了多模态模型时创建媒体处理队列消费者（图片视觉 / 语音 ASR 共用端点）
     const mediaWorker = vision
       ? new Worker<JobEnvelope>(
@@ -41,20 +44,40 @@ await runProcess({
             // 运行时模型选择：切换 vision_model 无需重启
             const runtime = await readRuntimeSettings(postgres.db);
             if (job.data.jobType === "media.transcribe_voice") {
-              // 语音转写：读取 SILK → 平台转码器产出 MP3 → MiMo ASR → 持久化描述
+              // 语音转写：读取 SILK → 平台转码器产出 MP3 → ASR → 持久化描述。
+              // 转码工具链路径：VOICE_PYTHON_PATH / VOICE_FFMPEG_PATH 优先，
+              // 回退到本机部署约定（channel-host venv 的 pysilk + 工具箱 ffmpeg）。
+              const pythonPath =
+                process.env.VOICE_PYTHON_PATH ??
+                "C:\\Users\\12991\\Desktop\\We\\weflow\\runtimes\\channel-host-wechat\\.venv\\Scripts\\python.exe";
+              const ffmpegPath =
+                process.env.VOICE_FFMPEG_PATH ??
+                "C:\\Program Files (x86)\\MarukoToolbox\\tools\\ffmpeg.exe";
+              // 配置了专用 ASR 端点时用标准 audio/transcriptions 客户端，
+              // 否则回落 MiMo chat/completions 内联音频。
+              const audioClient = asr
+                ? new AudioTranscriptionsClient({
+                    baseUrl: asr.baseUrl,
+                    apiKey: asr.apiKey,
+                    model: asr.model,
+                    timeoutMs: asr.timeoutMs,
+                  })
+                : new MimoAudioClient({
+                    baseUrl: vision.baseUrl,
+                    apiKey: vision.apiKey,
+                    model: vision.asrModel,
+                    timeoutMs: vision.timeoutMs,
+                  });
               await processVoiceTranscription(
                 postgres.db,
                 mediaStorage,
-                new MimoAudioClient({
-                  baseUrl: vision.baseUrl,
-                  apiKey: vision.apiKey,
-                  model: vision.asrModel,
-                  timeoutMs: vision.timeoutMs,
-                }),
-                vision.asrModel,
+                audioClient,
+                asr?.model ?? vision.asrModel,
                 job.data.businessEntityId,
                 {
                   transcoder: new PysilkFfmpegTranscoder({
+                    pythonPath,
+                    ffmpegPath,
                     onDiagnostics: (line) => {
                       logger.debug({ line }, "audio transcode diagnostics");
                     },

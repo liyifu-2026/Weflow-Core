@@ -8,7 +8,7 @@
 import {
   describeSolution,
   type SolutionManifestV1,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";
 import {
   artifactKind,
   normalizeRef,

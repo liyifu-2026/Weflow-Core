@@ -9,4 +9,6 @@ export type {
   ChannelSendOperation,
   CreateChannelSendOperationInput,
   ChannelSendOperations,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
+
+export { CHANNEL_PROTOCOL } from "@weflow-leaif/contracts";

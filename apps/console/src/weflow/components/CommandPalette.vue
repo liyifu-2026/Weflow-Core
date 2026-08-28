@@ -71,13 +71,6 @@ const pages = computed<Command[]>(() => [
           to: { path: "/system/users" },
         },
         {
-          key: "page-operations",
-          kind: "页面",
-          title: "运行",
-          detail: "查看平台运行任务",
-          to: { path: "/system/operations" },
-        },
-        {
           key: "page-audit",
           kind: "页面",
           title: "审计日志",

@@ -7,7 +7,7 @@ import {
   type Postgres,
 } from "../infrastructure/postgres/client.js";
 import * as schema from "../infrastructure/postgres/schema.js";
-import { processPlannedToolTurn } from "../modules/agent/application/process-planned-tool-turn.js";
+import { AgentTurnExecutor } from "../modules/agent/application/agent-turn-executor.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -101,15 +101,20 @@ integration("planned tool turn recovery", () => {
           Response.json({ choices: [{ message: { content: "" } }] }),
         ),
     });
+    const failingExecutor = new AgentTurnExecutor(
+      postgres.db,
+      emptyResponseClient,
+      "test",
+    );
     await expect(
-      processPlannedToolTurn(
-        postgres.db,
-        emptyResponseClient,
-        "test",
-        turnId,
-        turnId,
-      ),
+      failingExecutor.execute({ turnId, traceId: turnId }),
     ).rejects.toThrow("model API returned an empty response");
+    // 工具阶段失败后轮次停留在 running；分发器的 stale 恢复会把它重置回
+    // queued，由 AgentTurnExecutor 走 queued+持久化工具检查点的 resume 路径。
+    await postgres.db
+      .update(schema.agentTurns)
+      .set({ status: "queued" })
+      .where(eq(schema.agentTurns.turnId, turnId));
 
     const response = JSON.stringify({
       reply_segments: ["请提供软件版本和报错截图，我来帮您排查。"],
@@ -127,13 +132,11 @@ integration("planned tool turn recovery", () => {
           Response.json({ choices: [{ message: { content: response } }] }),
         ),
     });
-    await processPlannedToolTurn(
+    await new AgentTurnExecutor(
       postgres.db,
       successClient,
       "test",
-      turnId,
-      turnId,
-    );
+    ).execute({ turnId, traceId: turnId });
 
     const turns = await postgres.db
       .select({ status: schema.agentTurns.status })

@@ -17,6 +17,10 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../postgres/schema.js";
 import { createJobQueue, type JobEnvelope } from "./job-queue.js";
 import { resolveExecutionProfileForAdmission } from "../../modules/agent/application/execution-profile-service.js";
+import {
+  MULTIMODAL_STAGE_STATUSES,
+  STALE_AFTER_MS,
+} from "../../modules/media/application/media-processing-policy.js";
 
 /**
  * 分发器依赖的业务操作：由组合根（apps/api）注入，
@@ -37,12 +41,6 @@ export type MediaDispatcherDependencies = {
 
 /** 媒体处理队列名称 */
 export const MEDIA_PROCESSING_QUEUE = "media-processing";
-
-/** 多模态处理阶段状态：进入该状态后只依赖 Ingestion Worker 的处理能力 */
-const MULTIMODAL_STAGE_STATUSES = ["processing_queued", "processing"] as const;
-
-/** 处理阶段停滞阈值：超过该时长未完成即视为卡死 */
-const STALE_AFTER_MS = 15 * 60_000;
 
 /** 降级 Turn 每次扫描批量上限 */
 const DEGRADED_TURN_BATCH = 50;

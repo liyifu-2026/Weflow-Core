@@ -158,6 +158,24 @@ describe("classifyForTriage (unit)", () => {
     expect(parsed.timeoutMs).toBe(DEFAULT_TRIAGE_POLICY.timeoutMs);
     expect(parsed.allowDirectReply).toBe(true);
   });
+
+  it("extractTriagePolicy 忽略接待编排新增字段（notes/defaultEmployeeKey/employeeRoutes）", () => {
+    const parsed = extractTriagePolicy({
+      pipeline: {
+        triage: { enabled: true, riskKeywords: ["投诉"] },
+        notes: { triage: "说明", gate: "永不旁路" },
+        defaultEmployeeKey: "after-sales",
+        employeeRoutes: [
+          { id: "route-1", keywords: ["退货"], employeeKey: "after-sales" },
+        ],
+      },
+    });
+    expect(parsed).toEqual({
+      ...DEFAULT_TRIAGE_POLICY,
+      enabled: true,
+      riskKeywords: ["投诉"],
+    });
+  });
 });
 
 const databaseUrl = process.env.TEST_DATABASE_URL;

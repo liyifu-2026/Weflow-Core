@@ -13,8 +13,10 @@ import { registerKnowledgeRoutes } from "../modules/knowledge/interface/http-rou
 import { randomUUID } from "node:crypto";
 import { createHandoff } from "../modules/handoff/application/handoff-service.js";
 import { buildHandoffBriefing } from "../modules/handoff/application/handoff-briefing.js";
-import type { OpenAiCompatibleClient } from "../infrastructure/model_runtime/openai-compatible-client.js";
-import type { WeKnoraKnowledgeClient } from "../infrastructure/knowledge/weknora-knowledge-client.js";
+import type {
+  KnowledgeChatCompletionModel,
+  KnowledgeProvider,
+} from "../modules/knowledge/contracts/knowledge-search.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
@@ -61,21 +63,23 @@ integration("Mobile knowledge cockpit trust boundaries", () => {
       throw new Error("selected evidence must not call full knowledge stream");
     },
     ensureSuggestions: () => undefined,
-  } as unknown as WeKnoraKnowledgeClient;
+  } as unknown as KnowledgeProvider;
   const model = {
     complete: () => {
       completeCalls += 1;
-      return completeCalls === 1
-        ? "只基于受信证据生成的回答"
-        : JSON.stringify({
-            reply: "只基于受信证据生成的回答",
-            followUps: [],
-            troubleshootingSteps: [],
-            risks: [],
-            referenceIds: ["chunk-1"],
-          });
+      return Promise.resolve(
+        completeCalls === 1
+          ? "只基于受信证据生成的回答"
+          : JSON.stringify({
+              reply: "只基于受信证据生成的回答",
+              followUps: [],
+              troubleshootingSteps: [],
+              risks: [],
+              referenceIds: ["chunk-1"],
+            }),
+      );
     },
-  } as unknown as OpenAiCompatibleClient;
+  } satisfies KnowledgeChatCompletionModel;
 
   beforeAll(async () => {
     postgres = createPostgres(

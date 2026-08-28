@@ -261,6 +261,19 @@ const healthCheckSchema = z.union([
   healthCheckLegacySchema,
 ]);
 
+/** 平台总览卡片契约（metric 由平台计算，href 指向 Console 内相对路径） */
+export const dashboardContributionSchema = z
+  .object({
+    id: z.string().trim().min(1).max(64),
+    title: z.string().trim().min(1).max(80),
+    metric: z
+      .enum(["today_conversations", "pending_handoffs", "active_solutions"])
+      .optional(),
+    href: z.string().trim().min(1).max(300).optional(),
+    unit: z.string().trim().min(1).max(16).optional(),
+  })
+  .strict();
+
 const consoleExtensionSchema = z
   .object({
     id: idSchema,
@@ -313,6 +326,12 @@ export const solutionManifestSchema = z
     applications: z.array(applicationSchema).max(64),
     healthChecks: z.array(healthCheckSchema).max(64),
     consoleExtensions: z.array(consoleExtensionSchema).max(64).default([]),
+    // 平台总览卡片（dashboardContributions）：业务方案向平台总览声明的小卡片。
+    // metric 由平台按 key 计算；href 为 Console 内相对路径（业务页面由 ExtensionHost 承载）。
+    dashboardContributions: z
+      .array(dashboardContributionSchema)
+      .max(16)
+      .default([]),
   })
   .strict();
 

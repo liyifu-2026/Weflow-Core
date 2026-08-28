@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      '@weflow/solution-sdk':
+      '@weflow-leaif/solution-sdk':
         specifier: link:../../packages/solution-sdk
         version: link:../../packages/solution-sdk
       esbuild:

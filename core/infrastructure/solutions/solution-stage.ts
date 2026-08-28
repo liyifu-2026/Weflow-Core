@@ -19,7 +19,7 @@ import * as esbuild from "esbuild";
 import {
   digestArtifactPath,
   type SolutionManifestV1,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";
 
 export const STAGE_EXCLUDED = new Set([
   "node_modules",

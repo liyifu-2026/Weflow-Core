@@ -102,6 +102,34 @@ def create_media_resolver(
             _remove_directory(request_dir)
             return _resolve_thumbnail(downloader, conversation_ref, local_id, root)
 
+        if kind == "video":
+            try:
+                path = downloader.download_video(
+                    conversation_ref,
+                    local_id,
+                    save_dir=str(request_dir),
+                )
+            except RuntimeError:
+                _remove_directory(request_dir)
+                return ChannelMediaReadResult.pending()
+            except ValueError:
+                _remove_directory(request_dir)
+                return ChannelMediaReadResult.failed("media_unreadable")
+            except OSError:
+                _remove_directory(request_dir)
+                return ChannelMediaReadResult.pending()
+            except Exception:
+                _remove_directory(request_dir)
+                return ChannelMediaReadResult.failed("media_source_error")
+            if not path or not os.path.isfile(path):
+                _remove_directory(request_dir)
+                return ChannelMediaReadResult.failed("video_not_found")
+            return ChannelMediaReadResult.ready(
+                path,
+                "video/mp4",
+                cleanup=lambda: _remove_directory(request_dir),
+            )
+
         if kind == "voice":
             try:
                 path = downloader.download_voice(

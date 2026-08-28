@@ -13,16 +13,33 @@ import {
   solutionPayloadDigestBrowser,
   validateSolutionLock,
   validateSolutionManifest,
-} from "@weflow/solution-sdk/browser";
+} from "@weflow-leaif/solution-sdk/browser";
 
 type Installation = {
   solutionId: string;
+  /** store 中已安装的版本列表（权威 read model） */
+  installedVersions: string[];
+  /** 当前激活版本（null = 已安装未激活） */
+  activeVersion: string | null;
+  manifest?: { name: string; publisher: string; artifactCount: number; applications: string[] };
+  health?: { ok: boolean; reason?: string };
+};
+
+type NpmPackageSummary = {
+  name: string;
   version: string;
-  desiredState: string;
-  observedState: string;
-  healthState: string;
-  createdAt: string;
-  updatedAt: string;
+  description: string;
+  publisher: string;
+  publishedAt: string | null;
+  links: { npm: string | null; homepage: string | null; repository: string | null };
+  icon: string;
+};
+
+type EnrichedPackage = NpmPackageSummary & {
+  installedVersions: string[];
+  activeVersion: string | null;
+  updateAvailable: boolean;
+  status: "installed" | "update-available" | "not-installed";
 };
 
 type Operation = {
@@ -40,11 +57,9 @@ type Operation = {
   createdAt: string;
 };
 
-type Detail = {
-  installation: Installation;
+type Detail = Installation & {
   recentOperations: Operation[];
 };
-
 type SecretSlotStatus = {
   name: string;
   kind: string;
@@ -89,29 +104,44 @@ const notice = ref("");
 const importBusy = ref(false);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-const trackedOperationId = ref<string | null>(null);
+  // npm 风格插件市场状态
+  const marketView = ref<"installed" | "marketplace">("installed");
+  const marketLoading = ref(false);
+  const marketError = ref("");
+  const marketPackages = ref<EnrichedPackage[]>([]);
+  const marketScope = ref("@weflow-leaif");
+  const marketRegistry = ref("https://registry.npmjs.org");
+  const marketAutoUpdate = ref<{ enabled: boolean; strategy: string } | null>(null);
+  const marketBusy = ref<string | null>(null);
+  const marketNotice = ref("");
+  const marketConfirm = ref<{ name: string; version: string } | null>(null);
+  const marketConfirmMode = ref<"install" | "update">("install");
+  const marketConfirmStrategy = ref("patch");
+  const marketConfirmError = ref("");
+  const marketConfirmBusy = ref(false);
+  const marketOperationOpen = ref(false);
+  const marketOperation = ref<Operation | null>(null);
+  const marketOperationId = ref<string | null>(null);
+  let marketOperationTimer: ReturnType<typeof setInterval> | null = null;
+
+  const trackedOperationId = ref<string | null>(null);
 const trackedOperation = ref<Operation | null>(null);
 const trackingOpen = ref(false);
 let trackingTimer: ReturnType<typeof setInterval> | null = null;
 
 const canActivate = computed(() => {
-  const state = selected.value?.observedState;
-  return (
-    state === "installed" || state === "configured" || state === "degraded"
+  // 已安装但未激活（有版本列表、无 activeVersion）
+  return Boolean(
+    selected.value &&
+      (selected.value.installedVersions?.length ?? 0) > 0 &&
+      !selected.value.activeVersion,
   );
 });
 const canDisable = computed(() => {
-  const state = selected.value?.observedState;
-  return state === "active" || state === "degraded";
+  return Boolean(selected.value?.activeVersion);
 });
 const canUninstall = computed(() => {
-  const state = selected.value?.observedState;
-  return Boolean(
-    state &&
-      state !== "absent" &&
-      state !== "removed" &&
-      state !== "uninstalling",
-  );
+  return Boolean(selected.value && (selected.value.installedVersions?.length ?? 0) > 0);
 });
 
 function samplePayload() {
@@ -271,6 +301,12 @@ async function selectSolution(installation: Installation) {
       `/api/v1/admin/solutions/${encodeURIComponent(installation.solutionId)}`,
     );
     detail.value = data;
+    // 把 detail 的 manifest/health 回填到 selected，表格健康列同步
+    selected.value = {
+      ...selected.value!,
+      ...(data.manifest ? { manifest: data.manifest } : {}),
+      ...(data.health ? { health: data.health } : {}),
+    };
     const secretData = await api<{ slots: SecretSlotStatus[] }>(
       `/api/v1/admin/solutions/${encodeURIComponent(installation.solutionId)}/secrets`,
     );
@@ -594,8 +630,181 @@ function operationTypeLabel(value: string): string {
   return map[value] ?? value;
 }
 
-onBeforeUnmount(stopTracking);
+async function loadMarketplace() {
+  marketLoading.value = true;
+  marketError.value = "";
+  try {
+    const qs = new URLSearchParams({
+      scope: marketScope.value,
+      registryBase: marketRegistry.value,
+    });
+    const resp = await api<{
+      packages: EnrichedPackage[];
+      scope: string;
+      registry: string;
+      autoUpdate: { enabled: boolean; strategy: string };
+    }>(`/api/v1/admin/solutions/market?${qs.toString()}`);
+    marketPackages.value = resp.packages;
+    marketScope.value = resp.scope;
+    marketRegistry.value = resp.registry;
+    marketAutoUpdate.value = resp.autoUpdate;
+  } catch (reason) {
+    marketError.value = reason instanceof Error ? reason.message : "获取市场数据失败";
+  } finally {
+    marketLoading.value = false;
+  }
+}
+
+async function installFromNpm(name: string, version?: string, activate = true) {
+  marketBusy.value = "installing";
+  marketNotice.value = "";
+  try {
+    const resp = await api<{
+      solutionId: string;
+      version: string;
+      manifestDigest: string;
+      storeDir: string;
+      activatedVersion: string | null;
+      bytes: number;
+      integrity: string | null;
+      operationId: string;
+    }>("/api/v1/admin/solutions/install-from-npm", {
+      method: "POST",
+      body: JSON.stringify({ name, version, activate }),
+    });
+    // Start polling the real operation record
+    startMarketOperationPollingId(resp.operationId);
+    marketNotice.value = `安装 Operation 已创建，Runner 将自动执行`;
+    await loadMarketplace(); // Refresh list
+  } catch (reason) {
+    marketNotice.value = reason instanceof Error ? reason.message : "安装失败";
+    marketConfirmError.value = marketNotice.value;
+  } finally {
+    marketBusy.value = null;
+  }
+}
+
+async function updateFromNpm(name: string, strategy = "patch", explicitVersion?: string) {
+  marketBusy.value = "updating";
+  marketNotice.value = "";
+  try {
+    const resp = await api<{
+      solutionId: string;
+      from: string | null;
+      to: string;
+      current: string | null;
+      status: string;
+      bytes: number;
+      integrity: string | null;
+      operationId: string;
+    }>("/api/v1/admin/solutions/update-from-npm", {
+      method: "POST",
+      body: JSON.stringify({ name, strategy, explicitVersion }),
+    });
+    startMarketOperationPollingId(resp.operationId);
+    marketNotice.value = `更新 Operation 已创建，Runner 将自动执行`;
+    await loadMarketplace();
+  } catch (reason) {
+    marketNotice.value = reason instanceof Error ? reason.message : "更新失败";
+    marketConfirmError.value = marketNotice.value;
+  } finally {
+    marketBusy.value = null;
+  }
+}
+
+async function startMarketOperationPolling(solutionId: string) {
+  stopMarketOperationPolling();
+  marketOperationId.value = `market-${solutionId}-${Date.now()}`;
+  marketOperation.value = null;
+  marketOperationOpen.value = true;
+  void pollMarketOperation();
+  marketOperationTimer = setInterval(() => {
+    void pollMarketOperation();
+  }, 2000);
+}
+
+function startMarketOperationPollingId(operationId: string) {
+  stopMarketOperationPolling();
+  marketOperationId.value = operationId;
+  marketOperation.value = null;
+  marketOperationOpen.value = true;
+  void pollMarketOperation();
+  marketOperationTimer = setInterval(() => {
+    void pollMarketOperation();
+  }, 2000);
+}
+
+function stopMarketOperationPolling() {
+  if (marketOperationTimer) {
+    clearInterval(marketOperationTimer);
+    marketOperationTimer = null;
+  }
+  if (marketOperationId.value) {
+    marketOperationId.value = null;
+  }
+  marketOperationOpen.value = false;
+}
+
+async function pollMarketOperation() {
+  if (!marketOperationId.value) return;
+  try {
+    const resp = await api<{ operation: Operation }>(
+      `/api/v1/admin/solution-operations/${encodeURIComponent(marketOperationId.value)}`,
+    );
+    marketOperation.value = resp.operation;
+    if (["succeeded", "failed", "cancelled"].includes(marketOperation.value.state)) {
+      stopMarketOperationPolling();
+      if (marketOperation.value.state === "succeeded") {
+        marketNotice.value = `${marketConfirmMode.value === "install" ? "安装" : "更新"} 操作成功`;
+      } else {
+        marketNotice.value = `操作 ${marketOperation.value.state}`;
+      }
+      await loadMarketplace();
+    }
+  } catch {
+    // transient error: keep polling
+  }
+}
+
+async function toggleAutoUpdate(enabled: boolean) {
+  marketBusy.value = "configuring";
+  try {
+    const resp = await api<{ enabled: boolean; strategy: string }>(
+      "/api/v1/admin/solutions/auto-update",
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled, strategy: marketAutoUpdate.value?.strategy ?? "patch" }),
+      },
+    );
+    marketAutoUpdate.value = { enabled: resp.enabled, strategy: resp.strategy };
+    marketNotice.value = `自动更新${enabled ? "已开启" : "已关闭"}`;
+  } catch (reason) {
+    marketNotice.value = reason instanceof Error ? reason.message : "配置失败";
+  } finally {
+    marketBusy.value = null;
+  }
+}
+
+// expose for template
+const goToInstall = (pkg: EnrichedPackage) => {
+  marketConfirm.value = { name: pkg.name, version: pkg.activeVersion ?? pkg.version ?? "" };
+  marketConfirmMode.value = "install";
+  marketConfirmError.value = "";
+};
+const goToUpdate = (pkg: EnrichedPackage) => {
+  marketConfirm.value = { name: pkg.name, version: "" };
+  marketConfirmMode.value = "update";
+  marketConfirmStrategy.value = "patch";
+  marketConfirmError.value = "";
+};
+
+onBeforeUnmount(() => {
+  stopTracking();
+  stopMarketOperationPolling();
+});
+
 onMounted(async () => {
+  await loadMarketplace();
   await load();
   const solutionId = typeof route.query.solution === "string" ? route.query.solution : "";
   if (solutionId) {
@@ -607,22 +816,23 @@ onMounted(async () => {
 
 <template>
   <div class="wf-page">
-    <PageHeader title="业务方案" />
+    <PageHeader title="插件市场" />
     <div v-if="error" class="wf-error" role="alert">
       <span>{{ error }}</span>
       <button class="wf-button compact" @click="load">重新加载</button>
     </div>
     <div v-if="notice" class="wf-notice" role="status">{{ notice }}</div>
+    <div v-if="marketNotice" class="wf-notice" role="status">{{ marketNotice }}</div>
 
     <section class="wf-panel">
       <div class="wf-panel-head">
-        <h2>已安装方案</h2>
+        <div class="wf-tab-bar">
+          <button class="wf-tab" :class="{ active: marketView === 'marketplace' }" @click="marketView = 'marketplace'">插件市场</button>
+          <button class="wf-tab" :class="{ active: marketView === 'installed' }" @click="marketView = 'installed'">已安装方案</button>
+        </div>
         <div class="wf-actions">
-          <button class="wf-button compact" :disabled="loading" @click="load">刷新</button>
-          <button class="wf-button compact" :disabled="importBusy" @click="fileInput?.click()">
-            {{ importBusy ? "导入中…" : "导入压缩包" }}
-          </button>
-          <button class="wf-button primary compact" @click="openWizard">安装方案</button>
+          <button class="wf-button compact" :disabled="marketLoading" @click="loadMarketplace">刷新</button>
+          <button class="wf-button compact" @click="openWizard">上传方案包</button>
           <input
             ref="fileInput"
             type="file"
@@ -632,48 +842,115 @@ onMounted(async () => {
           />
         </div>
       </div>
-      <div class="wf-table-wrap">
-        <table class="wf-table" data-card>
-          <thead>
-            <tr>
-              <th>方案</th>
-              <th>版本</th>
-              <th>期望状态</th>
-              <th>实际状态</th>
-              <th>健康</th>
-              <th>更新时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="item in installations"
-              :key="item.solutionId"
-              :class="{
-                'wf-row-selected': selected?.solutionId === item.solutionId,
-              }"
-              @click="selectSolution(item)"
-            >
-              <td data-label="方案">{{ item.solutionId }}</td>
-              <td data-label="版本">{{ item.version }}</td>
-              <td data-label="期望状态">
-                  <i class="wf-health-mark" :class="statusTone(item.desiredState)"></i>
-                {{ stateLabel(item.desiredState) }}
-              </td>
-              <td data-label="实际状态">
-                  <i class="wf-health-mark" :class="statusTone(item.observedState)"></i>
-                {{ stateLabel(item.observedState) }}
-              </td>
-              <td data-label="健康">
-                  <i class="wf-health-mark" :class="statusTone(item.healthState)"></i>
-                {{ healthLabel(item.healthState).text }}
-              </td>
-              <td data-label="更新时间">{{ new Date(item.updatedAt).toLocaleString() }}</td>
-            </tr>
-            <tr v-if="!loading && installations.length === 0">
-              <td colspan="6" class="wf-empty">还没有安装任何方案</td>
-            </tr>
-          </tbody>
-        </table>
+
+      <!-- 市场视图 -->
+      <div v-if="marketView === 'marketplace'" class="wf-market-view">
+        <div class="wf-market-autoupdate">
+          <label class="wf-toggle">
+            <input type="checkbox" :checked="marketAutoUpdate?.enabled ?? false" @change="toggleAutoUpdate(!marketAutoUpdate?.enabled)" />
+            <span class="wf-toggle-slider"></span>
+            <span class="wf-toggle-label">自动更新 {{ marketAutoUpdate?.strategy ?? 'patch' }} 策略</span>
+          </label>
+        </div>
+        <div v-if="marketLoading" class="wf-loading">正在加载市场数据…</div>
+        <div v-else-if="marketPackages.length === 0" class="wf-empty">暂无可安装的插件</div>
+        <div v-else class="wf-market-grid">
+          <div v-for="pkg in marketPackages" :key="pkg.name" class="wf-market-card">
+            <div class="wf-market-card-header">
+              <div class="wf-market-card-icon">{{ pkg.icon || pkg.name.split('/').pop()?.slice(0, 2).toUpperCase() }}</div>
+              <div class="wf-market-card-info">
+                <div class="wf-market-card-name">{{ pkg.name.split('/').pop() }}</div>
+                <div class="wf-market-card-publisher">{{ pkg.publisher }}</div>
+              </div>
+              <div class="wf-market-card-status">
+                <span v-if="pkg.status === 'installed'" class="wf-badge wf-badge-success">已安装</span>
+                <span v-else-if="pkg.status === 'update-available'" class="wf-badge wf-badge-warning">有更新</span>
+                <span v-else class="wf-badge">可安装</span>
+              </div>
+            </div>
+            <div class="wf-market-card-body">
+              <div class="wf-market-card-desc">{{ pkg.description }}</div>
+              <div class="wf-market-card-meta">
+                <span>版本: {{ pkg.version }}</span>
+                <span v-if="pkg.activeVersion">本地: {{ pkg.activeVersion }}</span>
+                <span v-if="pkg.publishedAt">发布: {{ new Date(pkg.publishedAt).toLocaleDateString() }}</span>
+              </div>
+            </div>
+            <div class="wf-market-card-footer">
+              <button 
+                v-if="pkg.status === 'not-installed'" 
+                class="wf-button primary compact"
+                :disabled="marketBusy !== null"
+                @click="installFromNpm(pkg.name, pkg.version)"
+              >
+                {{ marketBusy === 'installing' && marketConfirm?.name === pkg.name ? '安装中…' : '安装' }}
+              </button>
+              <button 
+                v-else-if="pkg.status === 'update-available'" 
+                class="wf-button primary compact"
+                :disabled="marketBusy !== null"
+                @click="updateFromNpm(pkg.name, marketConfirmStrategy)"
+              >
+                {{ marketBusy === 'updating' && marketConfirm?.name === pkg.name ? '更新中…' : '更新' }}
+              </button>
+              <button 
+                v-else 
+                class="wf-button compact"
+                :disabled="true"
+              >
+                已安装
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 已安装视图 -->
+      <div v-else class="wf-installed-view">
+        <div class="wf-table-wrap">
+          <table class="wf-table" data-card>
+            <thead>
+              <tr>
+                <th>方案</th>
+                <th>已装版本</th>
+                <th>激活版本</th>
+                <th>健康</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="item in installations"
+                :key="item.solutionId"
+                :class="{
+                  'wf-row-selected': selected?.solutionId === item.solutionId,
+                }"
+                @click="selectSolution(item)"
+              >
+                <td data-label="方案">{{ item.solutionId }}</td>
+                <td data-label="已装版本">{{
+                  item.installedVersions?.length
+                    ? item.installedVersions.join("、")
+                    : "—"
+                }}</td>
+                <td data-label="激活版本">{{
+                  item.activeVersion ?? "未激活"
+                }}</td>
+                <td data-label="健康">
+                  <span
+                    v-if="item.health"
+                    class="wf-status"
+                    :class="item.health.ok ? 'good' : 'warn'"
+                    >{{ item.health.ok ? "正常" : item.health.reason ?? "异常" }}</span
+                  >
+                  <span v-else class="wf-muted">未监测</span>
+                </td>
+              </tr>
+              <tr v-if="!loading && installations.length === 0">
+                <td colspan="4" class="wf-empty">还没有安装任何方案</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </section>
 
@@ -681,8 +958,13 @@ onMounted(async () => {
       <div v-if="selected" class="wf-drawer-body">
         <section class="wf-drawer-section">
           <div class="wf-solution-detail-meta">
-            <span class="wf-status" :class="statusTone(selected.observedState)">{{ stateLabel(selected.observedState) }}</span>
-            <span class="wf-status" :class="statusTone(selected.healthState)">{{ healthLabel(selected.healthState).text }}</span>
+            <span class="wf-status" :class="selected.activeVersion ? 'good' : 'muted'">{{ selected.activeVersion ? `已激活 ${selected.activeVersion}` : "未激活" }}</span>
+            <span
+              v-if="selected.health"
+              class="wf-status"
+              :class="selected.health.ok ? 'good' : 'warn'"
+              >{{ selected.health.ok ? "健康" : selected.health.reason ?? "异常" }}</span
+            >
           </div>
           <div class="wf-drawer-actions">
             <button class="wf-button compact" :disabled="!canActivate || operationBusy !== null" @click="runOperation('activate')">激活</button>
@@ -1166,5 +1448,181 @@ onMounted(async () => {
   border-color: var(--wf-primary);
   color: var(--wf-primary);
   background: var(--wf-primary-soft);
+}
+
+/* marketplace tab bar */
+.wf-tab-bar {
+  display: flex;
+  gap: 0;
+}
+.wf-tab {
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: var(--wf-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+.wf-tab:hover {
+  color: var(--wf-text);
+}
+.wf-tab.active {
+  color: var(--wf-primary);
+  border-bottom-color: var(--wf-primary);
+}
+
+/* marketplace grid */
+.wf-market-view {
+  padding: 16px;
+}
+.wf-market-autoupdate {
+  margin-bottom: 14px;
+}
+.wf-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--wf-text-secondary);
+}
+.wf-toggle input { display: none; }
+.wf-toggle-slider {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--wf-border-strong);
+  position: relative;
+  transition: background 0.2s;
+}
+.wf-toggle-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+}
+.wf-toggle input:checked + .wf-toggle-slider {
+  background: var(--wf-primary);
+}
+.wf-toggle input:checked + .wf-toggle-slider::after {
+  transform: translateX(16px);
+}
+.wf-toggle-label {
+  font-weight: 500;
+}
+.wf-loading {
+  padding: 32px;
+  text-align: center;
+  color: var(--wf-text-muted);
+  font-size: 13px;
+}
+.wf-market-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+.wf-market-card {
+  border: 1px solid var(--wf-border);
+  border-radius: var(--wf-radius-control, 8px);
+  background: var(--wf-surface);
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.wf-market-card:hover {
+  border-color: var(--wf-primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.wf-market-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 0;
+}
+.wf-market-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--wf-primary-soft, var(--wf-surface-soft));
+  color: var(--wf-primary);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.wf-market-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.wf-market-card-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wf-market-card-publisher {
+  font-size: 12px;
+  color: var(--wf-text-muted);
+  margin-top: 1px;
+}
+.wf-market-card-status {
+  flex-shrink: 0;
+}
+.wf-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--wf-surface-soft);
+  color: var(--wf-text-muted);
+}
+.wf-badge-success {
+  background: #e6f7ed;
+  color: #1a7f37;
+}
+.wf-badge-warning {
+  background: #fff4e5;
+  color: #9a6700;
+}
+.wf-market-card-body {
+  padding: 10px 14px;
+  flex: 1;
+}
+.wf-market-card-desc {
+  font-size: 12px;
+  color: var(--wf-text-secondary);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.wf-market-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--wf-text-muted);
+}
+.wf-market-card-footer {
+  padding: 0 14px 14px;
+}
+.wf-market-card-footer .wf-button {
+  width: 100%;
+}
+.wf-installed-view {
+  padding: 0;
 }
 </style>

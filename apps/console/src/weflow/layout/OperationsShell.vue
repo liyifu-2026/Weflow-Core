@@ -37,7 +37,6 @@ const groups = computed(() => [
           label: "平台",
           items: [
             { to: "/system/status", icon: "runtime", label: "系统状态" },
-            { to: "/system/operations", icon: "engine", label: "运行" },
             { to: "/platform/solutions", icon: "verify", label: "业务方案" },
             { to: "/system/users", icon: "users", label: "用户与角色" },
             { to: "/system/audit", icon: "audit", label: "审计日志" },
@@ -144,7 +143,7 @@ onMounted(() => {
           exact-active-class="wf-route-active"
         >
           <WfIcon name="settings" />
-          <span>设置</span>
+          <span>系统设置</span>
         </router-link>
         <router-link
           to="/help"

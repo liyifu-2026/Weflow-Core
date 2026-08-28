@@ -49,6 +49,35 @@ describe("HttpChannelProvider file media", () => {
     expect(page.events[0]?.mediaRef).toBe("wechat-media:v1:abc");
   });
 
+  it("pulls historical backfill events preserving the historical flag", async () => {
+    const provider = providerWith((url) => {
+      expect(url).toContain("/api/v1/channel/events");
+      return Response.json({
+        events: [
+          {
+            eventId: "hist:room-1:9",
+            cursor: "9",
+            conversationRef: "room-1",
+            channelMessageId: "9",
+            senderRef: "wxid-contact",
+            kind: "text",
+            content: "历史消息",
+            occurredAt: "2026-08-01T00:00:00Z",
+            observedAt: "2026-08-27T00:00:00Z",
+            isSelf: false,
+            historical: true,
+          },
+        ],
+        nextCursor: "9",
+        hasMore: false,
+      });
+    });
+
+    const page = await provider.pullEvents({});
+    expect(page.events[0]?.eventId).toBe("hist:room-1:9");
+    expect(page.events[0]?.historical).toBe(true);
+  });
+
   it("resolveFile streams non-image mime types", async () => {
     const provider = providerWith(
       () =>
@@ -173,5 +202,77 @@ describe("HttpChannelProvider file media", () => {
     const invalid = await invalidProvider.resolveImage("ref-invalid");
     expect(invalid).toMatchObject({ state: "ready", variant: "original" });
     if (invalid.state === "ready") await invalid.body.cancel();
+  });
+});
+
+describe("HttpChannelProvider protocol reconciliation", () => {
+  // 协议 v4：出站新增 recall + 受限 voice(video)
+  const matchingCapabilities = {
+    protocolVersion: 4,
+    sendOperationStates: ["pending", "executing", "confirmed", "unknown", "failed"],
+    sendKinds: ["text", "file", "image", "reply", "mention", "poke", "recall", "voice"],
+  };
+
+  it("matching capabilities pass without error", async () => {
+    const provider = providerWith((url) => {
+      expect(url).toContain("/api/v1/channel/capabilities");
+      return Response.json(matchingCapabilities);
+    });
+    await expect(provider.ensureProtocol()).resolves.toBeUndefined();
+    expect(provider.protocolStatus().ok).toBe(true);
+  });
+
+  it("version mismatch rejects with channel_protocol_mismatch", async () => {
+    const provider = providerWith(() =>
+      Response.json({ ...matchingCapabilities, protocolVersion: 99 }),
+    );
+    await expect(provider.ensureProtocol()).rejects.toThrow(
+      /channel_protocol_mismatch: protocol mismatch: protocolVersion 99 != 4/,
+    );
+    expect(provider.protocolStatus().ok).toBe(false);
+  });
+
+  it("missing enum members reject and name the gaps", async () => {
+    const provider = providerWith(() =>
+      Response.json({
+        ...matchingCapabilities,
+        sendOperationStates: ["pending", "confirmed"],
+        sendKinds: ["text"],
+      }),
+    );
+    await expect(provider.ensureProtocol()).rejects.toThrow(
+      /missing sendOperationState: executing/,
+    );
+    await expect(provider.ensureProtocol()).rejects.toThrow(/missing sendKind: file/);
+  });
+
+  it("unreachable host skips check instead of failing", async () => {
+    const provider = providerWith(() => {
+      throw new Error("connection refused");
+    });
+    await expect(provider.ensureProtocol()).resolves.toBeUndefined();
+    expect(provider.protocolStatus().ok).toBe(true);
+  });
+
+  it("create() pauses sending when protocol mismatches (queue retained)", async () => {
+    let sendCalls = 0;
+    const provider = new HttpChannelProvider({
+      baseUrl: "https://host.test",
+      token: "secret",
+      fetch: (async (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("/api/v1/channel/send")) sendCalls += 1;
+        return Response.json({ ...matchingCapabilities, protocolVersion: 9 });
+      }) as unknown as typeof fetch,
+    });
+    await expect(
+      provider.create({
+        operationId: "op-1",
+        conversationRef: "room-1",
+        payload: { kind: "text", text: "hi" },
+      }),
+    ).rejects.toThrow(/channel_protocol_mismatch/);
+    expect(sendCalls).toBe(0); // 未触达发送端点 → 队列保留
+    expect(provider.protocolStatus().ok).toBe(false);
   });
 });

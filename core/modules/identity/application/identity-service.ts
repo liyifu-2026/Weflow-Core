@@ -12,6 +12,7 @@ import {
   verifyPassword,
 } from "../../../infrastructure/auth/password.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
+import { userAvatarPresetById } from "./avatar-presets.js";
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
 
@@ -26,21 +27,33 @@ export type AuthenticatedUser = {
   username: string;
   role: "admin" | "operator";
   mustChangePassword: boolean;
-  /** 客服头像相对路径（无头像为 null），如 /api/v1/users/:userId/avatar */
+  /** 客服头像相对路径（始终可用：上传 > 预设 > 默认预设），如 /api/v1/users/:userId/avatar */
   avatarUrl: string | null;
+  /** 当前选中的平台预设头像 id（未选为 null；选择器用于展示选中态） */
+  avatarPreset: string | null;
   /** 信息名片显示名（可空；空 = 展示 username） */
   displayName: string | null;
   /** 客服自选专家标签（标签键 = 专家队列 key，用于转人工定向路由） */
   tags: string[];
 };
 
-/** 头像相对路径（avatar_file_id 存在时） */
-function avatarUrlOf(user: {
+/**
+ * 头像相对路径：头像端点对已知用户始终有内容（上传 > 预设 > 默认预设）。
+ * 附带基于 updated_at 的版本号 —— 任何头像变更都会更新 updated_at，
+ * URL 随之变化，保证信息名片、左下角图标、移动端等所有位置立即同步。
+ */
+export function userAvatarUrl(user: {
   userId: string;
-  avatarFileId: string | null;
+  updatedAt?: Date | string;
 }): string | null {
-  return user.avatarFileId ? `/api/v1/users/${user.userId}/avatar` : null;
+  const version = user.updatedAt
+    ? Math.floor(new Date(user.updatedAt).getTime() / 1_000)
+    : "0";
+  return `/api/v1/users/${user.userId}/avatar?v=${version}`;
 }
+
+/** 头像相对路径（投影内部用），见 userAvatarUrl */
+const avatarUrlOf = userAvatarUrl;
 
 /** 将用户行投影为对外认证用户（不含密码哈希等内部字段） */
 function projectAuthenticatedUser(user: {
@@ -49,8 +62,10 @@ function projectAuthenticatedUser(user: {
   role: string;
   mustChangePassword: boolean;
   avatarFileId: string | null;
+  avatarPreset: string | null;
   displayName: string | null;
   tags: string[];
+  updatedAt?: Date | string;
 }): AuthenticatedUser {
   return {
     userId: user.userId,
@@ -58,6 +73,7 @@ function projectAuthenticatedUser(user: {
     role: user.role as "admin" | "operator",
     mustChangePassword: user.mustChangePassword,
     avatarUrl: avatarUrlOf(user),
+    avatarPreset: user.avatarPreset,
     displayName: user.displayName,
     tags: user.tags,
   };
@@ -164,6 +180,48 @@ export async function updateProfile(
   return { status: "ok", user: projectAuthenticatedUser(updated) };
 }
 
+/** 预设头像选择结果 */
+export type AvatarPresetResult =
+  | { status: "ok"; user: AuthenticatedUser }
+  | { status: "user_not_found" }
+  | { status: "invalid_preset" };
+
+/**
+ * 选择/清除预设头像（preset = null 清除覆盖，回落到按用户名哈希的默认预设）。
+ * 预设与自定义上传二选一：选择预设会同时清掉上传引用。
+ */
+export async function setUserAvatarPreset(
+  db: NodePgDatabase<typeof schema>,
+  userId: string,
+  preset: string | null,
+  sourceIp: string,
+): Promise<AvatarPresetResult> {
+  if (preset && !userAvatarPresetById(preset)) {
+    return { status: "invalid_preset" };
+  }
+  const updated = await db.transaction(async (transaction) => {
+    const rows = await transaction
+      .update(schema.users)
+      .set({ avatarPreset: preset, avatarFileId: null, updatedAt: new Date() })
+      .where(eq(schema.users.userId, userId))
+      .returning();
+    const user = rows[0];
+    if (!user) return undefined;
+    await transaction.insert(schema.auditEvents).values({
+      auditId: randomUUID(),
+      actorUserId: userId,
+      eventType: "identity.avatar_updated",
+      subjectType: "user",
+      subjectId: userId,
+      sourceIp,
+      metadata: { source: "preset", preset: preset ?? "" },
+    });
+    return user;
+  });
+  if (!updated) return { status: "user_not_found" };
+  return { status: "ok", user: projectAuthenticatedUser(updated) };
+}
+
 /** 登录成功返回结果 */
 export type LoginResult = {
   token: string;
@@ -212,8 +270,10 @@ export async function createClosedUser(
     role,
     mustChangePassword: true,
     avatarFileId: null,
+    avatarPreset: null,
     displayName: null,
     tags: [],
+    updatedAt: new Date(),
   });
 }
 
@@ -288,8 +348,10 @@ export async function authenticate(
       role: schema.users.role,
       mustChangePassword: schema.users.mustChangePassword,
       avatarFileId: schema.users.avatarFileId,
+      avatarPreset: schema.users.avatarPreset,
       displayName: schema.users.displayName,
       tags: schema.users.tags,
+      updatedAt: schema.users.updatedAt,
     })
     .from(schema.userSessions)
     .innerJoin(

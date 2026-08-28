@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { createCliOutput, renderCommandResult } from "./cli-output.js";
 import { runSolutionCommand, SOLUTION_USAGE } from "./weflowctl-solution.js";
 import { runCompletionCommand, runConfigCommand } from "./weflowctl-config.js";
+import { DEV_USAGE, renderDevResult, runDevCommand } from "./weflowctl-dev.js";
 
 /**
  * Resolve the CLI's own version. Works from source (`src/../package.json`)
@@ -61,6 +62,8 @@ function topLevelUsage(): string {
     "               publish / install / activate / update / rollback",
     "               key / registry / info / search / versions / history",
     "               doctor / inspect / export / import / auto-update / list",
+    "  dev          Development environment health & lifecycle",
+    "               doctor / up / down",
     "  config       Read and write local CLI configuration",
     "  completion   Generate shell completion scripts (bash/zsh/powershell)",
     "",
@@ -83,7 +86,8 @@ if (argv.includes("--version")) {
 } else if (
   domain !== "solution" &&
   domain !== "config" &&
-  domain !== "completion"
+  domain !== "completion" &&
+  domain !== "dev"
 ) {
   const output = createCliOutput({ json: jsonMode, quiet: quietMode });
   output.error({
@@ -126,6 +130,22 @@ if (argv.includes("--version")) {
         renderCommandResult(commandName, result, output, { json: jsonMode });
       }
       if (!result.ok) process.exitCode = 1;
+    }
+  } else if (domain === "dev") {
+    if (commandArgs.length === 0) {
+      output.info(DEV_USAGE);
+      process.exitCode = 0;
+    } else {
+      const result = await runDevCommand(commandArgs);
+      if (!result.ok) {
+        renderCommandResult(commandName, result, output, { json: jsonMode });
+        process.exitCode = 1;
+      } else if (jsonMode) {
+        output.json(result.data);
+      } else {
+        const failed = renderDevResult(commandName, result.data, output);
+        if (failed) process.exitCode = 1;
+      }
     }
   } else {
     // completion <shell>: emit the script verbatim (never JSON-wrapped).

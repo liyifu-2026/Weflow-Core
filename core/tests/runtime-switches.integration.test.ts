@@ -49,9 +49,6 @@ integration("runtime switches（knowledge/memory/vision）", () => {
         .delete(schema.agentTurns)
         .where(eq(schema.agentTurns.conversationId, conversationId));
       await postgres.db
-        .delete(schema.caseStates)
-        .where(eq(schema.caseStates.conversationId, conversationId));
-      await postgres.db
         .delete(schema.memoryCaptureStates)
         .where(eq(schema.memoryCaptureStates.conversationId, conversationId));
       await postgres.db

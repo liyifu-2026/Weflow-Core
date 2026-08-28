@@ -5,7 +5,7 @@ import {
   sha256Digest,
   validateSolutionManifest,
   type SolutionManifestV1,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";
 
 const manifest = {
   apiVersion: "weflow.io/v1",

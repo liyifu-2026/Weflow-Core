@@ -1,8 +1,8 @@
 {
-  "name": "@weflow/contracts",
-  "version": "0.1.0",
+  "name": "@weflow-leaif/contracts",
+  "version": "1.0.0",
   "description": "Stable public contracts for Weflow Platform: AgentAction, AgentExecutionStrategy, runtime/solution state, audit and error codes.",
-  "private": true,
+  "private": false,
   "type": "module",
   "packageManager": "pnpm@10.34.5",
   "engines": {
@@ -28,7 +28,7 @@
     "check": "pnpm typecheck && pnpm test"
   },
   "dependencies": {
-    "@weflow/solution-sdk": "link:../solution-sdk"
+    "@weflow-leaif/solution-sdk": "link:../solution-sdk"
   },
   "devDependencies": {
     "typescript": "5.9.3"

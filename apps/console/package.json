@@ -18,8 +18,8 @@
     "check": "node scripts/check-knowledge-boundary.mjs && vue-tsc --build && vite build"
   },
   "dependencies": {
-    "@weflow/contracts": "link:../../packages/contracts",
-    "@weflow/solution-sdk": "link:../../packages/solution-sdk",
+    "@weflow-leaif/contracts": "link:../../packages/contracts",
+    "@weflow-leaif/solution-sdk": "link:../../packages/solution-sdk",
     "@weflow/ui": "link:../../packages/ui",
     "lucide-vue-next": "^1.0.0",
     "pinia": "^3.0.4",

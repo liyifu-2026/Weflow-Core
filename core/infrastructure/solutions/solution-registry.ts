@@ -27,7 +27,7 @@ import {
   describeStagedSolutionPackage,
   extractSolutionTgz,
 } from "./solution-pack.js";
-import type { SolutionPackageDescriptor } from "@weflow/solution-sdk";
+import type { SolutionPackageDescriptor } from "@weflow-leaif/solution-sdk";
 
 export type RegistryPackageEntry = {
   solutionId: string;

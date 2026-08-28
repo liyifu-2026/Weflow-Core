@@ -3,7 +3,7 @@
  *
  * This service owns only the persistence invariants for Agent-generated
  * outbound messages. Callers remain responsible for policy, ownership,
- * CaseState, Agent Turn, and Memory decisions.
+ * Agent Turn, and Memory decisions.
  */
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -23,6 +23,11 @@ export type CreateAgentReplyInput = {
   traceId: string;
   segments: string[];
   variant: AgentReplyVariant;
+  /**
+   * AI 员工标识（可选，平台不解释）。提供时作为 actor_id 落库，
+   * 前端据此渲染该 AI 员工的专属头像；缺省保持 null（通用 Agent 标识）。
+   */
+  actorId?: string;
 };
 
 export type CreateAgentReplyResult = {
@@ -56,7 +61,7 @@ export async function createAgentReply(
       channelMessageId: null,
       direction: "outbound" as const,
       actorType: "agent" as const,
-      actorId: null,
+      actorId: input.actorId ?? null,
       contentType: "text" as const,
       channelType: 1,
       text,

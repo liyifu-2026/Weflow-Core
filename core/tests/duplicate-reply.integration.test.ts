@@ -8,7 +8,7 @@ import {
 } from "../infrastructure/postgres/client.js";
 import * as schema from "../infrastructure/postgres/schema.js";
 import { OpenAiCompatibleClient } from "../infrastructure/model_runtime/openai-compatible-client.js";
-import { processAgentTurn } from "../modules/agent/application/process-agent-turn.js";
+import { AgentTurnExecutor } from "../modules/agent/application/agent-turn-executor.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integrationDatabaseUrl = databaseUrl ?? "";
@@ -82,6 +82,18 @@ integration("Agent duplicate reply guard", () => {
 
   afterAll(async () => {
     await postgres.db
+      .delete(schema.notificationOutbox)
+      .where(eq(schema.notificationOutbox.conversationId, conversationId));
+    await postgres.db
+      .delete(schema.handoffEvents)
+      .where(eq(schema.handoffEvents.conversationId, conversationId));
+    await postgres.db
+      .delete(schema.handoffStates)
+      .where(eq(schema.handoffStates.conversationId, conversationId));
+    await postgres.db
+      .delete(schema.handoffCycles)
+      .where(eq(schema.handoffCycles.conversationId, conversationId));
+    await postgres.db
       .delete(schema.agentTurns)
       .where(eq(schema.agentTurns.conversationId, conversationId));
     await postgres.db
@@ -117,7 +129,12 @@ integration("Agent duplicate reply guard", () => {
       "好的，我明白了。",
       "好的，这次明白了。",
     ]);
-    await processAgentTurn(postgres.db, model, "deepseek-v4-flash", {
+    const executor = new AgentTurnExecutor(
+      postgres.db,
+      model,
+      "deepseek-v4-flash",
+    );
+    await executor.execute({
       turnId: firstTurn.turnId,
       traceId: firstTurn.traceId,
     });
@@ -153,7 +170,7 @@ integration("Agent duplicate reply guard", () => {
         )
     )[0];
     if (!secondTurn) throw new Error("expected a second agent turn");
-    await processAgentTurn(postgres.db, model, "deepseek-v4-flash", {
+    await executor.execute({
       turnId: secondTurn.turnId,
       traceId: secondTurn.traceId,
     });
@@ -195,7 +212,7 @@ integration("Agent duplicate reply guard", () => {
         )
     )[0];
     if (!thirdTurn) throw new Error("expected a third agent turn");
-    await processAgentTurn(postgres.db, model, "deepseek-v4-flash", {
+    await executor.execute({
       turnId: thirdTurn.turnId,
       traceId: thirdTurn.traceId,
     });

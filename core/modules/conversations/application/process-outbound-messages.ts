@@ -5,14 +5,23 @@
  */
 
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type {
   ChannelSendOperation,
   ChannelSendOperations,
+  ChannelSendPayload,
 } from "../../channel/contracts/channel-send-operations.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
+
+/** 出站媒体信息（从 mediaAssets + storedFiles 查询） */
+type OutboundMediaInfo = {
+  kind: "image" | "file" | "voice";
+  localPath: string;
+  originalName?: string;
+};
 
 /**
  * 处理待发送的出站消息。
@@ -22,13 +31,14 @@ import { readRuntimeSettings } from "../../operations/application/runtime-settin
 export async function processOutboundMessages(
   db: NodePgDatabase<typeof schema>,
   client: ChannelSendOperations,
-  options: { conversationId?: string } = {},
+  options: { conversationId?: string; fileStorageRoot?: string } = {},
 ): Promise<void> {
   const messages = await db
     .select({
       messageId: schema.messages.messageId,
       conversationId: schema.messages.conversationId,
       channelConversationId: schema.conversations.channelConversationId,
+      channelAccount: schema.conversations.channelAccount,
       text: schema.messages.text,
       sendState: schema.messages.sendState,
       sendOperationId: schema.messages.sendOperationId,
@@ -36,6 +46,9 @@ export async function processOutboundMessages(
       replyBatchId: schema.messages.replyBatchId,
       replySequence: schema.messages.replySequence,
       actorType: schema.messages.actorType,
+      replyToChannelMessageId: schema.messages.replyToChannelMessageId,
+      mentionContactRefs: schema.messages.mentionContactRefs,
+      contentType: schema.messages.contentType,
     })
     .from(schema.messages)
     .innerJoin(
@@ -128,11 +141,27 @@ export async function processOutboundMessages(
         .where(eq(schema.messages.messageId, message.messageId));
     }
 
+    // 查询媒体信息（如果消息是媒体类型）
+    const mediaInfo =
+      message.contentType === "media" && options.fileStorageRoot
+        ? await queryOutboundMedia(db, message.messageId, options.fileStorageRoot)
+        : null;
+
+    const directiveKind = ((): "recall" | null => {
+      // 约定：撤回指令以 contentType=recall 的空文本消息承载（后续可改为专用列）
+      if (message.contentType === "recall") return "recall";
+      return null;
+    })();
     const reconciliation = await reconcileSendOperation(client, {
       operationId,
       conversationId: message.channelConversationId,
+      account: message.channelAccount,
       text: message.text,
+      replyToChannelMessageId: message.replyToChannelMessageId,
+      mentionContactRefs: message.mentionContactRefs,
       sendState: message.sendState ?? "pending",
+      media: mediaInfo,
+      ...(directiveKind ? { directiveKind } : {}),
     });
     if (reconciliation.outcome === "unknown") {
       await db
@@ -157,8 +186,18 @@ export async function processOutboundMessages(
 type ReconcileSendOperationInput = {
   operationId: string;
   conversationId: string;
+  /** 账号维度（ADR-0005 多账号隔离） */
+  account?: string | null;
   text: string;
+  /** 引用回复的原通道消息（ADR-0006） */
+  replyToChannelMessageId?: string | null;
+  /** @ 提及的通道联系人（ADR-0006） */
+  mentionContactRefs?: string[];
   sendState: string;
+  /** 出站媒体信息（图片/文件/受限转发语音） */
+  media?: OutboundMediaInfo | null;
+  /** 出站纯指令类（recall 等非文本/媒体） */
+  directiveKind?: "recall" | null;
 };
 
 type ReconcileSendOperationResult =
@@ -196,7 +235,8 @@ export async function reconcileSendOperation(
   const created = await client.create({
     operationId: input.operationId,
     conversationRef: input.conversationId,
-    payload: { kind: "text", text: input.text },
+    ...(input.account ? { account: input.account } : {}),
+    payload: buildOutboundPayload(input),
   });
   return matchesSendOperation(created, input)
     ? { outcome: "resolved", operation: created }
@@ -206,13 +246,53 @@ export async function reconcileSendOperation(
       };
 }
 
+/** 根据消息字段构建出站 payload（ADR-0006：引用/@ 优先于纯文本） */
+export function buildOutboundPayload(
+  input: ReconcileSendOperationInput,
+): ChannelSendPayload {
+  if (input.directiveKind === "recall") return { kind: "recall" };
+  // 媒体消息：图片/文件/受限转发语音
+  if (input.media) {
+    const { kind, localPath, originalName } = input.media;
+    if (kind === "file" && originalName) {
+      return { kind: "file", path: localPath, fileName: originalName };
+    }
+    if (kind === "file") {
+      return { kind: "file", path: localPath };
+    }
+    if (kind === "voice") {
+      if (!localPath.toLowerCase().endsWith(".silk")) throw new Error("voice_path_invalid: expected .silk file");
+      return { kind: "voice", path: localPath };
+    }
+    return { kind, path: localPath };
+  }
+  if (input.replyToChannelMessageId) {
+    return {
+      kind: "reply",
+      text: input.text,
+      replyToChannelMessageId: input.replyToChannelMessageId,
+    };
+  }
+  if (input.mentionContactRefs && input.mentionContactRefs.length > 0) {
+    return {
+      kind: "mention",
+      text: input.text,
+      mentionContactRefs: input.mentionContactRefs,
+    };
+  }
+  return { kind: "text", text: input.text };
+}
+
 function matchesSendOperation(
   operation: ChannelSendOperation,
   input: ReconcileSendOperationInput,
 ): boolean {
+  if (operation.payload.kind === "recall" && input.directiveKind === "recall") {
+    return operation.operationId === input.operationId && operation.conversationRef === input.conversationId;
+  }
   return (
     operation.operationId === input.operationId &&
-    sendOperationMatches(operation, input.conversationId, input.text)
+    sendOperationMatches(operation, input.conversationId, input.text, input.media)
   );
 }
 
@@ -221,12 +301,28 @@ export function sendOperationMatches(
   operation: ChannelSendOperation,
   conversationId: string,
   text: string,
+  media?: OutboundMediaInfo | null,
 ): boolean {
-  return (
-    operation.conversationRef === conversationId &&
-    operation.payload.kind === "text" &&
-    operation.payload.text === text
-  );
+  if (operation.conversationRef !== conversationId) return false;
+  // 指令类（recall）无文本/媒体，仅比 kind
+  if (operation.payload.kind === "recall") return true;
+  // 媒体消息匹配：检查 kind 和 path
+  if (media) {
+    const payload = operation.payload;
+    if (payload.kind === "image" || payload.kind === "file" || payload.kind === "voice") {
+      return (payload as { path: string }).path === media.localPath;
+    }
+    return false;
+  }
+  // 文本类消息匹配
+  if (
+    operation.payload.kind === "text" ||
+    operation.payload.kind === "reply" ||
+    operation.payload.kind === "mention"
+  ) {
+    return operation.payload.text === text;
+  }
+  return false;
 }
 
 /** 基于消息ID生成确定性发送操作ID（s2_ 前缀） */
@@ -265,8 +361,12 @@ async function applySendOperation(
       return;
     }
   }
+  // executing 与 pending 一样属于「仍在途」：Host 已认领并正在 GUI 发送，
+  // 不应把消息标记为已发送，也不应回写为失败。
   const sendState =
-    operation.state === "pending" ? "submitting" : operation.state;
+    operation.state === "pending" || operation.state === "executing"
+      ? "submitting"
+      : operation.state;
   await db
     .update(schema.messages)
     .set({
@@ -276,4 +376,61 @@ async function applySendOperation(
       channelMessageId: operation.channelMessageId,
     })
     .where(eq(schema.messages.messageId, messageId));
+}
+
+/**
+ * 查询消息关联的出站媒体信息。
+ * 从 mediaAssets + storedFiles 获取媒体种类和本地文件路径。
+ */
+async function queryOutboundMedia(
+  db: NodePgDatabase<typeof schema>,
+  messageId: string,
+  fileStorageRoot: string,
+): Promise<OutboundMediaInfo | null> {
+  const rows = await db
+    .select({
+      kind: schema.mediaAssets.kind,
+      storageKey: schema.storedFiles.storageKey,
+      originalName: schema.storedFiles.originalName,
+    })
+    .from(schema.mediaAssets)
+    .innerJoin(
+      schema.storedFiles,
+      eq(schema.mediaAssets.originalFileId, schema.storedFiles.fileId),
+    )
+    .where(eq(schema.mediaAssets.messageId, messageId))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row || !row.storageKey) return null;
+
+  // 将 kind 标准化为出站 payload 支持的类型
+  const kind = normalizeMediaKind(row.kind);
+  if (!kind) return null;
+
+  // 构建本地文件路径：fileStorageRoot/media/storageKey
+  const localPath = join(fileStorageRoot, "media", row.storageKey);
+
+  return {
+    kind,
+    localPath,
+    originalName: row.originalName,
+  };
+}
+
+/** 将 mediaAssets.kind 标准化为出站 payload 支持的类型（受限 voice 仅 .silk 转发） */
+function normalizeMediaKind(kind: string): "image" | "file" | "voice" | null {
+  switch (kind) {
+    case "image":
+      return "image";
+    case "voice":
+    case "audio":
+      return "voice";
+    case "file":
+    case "video":
+    case "document":
+      return "file";
+    default:
+      return null;
+  }
 }

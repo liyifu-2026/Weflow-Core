@@ -54,11 +54,25 @@ export type TurnRunnerDependencies = {
   /**
    * Optional hook called before strategy.buildModelRequest to pre-resolve
    * AI employee prompts from the database (populates strategy cache).
+   * `triggerText` is optional and drives reception-plan keyword routing
+   * inside the Solution strategy; Core stays business-neutral.
    */
   preResolveAiEmployeePrompt?: (
     contactId: string,
     conversationId: string,
+    triggerText?: string | undefined,
   ) => Promise<void>;
+  /**
+   * Optional hook resolving the AI employee identity (opaque string, e.g. a
+   * definition id) for the conversation. When it returns a value, that value
+   * is persisted as messages.actor_id on the agent reply so every surface
+   * (Console / Mobile) can render the employee's own avatar. Core never
+   * interprets the identifier.
+   */
+  resolveAiEmployeeId?: (
+    contactId: string,
+    conversationId: string,
+  ) => Promise<string | null | undefined>;
 };
 
 /**
@@ -133,13 +147,22 @@ export async function processAgentTurn(
     );
 
     // AI 员工 Prompt 预解析：在策略的 buildModelRequest 之前异步查询数据库，
-    // 将已发布的 AI 员工 prompt 填充到策略缓存中。
+    // 将已发布的 AI 员工 prompt 填充到策略缓存中。触发文本取最近一条
+    // 入站消息内容，供 Solution 策略做接待编排的关键词路由。
     if (dependencies.preResolveAiEmployeePrompt) {
       await dependencies.preResolveAiEmployeePrompt(
         conversation?.contactId ?? "",
         turn.conversationId,
+        lastInboundText(context.history),
       );
     }
+    // AI 员工身份：命中时写入 messages.actor_id，前端据此渲染员工头像
+    const aiEmployeeId = dependencies.resolveAiEmployeeId
+      ? ((await dependencies.resolveAiEmployeeId(
+          conversation?.contactId ?? "",
+          turn.conversationId,
+        )) ?? null)
+      : null;
 
     const strategySystem = strategy
       ? strategy.buildModelRequest({
@@ -308,6 +331,7 @@ export async function processAgentTurn(
       responseText: decision.replyText,
       responseSegments: decision.replySegments,
       model,
+      ...(aiEmployeeId ? { aiEmployeeId } : {}),
       memoryWatermarkMessageId: `agent-message:${turn.turnId}:${String(decision.replySegments.length)}`,
     });
   } catch (error) {
@@ -345,7 +369,12 @@ export async function processPlannedToolTurn(
   preResolveAiEmployeePrompt?: (
     contactId: string,
     conversationId: string,
+    triggerText?: string | undefined,
   ) => Promise<void>,
+  resolveAiEmployeeId?: (
+    contactId: string,
+    conversationId: string,
+  ) => Promise<string | null | undefined>,
 ): Promise<void> {
   // 查询待执行的工具计划（planned 或已成功但后续模型调用失败需要重试的）
   const executions = await db
@@ -454,13 +483,21 @@ export async function processPlannedToolTurn(
     strategyRegistry,
   );
 
-  // AI 员工 Prompt 预解析（工具恢复路径）
+  // AI 员工 Prompt 预解析（工具恢复路径）；触发文本取最近一条入站消息。
   if (preResolveAiEmployeePrompt) {
     await preResolveAiEmployeePrompt(
       conversation?.contactId ?? "",
       execution.conversationId,
+      lastInboundText(context.history),
     );
   }
+  // AI 员工身份（工具路径）：与主路径同语义，命中写入 actor_id
+  const aiEmployeeId = resolveAiEmployeeId
+    ? ((await resolveAiEmployeeId(
+        conversation?.contactId ?? "",
+        execution.conversationId,
+      )) ?? null)
+    : null;
 
   const strategySystem = strategy
     ? strategy.buildModelRequest({
@@ -550,6 +587,24 @@ export async function processPlannedToolTurn(
     responseText: decision.replyText,
     responseSegments: decision.replySegments,
     model,
+    ...(aiEmployeeId ? { aiEmployeeId } : {}),
     memoryWatermarkMessageId: `agent-message:${turnId}:tool-result:${String(decision.replySegments.length)}`,
   });
+}
+
+/**
+ * 取消息历史中最近一条入站（user 角色）文本，作为接待编排路由的触发文本。
+ * 历史按时间升序，从尾部向前找；找不到（空会话/纯出站）返回 undefined，
+ * 调用方按「无路由输入」处理。该辅助不理解任何业务关键词。
+ */
+export function lastInboundText(
+  history: readonly { role: "user" | "assistant"; content: string }[],
+): string | undefined {
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const message = history[i];
+    if (message && message.role === "user" && message.content.trim() !== "") {
+      return message.content;
+    }
+  }
+  return undefined;
 }

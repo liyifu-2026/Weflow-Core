@@ -379,6 +379,48 @@
       "when": 1788386400000,
       "tag": "0055_media_source_variant",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1788472800000,
+      "tag": "0056_drop_case_states",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1788560000000,
+      "tag": "0057_channel_account",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1788570000000,
+      "tag": "0059_message_reply_mention",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1788580000000,
+      "tag": "0060_agent_whitelist_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1788590000000,
+      "tag": "0061_customer_support_ai_employees",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1788600000000,
+      "tag": "0062_user_avatar_preset",
+      "breakpoints": true
     }
   ]
 }

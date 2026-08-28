@@ -19,13 +19,13 @@ export type {
   AgentActionValidation,
   AgentExecutionStrategy,
   ExecutionStrategyRegistry,
-} from "@weflow/contracts";
-export { isAgentAction } from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
+export { isAgentAction } from "@weflow-leaif/contracts";
 
 import type {
   AgentExecutionStrategy,
   ExecutionStrategyRegistry,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 
 export class MapExecutionStrategyRegistry implements ExecutionStrategyRegistry {
   private readonly strategies = new Map<string, AgentExecutionStrategy>();

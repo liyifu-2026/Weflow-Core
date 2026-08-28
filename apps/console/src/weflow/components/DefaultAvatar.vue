@@ -1,25 +1,43 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
+import {
+  loadUserAvatarPresets,
+  presetImageUrl,
+  presetIndexForSeed,
+} from "./user-avatar-presets";
 
 const props = withDefaults(defineProps<{ name?: string; size?: number }>(), {
   name: "",
   size: 30,
 });
 
-const variants = [
-  "M24 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM6 38c0-10 8-16 16-16s16 8 16 16",
-  "M6 28c6-14 14 8 20-4s14 8 20-4M14 36h28",
-  "M24 6l16 9v18l-16 9-16-9V15l16-9Z M14 24l10 6 10-6",
-  "M6 30c5-16 9 8 13-2s8-16 13-2M6 38h36",
-  "M24 18a6 6 0 1 1-12 0 6 6 0 0 1 12 0ZM24 12v24M8 30c6 8 24 8 30 0",
-  "M5 32 14 18l6 8 7-12 6 9 9-11M5 38h38",
-];
+/**
+ * 默认客服头像：平台预设头像（DiceBear Blobs）。
+ * 与后端 GET /api/v1/users/:userId/avatar 的默认分配同源同算法
+ * （按用户名哈希稳定分配），保证任意位置显示同一客服的同一默认头像。
+ * 预设清单尚未加载完成或加载失败时，短暂降级为首字母占位。
+ */
+const presets = ref<UserAvatarPreset[]>([]);
 
-const seed = computed(() => {
-  let h = 0;
-  for (const ch of props.name || "W") h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return h % variants.length;
+onMounted(() => {
+  loadUserAvatarPresets()
+    .then((list) => {
+      presets.value = list;
+    })
+    .catch(() => {
+      // 预设清单不可用：保持首字母占位
+    });
 });
+
+const preset = computed(() => {
+  if (!presets.value.length) return undefined;
+  const seed = props.name || "?";
+  return presetImageUrl(presets.value[presetIndexForSeed(seed, presets.value.length)]);
+});
+
+const fallbackLetter = computed(() =>
+  (props.name || "?").trim().slice(0, 1).toUpperCase(),
+);
 </script>
 
 <template>
@@ -28,17 +46,14 @@ const seed = computed(() => {
     :style="{ width: `${size}px`, height: `${size}px` }"
     aria-hidden="true"
   >
-    <svg :width="size" :height="size" viewBox="0 0 48 48">
-      <rect width="48" height="48" rx="24" fill="currentColor" opacity="0.08" />
-      <path
-        :d="variants[seed]"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      />
-    </svg>
+    <img
+      v-if="preset"
+      :src="preset"
+      :width="size"
+      :height="size"
+      alt=""
+    />
+    <span v-else class="default-avatar-letter">{{ fallbackLetter }}</span>
   </span>
 </template>
 
@@ -48,6 +63,19 @@ const seed = computed(() => {
   place-items: center;
   overflow: hidden;
   border-radius: 50%;
-  color: inherit;
+  flex-shrink: 0;
+  background: #e8f0fe;
+}
+.default-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.default-avatar-letter {
+  color: #1a56c4;
+  font-weight: 700;
+  font-size: 0.7em;
+  line-height: 1;
 }
 </style>

@@ -27,7 +27,7 @@
     "check": "pnpm typecheck \u0026\u0026 pnpm test"
   },
   "dependencies": {
-    "@weflow/contracts": "link:../contracts"
+    "@weflow-leaif/contracts": "link:../contracts"
   },
   "devDependencies": {
     "typescript": "5.9.3"

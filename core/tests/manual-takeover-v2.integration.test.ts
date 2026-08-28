@@ -119,9 +119,6 @@ integration("Manual Takeover V2 (Console 全会话访问 + 主动接管)", () =>
       .delete(schema.messages)
       .where(inArray(schema.messages.conversationId, conversationIds));
     await postgres.db
-      .delete(schema.caseStates)
-      .where(inArray(schema.caseStates.conversationId, conversationIds));
-    await postgres.db
       .delete(schema.conversations)
       .where(inArray(schema.conversations.conversationId, conversationIds));
     await postgres.db
@@ -150,7 +147,7 @@ integration("Manual Takeover V2 (Console 全会话访问 + 主动接管)", () =>
 
   // ---------- 种子辅助 ----------
 
-  async function seedAgentActive(label: string, riskLevel = "low") {
+  async function seedAgentActive(label: string) {
     const conversationId = `channel:takeover-${label}-${suffix}`;
     const contactId = `contact:takeover-${label}-${suffix}`;
     conversationIds.push(conversationId);
@@ -167,14 +164,6 @@ integration("Manual Takeover V2 (Console 全会话访问 + 主动接管)", () =>
       channel: "channel",
       channelConversationId: `takeover-${label}-${suffix}`,
     });
-    await postgres.db.insert(schema.caseStates).values({
-      conversationId,
-      revision: 1,
-      riskLevel,
-      knownFields: { device_model: "V9" },
-      missingFields: ["indicator_state"],
-      requiresHuman: false,
-    });
     const triggerMessageId = await insertCustomerMessage(
       conversationId,
       "设备更新后无法启动。",
@@ -183,7 +172,7 @@ integration("Manual Takeover V2 (Console 全会话访问 + 主动接管)", () =>
   }
 
   async function seedPending(label: string) {
-    const { conversationId } = await seedAgentActive(label, "medium");
+    const { conversationId } = await seedAgentActive(label);
     const result = await createHandoff(postgres.db, {
       conversationId,
       actorUserId: "system-agent",
@@ -276,7 +265,7 @@ integration("Manual Takeover V2 (Console 全会话访问 + 主动接管)", () =>
   }
 
   /**
-   * 模拟 Agent 落库提交路径（与 process-agent-turn 同构）：ownership 锁 → 读
+   * 模拟 Agent 落库提交路径（与 AgentTurnExecutor 的提交路径同构）：ownership 锁 → 读
    * agentPaused → 已暂停则抑制（不插消息），否则插入出站消息。用于验证锁不变式。
    */
   async function simulateAgentCommit(conversationId: string) {

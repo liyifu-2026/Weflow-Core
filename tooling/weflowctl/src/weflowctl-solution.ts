@@ -5,7 +5,7 @@
  * arguments, delegate to infrastructure, and return typed `CommandResult`s 鈥? * they never touch process streams or exit codes, so the entry point can
  * render through any CliOutput implementation and tests can assert on data.
  */
-import { readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
@@ -37,6 +37,12 @@ import {
   searchRegistry,
 } from "../../../core/infrastructure/solutions/solution-registry-client.js";
 import {
+  downloadNpmTarball,
+  fetchNpmPackage,
+  NPM_DEFAULT_SCOPE,
+} from "../../../core/infrastructure/solutions/solution-npm-market-client.js";
+import { ensureSolutionPackageFromNpm } from "../../../core/infrastructure/solutions/solution-npm-wrapper.js";
+import {
   UPDATE_STRATEGIES,
   isSolutionUpdateStrategy,
 } from "../../../core/infrastructure/solutions/solution-update.js";
@@ -50,7 +56,7 @@ import {
   describeSolutionPackage,
   assertSolutionArtifacts,
   type SolutionPackageFiles,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";
 import { ErrorCodes, classifyError } from "./cli-errors.js";
 import { loadCliConfig, maskToken, updateCliConfig } from "./cli-config.js";
 import { runSolutionDoctor } from "../../../core/infrastructure/solutions/solution-doctor.js";
@@ -148,6 +154,8 @@ Commands:
                                             Stage, lock, sign and emit a self-contained .tgz
   install <dir|tgz|id> [--registry <url>] [--version <v>] [--trusted-key <pem-path>]
                                             Verify and install a package into the store
+  install-from-npm <name> [--version <v>] [--scope <scope>] [--activate]
+                                            Download from npm and install (auto-wraps if needed)
   activate <solution-id> [version]          Switch the active junction (default: highest installed)
   update <solution-id> --strategy manual|patch|minor|major [--registry <url>]
                                             Health-checked upgrade with automatic rollback
@@ -344,6 +352,26 @@ const HELP_TOPICS: Record<string, HelpTopic> = {
       "weflowctl solution install weflow.demo --registry http://reg.test",
     ],
   },
+  "install-from-npm": {
+    usage:
+      "install-from-npm <name> [--version <v>] [--scope <scope>] [--activate] [--npm-token <token>]",
+    description:
+      "Download a package from the npm registry and install it into the solution store.",
+    details: [
+      "Fetches the tarball from registry.npmjs.org (or the configured mirror).",
+      "If the package already carries a solution.manifest.json it is verified",
+      "and installed directly. Otherwise a minimal manifest is synthesised from",
+      "the package.json metadata so individual plugins can be installed without",
+      "a full solution publish cycle.",
+      "The package is signed with the local development key unless --trusted-key",
+      "overrides the trust anchor.",
+    ],
+    examples: [
+      "weflowctl solution install-from-npm @weflow-leaif/customer-support-strategy",
+      "weflowctl solution install-from-npm @weflow-leaif/product-troubleshooting --activate",
+      "weflowctl solution install-from-npm @weflow-leaif/customer-support-strategy --version 1.0.0",
+    ],
+  },
   activate: {
     usage: "activate <solution-id> [version]",
     description: "Atomically switch the active junction to a store version.",
@@ -435,6 +463,8 @@ const VALUE_FLAGS = new Set([
   "--url",
   "--token",
   "--solution-id",
+  "--scope",
+  "--npm-token",
 ]);
 
 type ParsedArgs = {
@@ -593,6 +623,8 @@ async function dispatch(args: string[]): Promise<Record<string, unknown>> {
       return publishCommand(rest);
     case "install":
       return installCommand(rest);
+    case "install-from-npm":
+      return installFromNpmCommand(rest);
     case "activate":
       return activateCommand(rest);
     case "update":
@@ -1176,6 +1208,95 @@ async function installWithTrustFlag(
     ...(trustedPublicKeyPem !== undefined ? { trustedPublicKeyPem } : {}),
   });
   return result;
+}
+
+/**
+ * `install-from-npm` command: download from the npm registry and install.
+ *
+ * When the downloaded package already carries a solution.manifest.json it is
+ * installed through the normal verify-and-copy path. Otherwise a minimal
+ * solution manifest is synthesised from the package.json metadata so that
+ * individual plugins can be installed without a full solution publish cycle.
+ */
+async function installFromNpmCommand(
+  rawArgs: string[],
+): Promise<InstallResult & { activated?: boolean; wrappedFromNpm?: boolean }> {
+  const { positionals, flags } = parseArgs(rawArgs);
+  const input = positionals[0];
+  if (!input) throw new Error("npm_package_name_required");
+
+  const scope = stringFlag(flags, "--scope") ?? NPM_DEFAULT_SCOPE;
+  const npmToken = stringFlag(flags, "--npm-token");
+  const requestedVersion = stringFlag(flags, "--version");
+  const shouldActivate = flags["--activate"] === true;
+
+  // Resolve the fully-qualified package name.
+  const packageName = input.startsWith("@")
+    ? input
+    : `${scope}/${input}`;
+
+  const npmOptions = {
+    ...(npmToken ? { token: npmToken } : {}),
+  };
+
+  // 1. Fetch package metadata to resolve the target version.
+  const detail = await fetchNpmPackage(packageName, npmOptions);
+  const version = requestedVersion ?? detail.distTagLatest;
+  if (!version) {
+    throw new Error(`npm_version_not_found:${packageName}:no_dist_tag_latest`);
+  }
+
+  // 2. Download the tarball.
+  const staging = await mkdtemp(join(tmpdir(), "weflow-npm-install-"));
+  try {
+    const download = await downloadNpmTarball(
+      packageName,
+      version,
+      staging,
+      npmOptions,
+    );
+
+    // 3. Extract to inspect contents.
+    const { extractSolutionTgz } = await import(
+      "../../../core/infrastructure/solutions/solution-pack.js"
+    );
+    const extractDir = await extractSolutionTgz(download.tgzPath);
+    let wrapCleanup: string | null = null;
+    try {
+      // 4. Ensure it's a valid solution package (auto-wrap if needed).
+      const wrapped = await ensureSolutionPackageFromNpm(
+        extractDir,
+        packageName,
+        version,
+      );
+      if (!wrapped.alreadySolution) {
+        wrapCleanup = wrapped.wrapDir;
+      }
+
+      // 5. Install through the standard path.
+      const result = await installWithTrustFlag(flags, wrapped.wrapDir);
+
+      // 6. Optionally activate.
+      let activated: boolean | undefined;
+      if (shouldActivate) {
+        await activateSolution(result.solutionId, result.version);
+        activated = true;
+      }
+
+      return {
+        ...result,
+        source: `npm:${packageName}@${version}`,
+        ...(activated !== undefined ? { activated } : {}),
+        wrappedFromNpm: !wrapped.alreadySolution,
+      };
+    } finally {
+      if (wrapCleanup) {
+        await rm(wrapCleanup, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
 }
 
 async function activateCommand(rawArgs: string[]): Promise<ActivateResult> {

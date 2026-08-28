@@ -206,6 +206,10 @@ export const contactProfiles = conversationSchema.table(
   {
     contactId: varchar("contact_id", { length: 600 }).primaryKey(),
     channel: varchar("channel", { length: 50 }).notNull(),
+    /** 账号维度（多微信账号隔离，ADR-0005）；缺省 "default" */
+    channelAccount: varchar("channel_account", { length: 64 })
+      .default("default")
+      .notNull(),
     channelContactId: varchar("channel_contact_id", {
       length: 256,
     }).notNull(),
@@ -219,7 +223,11 @@ export const contactProfiles = conversationSchema.table(
     aliasUpdatedAt: timestamp("alias_updated_at", { withTimezone: true }),
     note: text("note"),
     tags: jsonb("tags").$type<string[]>().default([]).notNull(),
+    // 白名单开关：false = 该联系人不触发 Agent 对话（人工处理）；默认开启（所有用户默认白名单，ADR-0060）
     agentEnabled: boolean("agent_enabled").default(true).notNull(),
+    // 黑名单：true = 不建 Agent Turn、不出现在会话列表、不推通知；消息照常入库，
+    // 只能在联系人页查看（比 agentEnabled=false 更强的隔离）。
+    blocked: boolean("blocked").default(false).notNull(),
     updatedByUserId: varchar("updated_by_user_id", { length: 36 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -231,6 +239,7 @@ export const contactProfiles = conversationSchema.table(
   (table) => [
     unique("contact_profiles_channel_identity_unique").on(
       table.channel,
+      table.channelAccount,
       table.channelContactId,
     ),
   ],
@@ -274,6 +283,10 @@ export const conversations = conversationSchema.table("conversations", {
     .notNull()
     .references(() => contactProfiles.contactId),
   channel: varchar("channel", { length: 50 }).notNull(),
+  /** 账号维度（多微信账号隔离，ADR-0005）；缺省 "default" */
+  channelAccount: varchar("channel_account", { length: 64 })
+    .default("default")
+    .notNull(),
   channelConversationId: varchar("channel_conversation_id", {
     length: 256,
   }).notNull(),
@@ -282,88 +295,6 @@ export const conversations = conversationSchema.table("conversations", {
     .defaultNow()
     .notNull(),
 });
-
-export const caseStates = conversationSchema.table("case_states", {
-  conversationId: varchar("conversation_id", { length: 300 })
-    .primaryKey()
-    .references(() => conversations.conversationId, { onDelete: "cascade" }),
-  revision: integer("revision").default(0).notNull(),
-  intent: varchar("intent", { length: 50 }).default("other").notNull(),
-  stage: varchar("stage", { length: 50 }).default("greeting").notNull(),
-  knownFields: jsonb("known_fields")
-    .$type<Record<string, string> | CaseFacts>()
-    .default({})
-    .notNull(),
-  missingFields: jsonb("missing_fields")
-    .$type<string[]>()
-    .default([])
-    .notNull(),
-  askedFields: jsonb("asked_fields")
-    .$type<AskedFieldRecord[]>()
-    .default([])
-    .notNull(),
-  actionHistory: jsonb("action_history")
-    .$type<ActionRecord[]>()
-    .default([])
-    .notNull(),
-  requiresHuman: boolean("requires_human").default(false).notNull(),
-  riskLevel: varchar("risk_level", { length: 20 }).default("low").notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-});
-
-/** 结构化 Case Fact 状态 */
-export type CaseFactStatus =
-  "confirmed" | "uncertain" | "conflicted" | "invalidated";
-
-/** Case Fact 来源;知识库是"关于这类问题我们知道什么",不直接构成客户事实 */
-export type CaseFactSource = "customer" | "tool" | "agent_inference";
-
-export type CaseFactGranularity = "major" | "minor" | "patch" | "full";
-
-/** 单个已记录(或待确认)的客户事实 */
-export type CaseFact = {
-  value: string;
-  status: CaseFactStatus;
-  source: CaseFactSource;
-  subject: string;
-  confirmedAt?: string | undefined;
-  granularity?: CaseFactGranularity | undefined;
-  lastChangedAt?: string | undefined;
-  invalidatedAt?: string | undefined;
-  /** 被纠正/覆盖前的旧值轨迹(仅保留值与来源,不保存推理) */
-  history?:
-    | Array<{
-        value: string;
-        source: CaseFactSource;
-        status: CaseFactStatus;
-        at: string;
-      }>
-    | undefined;
-  /** 依赖此事实的派生事实字段(静态、有限;平台不解释字段语义) */
-  dependsOn?: string[] | undefined;
-};
-
-/** Case Facts 存储映射;默认 subject 的键为 field,其余为 `${subject}.${field}` */
-export type CaseFacts = Record<string, CaseFact>;
-
-/** 短时"近期询问过"记录,仅用于抑制重复追问,不构成永久禁止 */
-export type AskedFieldRecord = {
-  field: string;
-  subject: string;
-  reason: string;
-  askedAt: string;
-  factValueAtAsk: string | null;
-};
-
-/** 结构化动作历史:记录建议/进行中/完成/失败/被拒的动作,不保存推理 */
-export type ActionRecord = {
-  action: string;
-  result: "suggested" | "in_progress" | "completed" | "failed" | "rejected";
-  subject: string;
-  at: string;
-};
 
 export const messages = conversationSchema.table(
   "messages",
@@ -390,6 +321,15 @@ export const messages = conversationSchema.table(
     sendUpdatedAt: timestamp("send_updated_at", { withTimezone: true }),
     replyBatchId: varchar("reply_batch_id", { length: 700 }),
     replySequence: integer("reply_sequence"),
+    /** 引用回复的原通道消息（ADR-0006 群聊引用） */
+    replyToChannelMessageId: varchar("reply_to_channel_message_id", {
+      length: 300,
+    }),
+    /** @ 提及的通道联系人（ADR-0006 群聊 @），默认空数组 */
+    mentionContactRefs: jsonb("mention_contact_refs")
+      .$type<string[]>()
+      .default([])
+      .notNull(),
     idempotencyKey: varchar("idempotency_key", { length: 600 }).notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -1299,6 +1239,8 @@ export const users = identitySchema.table("users", {
     () => storedFiles.fileId,
     { onDelete: "set null" },
   ),
+  /** 平台预设头像 id（见 identity/avatar-presets）；优先于默认哈希头像，次于自定义上传 */
+  avatarPreset: text("avatar_preset"),
   /** 信息名片显示名（可空；空 = 展示 username） */
   displayName: varchar("display_name", { length: 24 }),
   /** 客服自选专家标签（标签键 = 专家队列 key，用于转人工定向路由） */

@@ -714,21 +714,6 @@ async function transitionInTransaction(
   }
 
   if (!beginsCycle) {
-    // 人工解决后重置会话 Case 状态：清除 requiresHuman 与 handoff 阶段。
-    // 否则 Agent 接续时上下文仍为"需要人工"，会无限转人工（P0 修复）。
-    // 注意：requiresHuman 由模型独立输出，可能与 stage='handoff' 不同步，
-    // 因此重置条件以 requiresHuman=true 为准，覆盖所有 stage 组合。
-    if (type === "resolved") {
-      await transaction
-        .update(schema.caseStates)
-        .set({ requiresHuman: false, stage: "answering", updatedAt: now })
-        .where(
-          and(
-            eq(schema.caseStates.conversationId, input.conversationId),
-            eq(schema.caseStates.requiresHuman, true),
-          ),
-        );
-    }
     const cycleValues =
       type === "accepted"
         ? {

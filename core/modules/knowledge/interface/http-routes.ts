@@ -10,8 +10,10 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import * as schema from "../../../infrastructure/postgres/schema.js";
-import type { OpenAiCompatibleClient } from "../../../infrastructure/model_runtime/openai-compatible-client.js";
-import type { WeKnoraKnowledgeClient } from "../../../infrastructure/knowledge/weknora-knowledge-client.js";
+import type {
+  KnowledgeChatCompletionModel,
+  KnowledgeProvider,
+} from "../contracts/knowledge-search.js";
 import {
   requireAdminIdentity,
   requireBusinessIdentity,
@@ -183,9 +185,20 @@ type ReplySuggestion = {
   generationStatus: "complete";
 };
 
+/**
+ * 平台中立的草稿系统提示词（组合层缺省值）：只描述任务与输出规则，
+ * 不包含任何业务文案。业务 Prompt 应由 Solution 通过依赖注入提供。
+ */
+const NEUTRAL_DRAFT_SYSTEM_PROMPT =
+  "根据提供的会话上下文和知识证据，起草一条简洁的回复正文。" +
+  "不得编造未提供的事实；证据不足时明确说明并指出需要补充的信息。" +
+  "只输出回复正文。";
+
 type KnowledgeRouteDependencies = {
-  weknora?: WeKnoraKnowledgeClient | undefined;
-  model?: OpenAiCompatibleClient | undefined;
+  weknora?: KnowledgeProvider | undefined;
+  model?: KnowledgeChatCompletionModel | undefined;
+  /** 业务方注入的草稿系统提示词；缺省使用平台中立文案。 */
+  draftSystemPrompt?: string | undefined;
 };
 
 /** 注册知识模块的所有 HTTP 路由 */
@@ -617,6 +630,8 @@ export function registerKnowledgeRoutes(
           userId: identity.user.userId,
           retrievalId: body.data.retrievalId,
           sourceIp: request.ip,
+          draftSystemPrompt:
+            dependencies.draftSystemPrompt ?? NEUTRAL_DRAFT_SYSTEM_PROMPT,
         }),
       );
     },

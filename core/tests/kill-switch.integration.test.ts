@@ -20,7 +20,7 @@ import * as schema from "../infrastructure/postgres/schema.js";
 import { OpenAiCompatibleClient } from "../infrastructure/model_runtime/openai-compatible-client.js";
 import type { ChannelSendOperations } from "../modules/channel/contracts/channel-send-operations.js";
 import { ingestChannelEvents } from "../modules/conversations/application/ingest-channel-events.js";
-import { processAgentTurn } from "../modules/agent/application/process-agent-turn.js";
+import { AgentTurnExecutor } from "../modules/agent/application/agent-turn-executor.js";
 import { processOutboundMessages } from "../modules/conversations/application/process-outbound-messages.js";
 import { updateRuntimeSettings } from "../modules/operations/application/runtime-settings.js";
 
@@ -70,14 +70,8 @@ integration("AI Kill Switch 双层闸门与 Agent 总开关", () => {
     try {
       for (const { conversationId, contactId } of created) {
         await postgres.db
-          .delete(schema.mediaAssets)
-          .where(eq(schema.mediaAssets.conversationId, conversationId));
-        await postgres.db
           .delete(schema.agentTurns)
           .where(eq(schema.agentTurns.conversationId, conversationId));
-        await postgres.db
-          .delete(schema.caseStates)
-          .where(eq(schema.caseStates.conversationId, conversationId));
         await postgres.db
           .delete(schema.memoryCaptureStates)
           .where(eq(schema.memoryCaptureStates.conversationId, conversationId));
@@ -168,7 +162,11 @@ integration("AI Kill Switch 双层闸门与 Agent 总开关", () => {
     });
 
     const model = stubModel([replyDecision()]);
-    await processAgentTurn(postgres.db, model, "deepseek-v4-flash", {
+    await new AgentTurnExecutor(
+      postgres.db,
+      model,
+      "deepseek-v4-flash",
+    ).execute({
       turnId: turn.turnId,
       traceId: `killswitch:${message.messageId}`,
     });

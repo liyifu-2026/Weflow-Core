@@ -24,7 +24,7 @@ import {
   describeStagedSolutionPackage,
   extractSolutionTgz,
 } from "./solution-pack.js";
-import { verifySolutionSignature } from "@weflow/solution-sdk";
+import { verifySolutionSignature } from "@weflow-leaif/solution-sdk";
 import {
   listRegistrySolutions,
   putRegistryPackage,

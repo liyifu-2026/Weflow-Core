@@ -8,7 +8,7 @@ import {
   type Postgres,
 } from "../infrastructure/postgres/client.js";
 import * as schema from "../infrastructure/postgres/schema.js";
-import { processAgentTurn } from "../modules/agent/application/process-agent-turn.js";
+import { AgentTurnExecutor } from "../modules/agent/application/agent-turn-executor.js";
 import { registerConversationRoutes } from "../modules/conversations/interface/http-routes.js";
 import { registerContactProfileRoutes } from "../modules/contacts/interface/http-routes.js";
 import { registerHandoffRoutes } from "../modules/handoff/interface/http-routes.js";
@@ -208,7 +208,6 @@ integration("shared conversation query", () => {
               channelContactId: string;
               tags: string[];
             };
-            riskLevel: string | null;
           }>;
         }>()
         .conversations.filter(
@@ -226,7 +225,6 @@ integration("shared conversation query", () => {
           channelContactId: `shared-${suffix}`,
           tags: [],
         },
-        riskLevel: null,
       });
 
       const firstPage = await server.inject({
@@ -328,7 +326,11 @@ integration("shared conversation query", () => {
         return Promise.resolve(Response.json({ choices: [] }));
       },
     });
-    await processAgentTurn(postgres.db, model, "deepseek-v4-flash", {
+    await new AgentTurnExecutor(
+      postgres.db,
+      model,
+      "deepseek-v4-flash",
+    ).execute({
       turnId: lateTurnId,
       traceId: `handoff-late:${suffix}`,
     });

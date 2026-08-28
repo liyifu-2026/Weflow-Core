@@ -355,6 +355,37 @@ class ScreenOCR:
             dec = await BitmapDecoder.create_async(s)
             bmp = await dec.get_software_bitmap_async()
             eng = OcrEngine.try_create_from_user_profile_languages()
+            # 本机用户首选语言为 en-US 时，user_profile 引擎为英文，无法识别中文“拍一拍”。
+            # replica 在中文环境下正常，但本机可用语言含 zh-Hans-CN，需显式回退到中文引擎。
+            try:
+                tag = ""
+                if eng is not None and hasattr(eng, "recognizer_language"):
+                    rl = eng.recognizer_language
+                    tag = getattr(rl, "language_tag", "") or getattr(rl, "languageTag", "") or str(rl)
+                if not tag.lower().startswith("zh"):
+                    from winsdk.windows.globalization import Language
+                    # 优先已安装的中文识别器
+                    try:
+                        for cand_lang in OcrEngine.available_recognizer_languages:
+                            cand_tag = getattr(cand_lang, "language_tag", "") or getattr(cand_lang, "languageTag", "") or ""
+                            if cand_tag.lower().startswith("zh"):
+                                cand_eng = OcrEngine.try_create_from_language(cand_lang)
+                                if cand_eng is not None:
+                                    eng = cand_eng
+                                    break
+                    except Exception:
+                        pass
+                    if eng is None or not str(getattr(getattr(eng, "recognizer_language", ""), "language_tag", "")).lower().startswith("zh"):
+                        for lang_tag in ("zh-Hans-CN", "zh-Hans", "zh-CN"):
+                            try:
+                                cand = OcrEngine.try_create_from_language(Language(lang_tag))
+                                if cand is not None:
+                                    eng = cand
+                                    break
+                            except Exception:
+                                continue
+            except Exception:
+                pass
             if eng is None:
                 return []
             res = await eng.recognize_async(bmp)
@@ -368,7 +399,10 @@ class ScreenOCR:
             return out
 
         try:
-            return asyncio.run(_run())
+            return asyncio.run(asyncio.wait_for(_run(), timeout=8))
+        except asyncio.TimeoutError:
+            wxlog.debug('OCR 识别超时（8s）')
+            return []
         except Exception as e:
             wxlog.debug(f'OCR 识别失败：{e}')
             return []

@@ -5,6 +5,9 @@
 .data/
 *.log
 
+# npm auth (local-only, contains tokens)
+**/.npmrc
+
 # Business solutions live in the standalone Weflow-Solutions repo; never
 # commit local copies or install-time staging leftovers.
 solutions/customer-support/

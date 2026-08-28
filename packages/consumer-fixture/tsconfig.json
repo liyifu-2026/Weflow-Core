@@ -20,8 +20,8 @@
     "typeRoots": ["../../core/node_modules/@types", "../../node_modules/@types"],
     "baseUrl": ".",
     "paths": {
-      "@weflow/contracts": ["../contracts/dist/index.d.ts"],
-      "@weflow/plugin-sdk": ["../plugin-sdk/dist/index.d.ts"],
+      "@weflow-leaif/contracts": ["../contracts/dist/index.d.ts"],
+      "@weflow-leaif/plugin-sdk": ["../plugin-sdk/dist/index.d.ts"],
       "@weflow/admin-sdk": ["../admin-sdk/dist/index.d.ts"]
     }
   },

@@ -20,7 +20,7 @@
     "typeRoots": ["../../core/node_modules/@types", "../../node_modules/@types"],
     "baseUrl": ".",
     "paths": {
-      "@weflow/solution-sdk": ["../../packages/solution-sdk/dist/index.d.ts"],
+      "@weflow-leaif/solution-sdk": ["../../packages/solution-sdk/dist/index.d.ts"],
       "@weflow/admin-sdk": ["../../packages/admin-sdk/dist/index.d.ts"]
     }
   },

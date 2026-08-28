@@ -32,6 +32,28 @@ Keep application services independent of Fastify requests, environment
 variables, and provider-specific payloads. Put provider protocol translation
 in infrastructure adapters.
 
+### Module structure enforcement
+
+Every module under `modules/` that has an `interface/` directory with route
+handlers MUST also have an `application/` directory with at least one service
+file. The `application/` directory must never be empty.
+
+Route handlers in `interface/` are HTTP adapters. They must:
+1. Authenticate the request (`requireBusinessIdentity` or `requireAdminIdentity`)
+2. Validate input with Zod schemas
+3. Delegate to an application-layer function
+4. Map the result to an HTTP response
+
+Route handlers must NOT:
+- Import from `infrastructure/postgres/schema` or call Drizzle ORM directly
+- Import from `infrastructure/solutions/*` directly (go through application layer)
+- Contain business orchestration logic (npm fetch → download → install → activate)
+- Contain business validation logic (package name normalization, error classification)
+- Dynamically import from `tooling/` or `weflowctl/`
+
+If a new module is created and its `application/` directory is empty, the
+module must be restructured before merging.
+
 ## PostgreSQL, transactions, and queues
 
 - PostgreSQL is the only durable business source of truth. Redis/BullMQ jobs

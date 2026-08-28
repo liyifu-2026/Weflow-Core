@@ -131,9 +131,6 @@ integration("Mobile Handoff V2 real business scenarios", () => {
       .delete(schema.messages)
       .where(inArray(schema.messages.conversationId, conversationIds));
     await postgres.db
-      .delete(schema.caseStates)
-      .where(inArray(schema.caseStates.conversationId, conversationIds));
-    await postgres.db
       .delete(schema.conversations)
       .where(inArray(schema.conversations.conversationId, conversationIds));
     await postgres.db
@@ -167,7 +164,7 @@ integration("Mobile Handoff V2 real business scenarios", () => {
   });
 
   it("Agent 普通转人工只进入专用 Mobile Inbox", async () => {
-    const conversationId = await seedHandoff("ordinary", "low");
+    const conversationId = await seedHandoff("ordinary");
     const response = await inbox(user(0).cookie);
     expect(response.statusCode, response.body).toBe(200);
     expect(
@@ -197,17 +194,8 @@ integration("Mobile Handoff V2 real business scenarios", () => {
     expect(feedback.statusCode).toBe(201);
   });
 
-  it("高风险 Handoff 由 Server2 排在普通 Handoff 之前", async () => {
-    const lowId = await seedHandoff("sort-low", "low");
-    const highId = await seedHandoff("sort-high", "high");
-    const items = inboxItems(await inbox(user(0).cookie));
-    expect(
-      items.findIndex((item) => item.conversationId === highId),
-    ).toBeLessThan(items.findIndex((item) => item.conversationId === lowId));
-  });
-
   it("两名客服并发接手时严格只有一人获得发送权", async () => {
-    const conversationId = await seedHandoff("race", "medium");
+    const conversationId = await seedHandoff("race");
     const revision = await currentRevision(conversationId);
     const [first, second] = await Promise.all([
       claim(conversationId, user(0).cookie, revision),
@@ -463,7 +451,7 @@ integration("Mobile Handoff V2 real business scenarios", () => {
     expect(state.agentPaused).toBe(false);
   });
 
-  async function seedHandoff(label: string, riskLevel = "low") {
+  async function seedHandoff(label: string) {
     const conversationId = `channel:mobile-${label}-${suffix}`;
     const contactId = `contact:mobile-${label}-${suffix}`;
     conversationIds.push(conversationId);
@@ -479,14 +467,6 @@ integration("Mobile Handoff V2 real business scenarios", () => {
       contactId,
       channel: "channel",
       channelConversationId: `mobile-${label}-${suffix}`,
-    });
-    await postgres.db.insert(schema.caseStates).values({
-      conversationId,
-      revision: 1,
-      riskLevel,
-      knownFields: { device_model: "V9" },
-      missingFields: ["indicator_state"],
-      requiresHuman: true,
     });
     await insertCustomerMessage(
       conversationId,
@@ -514,7 +494,7 @@ integration("Mobile Handoff V2 real business scenarios", () => {
   }
 
   async function seedOwned(label: string) {
-    const conversationId = await seedHandoff(label, "medium");
+    const conversationId = await seedHandoff(label);
     const response = await claim(
       conversationId,
       user(0).cookie,
@@ -914,5 +894,60 @@ integration("Mobile Handoff V2 real business scenarios", () => {
       conversations: Array<{ handoffStatus: string | null }>;
     }>().conversations[0];
     expect(first?.handoffStatus).not.toBeNull();
+  });
+
+  it("结束态后可重新接管：resolve 后 take-over 开启新 cycle", async () => {
+    const conversationId = await seedOwned("re-takeover");
+
+    const resolveResponse = await server.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${encodeURIComponent(conversationId)}/handoff/resolve`,
+      headers: { cookie: user(0).cookie },
+      payload: {
+        summary: "首次处理完毕",
+        clientRequestId: randomUUID(),
+      },
+    });
+    expect(resolveResponse.statusCode, resolveResponse.body).toBe(201);
+    const resolvedState = required(
+      (
+        await postgres.db
+          .select()
+          .from(schema.handoffStates)
+          .where(eq(schema.handoffStates.conversationId, conversationId))
+      )[0],
+      "handoff state after resolve",
+    );
+    expect(resolvedState.status).toBe("resolved");
+    expect(resolvedState.agentPaused).toBe(false);
+
+    const takeoverResponse = await server.inject({
+      method: "POST",
+      url: `/api/v1/conversations/${encodeURIComponent(conversationId)}/handoff/take-over`,
+      headers: { cookie: user(1).cookie },
+      payload: {
+        summary: "二次跟进",
+        clientRequestId: randomUUID(),
+      },
+    });
+    expect(takeoverResponse.statusCode, takeoverResponse.body).toBe(201);
+    const newCycleState = required(
+      (
+        await postgres.db
+          .select()
+          .from(schema.handoffStates)
+          .where(eq(schema.handoffStates.conversationId, conversationId))
+      )[0],
+      "handoff state after re-takeover",
+    );
+    expect(newCycleState.status).toBe("in_progress");
+    expect(newCycleState.assignedUserId).toBe(user(1).userId);
+    expect(newCycleState.agentPaused).toBe(true);
+
+    const cycles = await postgres.db
+      .select()
+      .from(schema.handoffCycles)
+      .where(eq(schema.handoffCycles.conversationId, conversationId));
+    expect(cycles.length).toBeGreaterThanOrEqual(2);
   });
 });

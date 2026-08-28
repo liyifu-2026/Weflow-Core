@@ -73,12 +73,6 @@ const router = createRouter({
           component: () => import("@/weflow/views/SystemStatusView.vue"),
         },
         {
-          path: "system/operations",
-          name: "operations",
-          component: () => import("@/weflow/views/OperationsConsoleView.vue"),
-          meta: { admin: true },
-        },
-        {
           path: "settings",
           name: "settings",
           component: () => import("@/weflow/views/SettingsCenter.vue"),
@@ -90,9 +84,16 @@ const router = createRouter({
           component: () => import("@/weflow/views/SolutionsView.vue"),
           meta: { admin: true },
         },
+        {
+          // ExtensionHost catch-all：未匹配平台路由的地址一律交给扩展宿主，
+          // 按已激活 Solution 声明的 path（支持 ':param' 单段通配）解析；
+          // 未命中时由视图渲染平台中立的「未找到业务扩展」空态。
+          path: ":pathMatch(.*)*",
+          name: "extensionHostCatchAll",
+          component: () => import("@/weflow/views/ExtensionHost.vue"),
+        },
       ],
     },
-    { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });
 

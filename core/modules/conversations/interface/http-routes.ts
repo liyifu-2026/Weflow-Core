@@ -1,16 +1,18 @@
 /**
  * 会话 HTTP 路由
- * 提供会话列表、消息记录查询、已读标记和人工回复等 API 端点。
+ * 提供会话列表、消息记录查询、已读标记、人工回复和拍一拍等 API 端点。
  * 所有路由均需业务身份认证。
  */
 
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
 import type * as schema from "../../../infrastructure/postgres/schema.js";
 import * as databaseSchema from "../../../infrastructure/postgres/schema.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
+import { requireAdminIdentity } from "../../identity/interface/request-authentication.js";
 import {
   createManualReply,
   getManualReplyOutcome,
@@ -25,10 +27,26 @@ import {
   setConversationHidden,
 } from "../application/query-conversations.js";
 
+/** Channel Host 连接配置（拍一拍端点需要） */
+export type ChannelHostConfig = {
+  baseUrl: string;
+  token: string;
+};
+
 const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   contactId: z.string().trim().min(1).max(600).optional(),
   scope: z.enum(["attention", "mine", "others", "all"]).optional(),
+  /**
+   * 联系人白名单过滤：
+   * - `true`  → 仅返回 agentEnabled=true 的会话（工作区视图使用）
+   * - `false` → 仅返回 agentEnabled=false 的会话（只读联系人视图过滤来源）
+   * - 不传   → 全部会话（保持向后兼容）
+   */
+  agentEnabled: z
+    .union([z.literal("true"), z.literal("false")])
+    .transform((value) => value === "true")
+    .optional(),
   before: z.string().min(1).optional(),
 });
 const searchQuery = z.object({
@@ -44,11 +62,32 @@ const transcriptQuery = z.object({
 });
 const manualReplyBody = z
   .object({
-    text: z.string().trim().min(1).max(4_000),
+    text: z
+      .string()
+      .max(4_000)
+      .optional()
+      .transform((v) => (v?.trim() || "")),
     clientRequestId: z.uuid(),
     expectedConversationRevision: z.number().int().min(0).optional(),
+    /** 出站媒体（ADR：人工回复携带媒体）；mediaId 来自 POST /api/v1/media 上传 */
+    mediaId: z.string().regex(/^media:[a-f0-9]{64}$/).optional(),
+    /** 上传返回的媒体元数据（fileId/kind），用于落 mediaAssets */
+    media: z
+      .object({
+        fileId: z.string().trim().min(1).max(36),
+        kind: z.enum(["image", "file", "voice", "video"]).optional(),
+      })
+      .optional(),
+    /** 引用回复的原通道消息（ADR-0006 群聊引用） */
+    replyToChannelMessageId: z.string().trim().min(1).max(300).optional(),
+    /** @ 提及的通道联系人（ADR-0006 群聊 @） */
+    mentionContactRefs: z.array(z.string().trim().min(1).max(256)).max(50).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (data) => data.text.trim().length > 0 || data.mediaId || data.media,
+    { message: "text_required_for_non_media_messages", path: ["text"] },
+  );
 const readBody = z
   .object({ lastReadMessageId: z.string().min(1).max(600) })
   .strict();
@@ -58,6 +97,7 @@ const visibilityBody = z.object({ hidden: z.boolean() }).strict();
 export function registerConversationRoutes(
   server: FastifyInstance,
   db: NodePgDatabase<typeof schema>,
+  channelHost?: ChannelHostConfig,
 ): void {
   server.get("/api/v1/conversations", async (request, reply) => {
     const identity = await requireBusinessIdentity(db, request, reply);
@@ -73,6 +113,9 @@ export function registerConversationRoutes(
         ? { contactId: query.data.contactId }
         : {}),
       ...(query.data.scope !== undefined ? { scope: query.data.scope } : {}),
+      ...(query.data.agentEnabled !== undefined
+        ? { agentEnabled: query.data.agentEnabled }
+        : {}),
       ...(query.data.before !== undefined ? { before: query.data.before } : {}),
     });
     return {
@@ -210,6 +253,21 @@ export function registerConversationRoutes(
               expectedConversationRevision:
                 body.data.expectedConversationRevision,
             }),
+        ...(body.data.mediaId ? { mediaId: body.data.mediaId } : {}),
+        ...(body.data.media
+          ? {
+              media: {
+                fileId: body.data.media.fileId,
+                ...(body.data.media.kind ? { kind: body.data.media.kind } : {}),
+              },
+            }
+          : {}),
+        ...(body.data.replyToChannelMessageId
+          ? { replyToChannelMessageId: body.data.replyToChannelMessageId }
+          : {}),
+        ...(body.data.mentionContactRefs
+          ? { mentionContactRefs: body.data.mentionContactRefs }
+          : {}),
         sourceIp: request.ip,
       });
       if (result.status === "conversation_not_found") {
@@ -241,7 +299,13 @@ export function registerConversationRoutes(
       if (!identity) return;
       const params = transcriptParams.safeParse(request.params);
       const query = z
-        .object({ clientRequestId: z.uuid() })
+        .object({
+          clientRequestId: z.union([
+            z.uuid(),
+            z.string().regex(/^agent-message:[a-zA-Z0-9:_-]+$/),
+            z.string().regex(/^manual-message:[a-f0-9]{64}$/),
+          ]),
+        })
         .safeParse(request.query);
       if (!params.success || !query.success) {
         return reply.code(400).send({ error: "invalid_request" });
@@ -250,6 +314,130 @@ export function registerConversationRoutes(
         conversationId: params.data.conversationId,
         clientRequestId: query.data.clientRequestId,
       });
+    },
+  );
+
+  /**
+   * 同步端点（管理员）：请求 Channel Host 以 historical 回溯通道重扫微信
+   * 历史。补到的漏捕消息按 historical 事件摄取——只入库展示，绝不触发
+   * Agent Turn / 记忆 / 通知（零副作用）；已入库消息由消息表唯一约束
+   * 去重，不会重复。回溯异步执行，立即返回 started。
+   */
+  server.post("/api/v1/admin/channel/sync", async (request, reply) => {
+    const identity = await requireAdminIdentity(db, request, reply);
+    if (!identity) return;
+    if (!channelHost) {
+      return reply.code(503).send({ error: "channel_host_not_configured" });
+    }
+    try {
+      const response = await fetch(`${channelHost.baseUrl}/api/v1/channel/sync`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${channelHost.token}`,
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) {
+        return reply.code(response.status).send({
+          error: "channel_sync_failed",
+          message: response.statusText,
+        });
+      }
+      const result = (await response.json()) as { started?: boolean };
+      return reply.send({
+        synced: true,
+        started: result.started ?? false,
+      });
+    } catch (error) {
+      return reply.code(502).send({
+        error: "channel_host_error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  /**
+   * 拍一拍端点：触发对会话联系人的拍一拍动作。
+   * 直接调用 Channel Host 的 send API，不创建本地消息记录；
+   * 拍一拍结果通过事件轮询从 Channel Host 同步回来。
+   */
+  server.post(
+    "/api/v1/conversations/:conversationId/poke",
+    async (request, reply) => {
+      const identity = await requireBusinessIdentity(db, request, reply);
+      if (!identity) return;
+      if (!channelHost) {
+        return reply.code(503).send({ error: "channel_host_not_configured" });
+      }
+      const params = transcriptParams.safeParse(request.params);
+      if (!params.success) {
+        return reply.code(400).send({ error: "invalid_request" });
+      }
+      const conversationId = params.data.conversationId;
+      // 验证会话存在且用户有接管权限
+      const conversation = await db
+        .select({
+          channelConversationId: databaseSchema.conversations.channelConversationId,
+          channelAccount: databaseSchema.conversations.channelAccount,
+        })
+        .from(databaseSchema.conversations)
+        .where(eq(databaseSchema.conversations.conversationId, conversationId))
+        .limit(1);
+      if (!conversation[0]) {
+        return reply.code(404).send({ error: "conversation_not_found" });
+      }
+      const handoff = await db
+        .select({
+          status: databaseSchema.handoffStates.status,
+          assignedUserId: databaseSchema.handoffStates.assignedUserId,
+        })
+        .from(databaseSchema.handoffStates)
+        .where(eq(databaseSchema.handoffStates.conversationId, conversationId))
+        .limit(1);
+      if (
+        !handoff[0] ||
+        handoff[0].status !== "in_progress" ||
+        handoff[0].assignedUserId !== identity.user.userId
+      ) {
+        return reply.code(403).send({ error: "handoff_not_assignee" });
+      }
+      // 生成确定性 operationId 并调用 Channel Host
+      const operationId = `poke:${randomUUID()}`;
+      const channelConversationId = conversation[0].channelConversationId;
+      const account = conversation[0].channelAccount;
+      try {
+        const response = await fetch(
+          `${channelHost.baseUrl}/api/v1/channel/send`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${channelHost.token}`,
+            },
+            body: JSON.stringify({
+              operationId,
+              conversationRef: channelConversationId,
+              payload: { kind: "poke" },
+              ...(account ? { account } : {}),
+            }),
+            signal: AbortSignal.timeout(10_000),
+          },
+        );
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          return reply.code(response.status).send({
+            error: "poke_failed",
+            message: (error as { error?: string }).error ?? response.statusText,
+          });
+        }
+        const result = await response.json();
+        return reply.code(202).send({ poke: result });
+      } catch (error) {
+        return reply.code(502).send({
+          error: "channel_host_error",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     },
   );
 }

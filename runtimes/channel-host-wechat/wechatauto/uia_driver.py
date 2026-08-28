@@ -40,6 +40,7 @@ from functools import lru_cache
 from typing import List, Optional, Tuple
 
 import uiautomation as auto
+from PIL import Image
 
 try:
     import win32gui, win32con, win32process, win32api
@@ -962,15 +963,28 @@ class WeChatUIA:
     def poke(self, who: Optional[str] = None) -> bool:
         """对联系人发起「拍一拍」（右键头像 → 点击拍一拍菜单项）。
 
-        微信 4.x 的拍一拍只能通过右键聊天中对方头像触发，菜单为自绘
-        不暴露 UIA；因此用「右键头像 + 全屏 OCR 定位拍一拍文字」实现。
-        需要 winsdk OCR 可用。
+        照搬 recall_last_message 的成熟套路：
+        1. 打开会话，找一条 friend 消息行（replica _find_friend_row 像素重心）；
+        2. 右键行内坐标；
+        3. **首选 UIA**：主窗口子树里找 mmui::XMenuView 菜单项 Name 含
+           「拍一拍」，命中 Invoke() 直接激活——不需要算菜单位置；
+        4. OCR 兜底（菜单自绘不暴露 UIA 时，全屏识别「拍一拍」文字点击）。
+        需要 winsdk OCR 作为兜底。
         """
         if not self.ensure_window():
             return False
+        # 窗口可见性硬校验：最小化时 UIA 坐标过期，菜单定位无效
+        hwnd = self._win.NativeWindowHandle if self._win else None
+        if hwnd and _HAS_WIN32 and (
+            not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd)
+        ):
+            if not self._force_foreground(hwnd):
+                return False
+            time.sleep(0.8)
         if who and not self.current_chat() == who:
             if not self.open_chat(who):
                 return False
+            time.sleep(0.8)
         row = self._find_friend_row()
         if row is None:
             return False
@@ -978,7 +992,7 @@ class WeChatUIA:
             r = row.BoundingRectangle
         except Exception:
             return False
-        # 头像位于消息行最左侧约 40-50px 处
+        # 头像位于消息行最左侧约 40-50px 处（replica 同款 +20 安全余量）
         ax = r.left + 70
         ay = (r.top + r.bottom) // 2
         try:
@@ -987,24 +1001,65 @@ class WeChatUIA:
         except Exception:
             return False
         for attempt in range(2):
+            # 每次尝试前刷新窗口矩形：防止期间窗口被移动/最小化
+            try:
+                wl, wt, wr, wb = win32gui.GetWindowRect(hwnd)
+            except Exception:
+                return False
+            if not (wl <= ax <= wr and wt <= ay <= wb):
+                wxlog.debug(
+                    f'poke: stale click ({ax},{ay}) win=({wl},{wt},{wr},{wb})'
+                )
+                return False
             self._set_cursor(ax, ay)
             time.sleep(0.2)
             self._right_click()
-            time.sleep(1.0)
+            time.sleep(0.9)
+            # ---- 首选：UIA 找菜单项（照搬 recall_last_message）----
+            item = self._uia_find_menu_item("拍一拍")
+            if item is not None and self._uia_click_menu_item(item):
+                wxlog.info(f'poke: UIA hit 拍一拍 at ({ax},{ay})')
+                time.sleep(0.5)
+                return True
+            # ---- 兜底：OCR（菜单自绘不暴露 UIA 时）----
             img = IG.grab()
             res = ScreenOCR.recognize(img)
             for text, x, y, w, h in res:
                 t = (text or "").replace(" ", "")
                 if "拍一拍" in t or t == "拍一" or t.startswith("拍一"):
-                    # 点击该文字中心
                     cx = x + w // 2
                     cy = y + h // 2
                     self._set_cursor(cx, cy)
                     time.sleep(0.2)
                     self._left_click()
                     time.sleep(0.5)
+                    wxlog.info(f'poke: OCR hit 拍一拍 at ({cx},{cy})')
                     return True
+            # 都没命中：安全关菜单换位置。绝不用 ESC（微信 ESC=关闭窗口）
+            self._dismiss_menu_safely(self._message_list())
+            time.sleep(0.4)
+        wxlog.warning('poke: menu item not found after retries')
         return False
+
+    def _dismiss_menu_safely(self, lst=None) -> None:
+        """用左键点击消息列表空白角落关闭残留右键菜单。
+
+        ESC 在微信里绑定「关闭/隐藏主窗口」，绝对不能用于关菜单。
+        左键点列表左上角附近（无消息气泡的空白区）即可让菜单消失。
+        """
+        try:
+            rect = lst.BoundingRectangle if lst is not None else None
+            if rect is not None:
+                # 列表内右下角偏上一点：通常无气泡、也不会触发消息点击
+                x = rect.right - 20
+                y = rect.top + 30
+            else:
+                return
+            self._set_cursor(x, y)
+            time.sleep(0.15)
+            self._left_click()
+        except Exception:
+            pass
 
     def _right_click_latest_row(self, who: Optional[str] = None) -> Optional[Tuple[int, int]]:
         """打开会话并右键最新一条消息行，返回气泡内右键坐标 (x, y)；失败返回 None。"""

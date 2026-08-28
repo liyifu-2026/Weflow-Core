@@ -1,4 +1,4 @@
-import type { RuntimeStatus } from "@weflow/contracts";
+import type { RuntimeStatus } from "@weflow-leaif/contracts";
 import type {
   SolutionDetail,
   SolutionOperation,

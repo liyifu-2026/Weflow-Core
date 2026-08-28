@@ -11,13 +11,13 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_DB: weflow
-          POSTGRES_USER: weflow
-          POSTGRES_PASSWORD: weflow
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB || 'weflow' }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER || 'weflow' }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD || 'weflow' }}
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U weflow -d weflow"
+          --health-cmd "pg_isready -U ${{ secrets.POSTGRES_USER || 'weflow' }} -d ${{ secrets.POSTGRES_DB || 'weflow' }}"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 20
@@ -32,9 +32,9 @@ jobs:
           --health-retries 20
 
     env:
-      DATABASE_URL: postgresql://weflow:weflow@127.0.0.1:5432/weflow
+      DATABASE_URL: postgresql://${{ secrets.POSTGRES_USER || 'weflow' }}:${{ secrets.POSTGRES_PASSWORD || 'weflow' }}@127.0.0.1:5432/${{ secrets.POSTGRES_DB || 'weflow' }}
       # 集成测试只允许连库名含 "test" 的专用库（tests/setup.ts 双重护栏）
-      TEST_DATABASE_URL: postgresql://weflow:weflow@127.0.0.1:5432/weflow_test
+      TEST_DATABASE_URL: postgresql://${{ secrets.POSTGRES_USER || 'weflow' }}:${{ secrets.POSTGRES_PASSWORD || 'weflow' }}@127.0.0.1:5432/weflow_test
       REDIS_URL: redis://127.0.0.1:6379
 
     steps:
@@ -51,7 +51,7 @@ jobs:
       - name: Migrate test database
         run: pnpm migrate
         env:
-          DATABASE_URL: postgresql://weflow:weflow@127.0.0.1:5432/weflow_test
+          DATABASE_URL: postgresql://${{ secrets.POSTGRES_USER || 'weflow' }}:${{ secrets.POSTGRES_PASSWORD || 'weflow' }}@127.0.0.1:5432/weflow_test
       - run: pnpm check
       - run: pnpm build
       - run: bash scripts/health-smoke.sh

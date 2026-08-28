@@ -331,6 +331,38 @@ onMounted(() => {
         <div v-if="modelSettings.settings.triageModel" class="wf-model-row">
           <div class="wf-model-label">
             <strong>预判分流模型</strong>
+            <span
+              class="wf-model-hint"
+              data-tip="预判分流判定使用的极速小模型；判定失败/超时自动放行主力接待。"
+              >ⓘ 模型说明</span
+            >
+          </div>
+          <div class="wf-model-fields">
+            <input
+              class="wf-input"
+              v-model="modelSettings.settings.triageModel.name"
+              placeholder="分流模型名"
+              :disabled="modelSaving"
+            />
+            <input
+              class="wf-input"
+              v-model="modelSettings.settings.triageModel.baseUrl"
+              placeholder="Base URL"
+              :disabled="modelSaving"
+            />
+            <input
+              class="wf-input"
+              v-model="triageApiKeyInput"
+              type="password"
+              :placeholder="
+                modelSettings.settings.triageModel.hasApiKey
+                  ? 'API Key 已配置（留空保持不变）'
+                  : 'API Key'
+              "
+              :disabled="modelSaving"
+            />
+          </div>
+        </div>
         <div v-if="modelSettings.settings.fastModel" class="wf-model-row">
           <div class="wf-model-label">
             <strong>简单题直答模型</strong>

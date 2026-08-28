@@ -8,12 +8,14 @@ import { useEscClose } from "../composables/use-esc-close";
 import { useFocusTrap } from "../composables/use-focus-trap";
 import { confirmDialog } from "../components/confirm-dialog";
 import { useRoute, useRouter } from "vue-router";
+import DefaultAvatar from "../components/DefaultAvatar.vue";
 type User = {
   userId: string;
   username: string;
   role: "admin" | "operator";
   status: string;
   mustChangePassword: boolean;
+  avatarUrl?: string | null;
   createdAt: string;
 };
 const users = ref<User[]>([]);
@@ -229,6 +231,7 @@ onMounted(load);
       <table class="wf-table" data-card>
         <thead>
           <tr>
+            <th>头像</th>
             <th>账号</th>
             <th>角色</th>
             <th>状态</th>
@@ -238,6 +241,15 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-for="user in pagedUsers" :key="user.userId">
+            <td data-label="头像">
+              <img
+                v-if="user.avatarUrl"
+                :src="user.avatarUrl"
+                :alt="user.username"
+                class="wf-user-avatar-cell"
+              />
+              <DefaultAvatar v-else :name="user.username" :size="28" />
+            </td>
             <td data-label="账号">
                 <strong>{{ user.username }}</strong>
               <div v-if="user.mustChangePassword" class="wf-muted">
@@ -386,6 +398,13 @@ onMounted(load);
 </template>
 
 <style scoped>
+.wf-user-avatar-cell {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
 .wf-users-body {
   padding: 0 16px 14px;
 }

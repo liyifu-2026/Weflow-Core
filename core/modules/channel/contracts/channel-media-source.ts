@@ -7,4 +7,4 @@ export type {
   ChannelMediaVariant,
   ChannelMediaResult,
   ChannelMediaSource,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";

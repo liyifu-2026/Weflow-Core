@@ -9,7 +9,7 @@
  * adapting a `PluginPackage` into a runtime `PluginDefinition` happens in the
  * platform adapter layer, never by re-declaring lookalike types.
  */
-import type { AgentExecutionStrategy } from "@weflow/contracts";
+import type { AgentExecutionStrategy } from "@weflow-leaif/contracts";
 
 // Runtime contract shapes — canonical definitions live in @weflow/contracts.
 export {
@@ -17,8 +17,8 @@ export {
   type CapabilityToken,
   type KernelEventListener,
   type MaybePromise,
-} from "@weflow/contracts";
-export type PluginDefinition = import("@weflow/contracts").PluginDefinition;
+} from "@weflow-leaif/contracts";
+export type PluginDefinition = import("@weflow-leaif/contracts").PluginDefinition;
 
 /** Manifest-level capability declaration (authoring view of a token). */
 export interface CapabilityDeclaration {

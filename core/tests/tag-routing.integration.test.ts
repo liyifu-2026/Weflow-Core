@@ -61,14 +61,6 @@ integration("转人工按标签定向路由（tag-based routing）", () => {
       channel: "channel",
       channelConversationId: `tag-${label}-${suffix}`,
     });
-    await postgres.db.insert(schema.caseStates).values({
-      conversationId,
-      revision: 1,
-      riskLevel: "medium",
-      knownFields: {},
-      missingFields: [],
-      requiresHuman: true,
-    });
     const result = await createHandoff(postgres.db, {
       conversationId,
       actorUserId: "system-agent",
@@ -140,9 +132,6 @@ integration("转人工按标签定向路由（tag-based routing）", () => {
     await postgres.db
       .delete(schema.handoffCycles)
       .where(inArray(schema.handoffCycles.conversationId, conversationIds));
-    await postgres.db
-      .delete(schema.caseStates)
-      .where(inArray(schema.caseStates.conversationId, conversationIds));
     await postgres.db
       .delete(schema.messages)
       .where(inArray(schema.messages.conversationId, conversationIds));

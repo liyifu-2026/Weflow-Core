@@ -38,6 +38,11 @@ export type AgentTurnOutcomeInput = {
   responseText: string;
   responseSegments: string[];
   model?: string;
+  /**
+   * AI 员工标识（Solution 提供，平台不解释；如 AI 员工 definition id）。
+   * 提供时写入 agent 出站消息的 actor_id，前端据此渲染该员工的专属头像。
+   */
+  aiEmployeeId?: string;
   memoryWatermarkMessageId: string;
 };
 
@@ -294,6 +299,7 @@ export async function commitAgentTurnOutcome(
       traceId: input.traceId,
       segments: input.responseSegments,
       variant: input.variant,
+      ...(input.aiEmployeeId ? { actorId: input.aiEmployeeId } : {}),
     });
     // Real-time：Agent 出站消息落库后即时向 Console SSE 推送 agent_message，
     // 前端收到后回拉 Transcript；不依赖 Channel Host 的回执，避免「发送后等几秒才出现」。

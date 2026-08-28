@@ -1,7 +1,7 @@
 import type {
   RuntimeStatus,
   SolutionInstallationState,
-} from "@weflow/contracts";
+} from "@weflow-leaif/contracts";
 
 export interface SolutionSummary extends SolutionInstallationState {
   name: string;

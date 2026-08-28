@@ -192,13 +192,28 @@ await runProcess({
         db: unknown,
         contactId: string,
         conversationId: string,
+        triggerText?: string | undefined,
       ) => Promise<void>;
+      /** 可选：读取 preResolve 阶段缓存的 AI 员工标识（用于消息头像） */
+      getCachedAiEmployeeId?: (
+        contactId: string,
+        conversationId: string,
+      ) => string | null | undefined;
     };
     const skillRegistry = new MapSkillRegistry();
     const strategyRegistry = new MapExecutionStrategyRegistry();
     // Optional pre-resolve hook for AI employee prompt resolution.
     let preResolveAiEmployeePrompt:
-      | ((contactId: string, conversationId: string) => Promise<void>)
+      | ((
+          contactId: string,
+          conversationId: string,
+          triggerText?: string | undefined,
+        ) => Promise<void>)
+      | undefined;
+    // Optional AI employee identity hook: preResolve 之后按会话读取员工标识，
+    // 写入 agent 出站消息 actor_id，供各端渲染员工专属头像。
+    let resolveAiEmployeeId:
+      | ((contactId: string, conversationId: string) => Promise<string | null>)
       | undefined;
     const registerAgentPluginModule = (
       module: AgentPluginModule,
@@ -214,12 +229,17 @@ await runProcess({
         strategyRegistry.register(module.strategy);
       }
       if (module.preResolveAiEmployeePrompt) {
-        preResolveAiEmployeePrompt = (contactId, conversationId) =>
+        preResolveAiEmployeePrompt = (contactId, conversationId, triggerText) =>
           module.preResolveAiEmployeePrompt!(
             postgres.db,
             contactId,
             conversationId,
+            triggerText,
           );
+      }
+      if (module.getCachedAiEmployeeId && module.preResolveAiEmployeePrompt) {
+        resolveAiEmployeeId = async (contactId, conversationId) =>
+          module.getCachedAiEmployeeId!(contactId, conversationId) ?? null;
       }
       logger.info({ source }, "agent worker plugin loaded");
     };
@@ -281,6 +301,7 @@ await runProcess({
               ...(preResolveAiEmployeePrompt
                 ? { preResolveAiEmployeePrompt }
                 : {}),
+              ...(resolveAiEmployeeId ? { resolveAiEmployeeId } : {}),
               ...(triageClient
                 ? {
                     triage: {

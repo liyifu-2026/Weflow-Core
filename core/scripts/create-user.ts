@@ -13,6 +13,9 @@ import {
   createClosedUser,
   generateInitialPassword,
 } from "../modules/identity/application/identity-service.js";
+import { verifyPassword } from "../infrastructure/auth/password.js";
+import { eq } from "drizzle-orm";
+import * as schema from "../infrastructure/postgres/schema.js";
 
 // 从命令行参数获取用户名
 const username = process.argv[2];
@@ -41,6 +44,16 @@ try {
     initialPassword,
     roleValue,
   );
+  // 重新读取哈希并验证密码匹配，防止哈希参数不一致
+  const rows = await postgres.db
+    .select({ passwordHash: schema.users.passwordHash })
+    .from(schema.users)
+    .where(eq(schema.users.userId, user.userId))
+    .limit(1);
+  const storedHash = rows[0]?.passwordHash;
+  if (!storedHash || !(await verifyPassword(storedHash, initialPassword))) {
+    throw new Error("FATAL: password hash verification failed after creation");
+  }
   // 输出创建结果和初始密码（仅显示一次）
   process.stdout.write(
     `created ${user.role} ${user.username}\ninitial password (shown once): ${initialPassword}\n`,

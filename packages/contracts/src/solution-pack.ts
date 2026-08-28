@@ -26,4 +26,4 @@ export type {
   SolutionApplication,
   HealthCheck,
   SolutionConsoleExtension,
-} from "@weflow/solution-sdk";
+} from "@weflow-leaif/solution-sdk";

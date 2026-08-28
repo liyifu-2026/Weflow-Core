@@ -19,7 +19,8 @@ const candidateSchema = z
       .trim()
       .regex(/^[a-z0-9_.-]{1,100}$/),
     content: z.string().trim().min(1).max(500),
-    confidence: z.number().int().min(0).max(100),
+    // 模型可能返回 0-100 整数、0-1 小数或字符串：parse 时统一归一化
+    confidence: z.union([z.number(), z.string()]),
     importance: z.number().int().min(1).max(5).default(3),
     evidenceMessageIds: z.array(z.string().min(1).max(600)).min(1).max(20),
     subject: z.enum(["contact", "other", "unclear"]),
@@ -33,8 +34,10 @@ const extractionSchema = z
   .object({ memories: z.array(candidateSchema).max(10) })
   .strict();
 
-/** 从 LLM 响应中提取的单条记忆结构 */
-export type ExtractedMemory = z.infer<typeof candidateSchema>;
+/** 从 LLM 响应中提取的单条记忆结构（confidence 已归一化为 0-100 整数） */
+export type ExtractedMemory = Omit<z.infer<typeof candidateSchema>, "confidence"> & {
+  confidence: number;
+};
 
 /** 构建记忆提取的 LLM prompt（系统提示 + 消息上下文） */
 export function memoryExtractionPrompt(
@@ -83,7 +86,20 @@ export function parseMemoryExtraction(text: string): ExtractedMemory[] {
     throw new Error("memory extraction did not return a JSON object");
   }
   const parsed: unknown = JSON.parse(text.slice(start, end + 1));
-  return extractionSchema.parse(parsed).memories;
+  const memories = extractionSchema.parse(parsed).memories;
+  return memories.map((memory) => ({
+    ...memory,
+    // 归一化置信度：0-1 小数 → 0-100；字符串数字 → number；越界钳制
+    confidence: normalizeConfidence(memory.confidence),
+  }));
+}
+
+/** 置信度归一化：接受 0-100、0-1 与字符串，输出 0-100 整数 */
+function normalizeConfidence(value: number | string): number {
+  const raw = typeof value === "string" ? Number.parseFloat(value) : value;
+  if (!Number.isFinite(raw)) return 0;
+  if (raw <= 1) return Math.round(raw * 100);
+  return Math.min(100, Math.max(0, Math.round(raw)));
 }
 
 /**

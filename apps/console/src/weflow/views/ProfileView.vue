@@ -9,6 +9,7 @@ import { useRouter } from "vue-router";
 import { agentDisplayName } from "../labels";
 import { useWeflowAuthStore, type AgentTag } from "../auth-store";
 import DefaultAvatar from "../components/DefaultAvatar.vue";
+import AvatarPickerDialog from "../components/AvatarPickerDialog.vue";
 
 const auth = useWeflowAuthStore();
 const router = useRouter();
@@ -23,11 +24,11 @@ const selectedTags = ref<string[]>([]);
 const savedFeedback = ref("");
 const savingName = ref(false);
 const savingTags = ref(false);
-const uploading = ref(false);
-const avatarError = ref("");
 const nameError = ref("");
 const tagError = ref("");
-const fileInput = ref<HTMLInputElement | null>(null);
+// 头像选择器：预设头像 / 自定义上传 / 恢复默认。
+// 头像 URL 由服务端附带基于 updated_at 的版本号，变更后所有位置自动刷新。
+const pickerOpen = ref(false);
 
 const user = computed(() => auth.user);
 const nameDirty = computed(
@@ -107,24 +108,7 @@ function toggleTag(key: string) {
 }
 
 function pickAvatar() {
-  fileInput.value?.click();
-}
-
-async function onFileChange(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-  uploading.value = true;
-  avatarError.value = "";
-  try {
-    await auth.uploadAvatar(file);
-    flashSaved("头像已更新");
-  } catch (reason) {
-    avatarError.value = reason instanceof Error ? reason.message : "上传失败";
-  } finally {
-    uploading.value = false;
-    input.value = "";
-  }
+  pickerOpen.value = true;
 }
 </script>
 
@@ -135,27 +119,21 @@ async function onFileChange(event: Event) {
         <button
           class="wf-profile-avatar"
           type="button"
-          :title="uploading ? '上传中' : '更换头像'"
-          :disabled="uploading"
+          title="上传头像（预设 / 自定义）"
           @click="pickAvatar"
         >
           <img v-if="user?.avatarUrl" :src="user.avatarUrl" :alt="agentDisplayName(user)" />
           <DefaultAvatar v-else :name="user?.username" :size="52" />
-          <span v-if="uploading" class="wf-spinner"></span>
         </button>
         <div class="wf-profile-copy">
           <strong>{{ agentDisplayName(user) }}</strong>
-          <span class="wf-muted">点击头像更换 · 展示给客户与同事</span>
         </div>
-        <input
-          ref="fileInput"
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          class="wf-file-hidden"
-          @change="onFileChange"
-        />
       </div>
-      <div v-if="avatarError" class="wf-error" role="alert">{{ avatarError }}</div>
+      <AvatarPickerDialog
+        :open="pickerOpen"
+        :current-preset-id="user?.avatarPreset ?? null"
+        @close="pickerOpen = false"
+      />
     </section>
 
     <section class="wf-section-block">
@@ -184,6 +162,9 @@ async function onFileChange(event: Event) {
       <div v-if="nameError" class="wf-error" role="alert">{{ nameError }}</div>
     </section>
 
+    <!-- 擅长领域（专家标签）暂隐藏：产品决策待定，先不做；
+         相关 script 逻辑保留以备启用。 -->
+    <!--
     <section class="wf-section-block">
       <div class="wf-section-heading"><h2>擅长领域</h2></div>
       <p v-if="vocabularyError" class="wf-muted">标签加载失败，请刷新页面重试。</p>
@@ -215,6 +196,7 @@ async function onFileChange(event: Event) {
       </div>
       <div v-if="tagError" class="wf-error" role="alert">{{ tagError }}</div>
     </section>
+    -->
 
     <section class="wf-section-block">
       <div class="wf-section-heading"><h2>账号</h2></div>

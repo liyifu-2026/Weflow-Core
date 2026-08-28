@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveKnowledgeBaseIds } from "../modules/knowledge/application/client-knowledge-service.js";
-import type { WeKnoraKnowledgeClient } from "../infrastructure/knowledge/weknora-knowledge-client.js";
+import type { KnowledgeProvider } from "../modules/knowledge/contracts/knowledge-search.js";
 
 const listKB = vi.fn();
 const client = {
   listKnowledgeBases: listKB,
-} as unknown as WeKnoraKnowledgeClient;
+} satisfies Pick<KnowledgeProvider, "listKnowledgeBases">;
 
 /** 模块级 60s 缓存在用例间会串扰：用假时钟把时间拉开，保证每个用例拿到干净缓存 */
 const T0 = new Date("2026-08-13T00:00:00.000Z");

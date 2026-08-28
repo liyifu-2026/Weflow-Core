@@ -1,8 +1,8 @@
 {
-  "name": "@weflow/solution-sdk",
-  "version": "0.1.0",
+  "name": "@weflow-leaif/solution-sdk",
+  "version": "1.0.0",
   "description": "Weflow Solution package contract: manifest/lock/signature schemas, canonical digests and ed25519 signature verification.",
-  "private": true,
+  "private": false,
   "type": "module",
   "packageManager": "pnpm@10.34.5",
   "engines": {

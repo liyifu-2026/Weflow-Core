@@ -11,7 +11,7 @@
  *
  * core / agent-worker / ingestion-worker 三进程共用本模块（只依赖 PostgreSQL）。
  */
-import { desc, eq } from "drizzle-orm";
+import { count, desc, eq, inArray } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { pino, type Logger } from "pino";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -327,5 +327,123 @@ export async function rollbackRuntimeSettings(
   return {
     settings: await readRuntimeSettings(db, logger, { fresh: true }),
     rolledBack,
+  };
+}
+
+// ── Operator Status / Runtime Console ─────────────────────────────
+
+export type OperatorStatus = {
+  channelOnline: boolean;
+  agentEnabled: boolean;
+  autoSendEnabled: boolean;
+  queuedTurnCount: number;
+  runningTurnCount: number;
+  pendingHandoffCount: number;
+  lastCompletedTurnAt: Date | null;
+};
+
+export async function readOperatorStatus(
+  db: NodePgDatabase<typeof schema>,
+): Promise<OperatorStatus> {
+  const settings = await readRuntimeSettings(db);
+  const cursorFreshThreshold = new Date(Date.now() - 15_000);
+  const [cursor, turnCounts, handoffCount, lastCompleted] = await Promise.all([
+    db
+      .select({ updatedAt: schema.channelCursors.updatedAt })
+      .from(schema.channelCursors)
+      .where(eq(schema.channelCursors.source, "channel-host"))
+      .limit(1),
+    db
+      .select({ status: schema.agentTurns.status, value: count() })
+      .from(schema.agentTurns)
+      .where(inArray(schema.agentTurns.status, ["queued", "running"]))
+      .groupBy(schema.agentTurns.status),
+    db
+      .select({ value: count() })
+      .from(schema.handoffStates)
+      .where(
+        inArray(schema.handoffStates.status, ["pending", "transfer_pending"]),
+      ),
+    db
+      .select({ completedAt: schema.agentTurns.completedAt })
+      .from(schema.agentTurns)
+      .where(eq(schema.agentTurns.status, "completed"))
+      .orderBy(desc(schema.agentTurns.completedAt))
+      .limit(1),
+  ]);
+  const queued = turnCounts.find((row) => row.status === "queued");
+  const running = turnCounts.find((row) => row.status === "running");
+  return {
+    channelOnline: Boolean(
+      cursor[0] && cursor[0].updatedAt > cursorFreshThreshold,
+    ),
+    agentEnabled: settings.agentEnabled,
+    autoSendEnabled: settings.autoSendEnabled,
+    queuedTurnCount: queued?.value ?? 0,
+    runningTurnCount: running?.value ?? 0,
+    pendingHandoffCount: handoffCount[0]?.value ?? 0,
+    lastCompletedTurnAt: lastCompleted[0]?.completedAt ?? null,
+  };
+}
+
+export type AuditEvent = {
+  auditId: string;
+  actorUsername: string | null;
+  eventType: string;
+  subjectId: string | null;
+  metadata: Record<string, string>;
+  createdAt: Date;
+};
+
+export async function readRuntimeSettingsAudit(
+  db: NodePgDatabase<typeof schema>,
+): Promise<AuditEvent[]> {
+  return db
+    .select({
+      auditId: schema.auditEvents.auditId,
+      actorUsername: schema.users.username,
+      eventType: schema.auditEvents.eventType,
+      subjectId: schema.auditEvents.subjectId,
+      metadata: schema.auditEvents.metadata,
+      createdAt: schema.auditEvents.createdAt,
+    })
+    .from(schema.auditEvents)
+    .leftJoin(
+      schema.users,
+      eq(schema.users.userId, schema.auditEvents.actorUserId),
+    )
+    .where(
+      inArray(schema.auditEvents.eventType, [
+        "operator.runtime_settings_updated",
+        "operator.runtime_settings_rolled_back",
+      ]),
+    )
+    .orderBy(desc(schema.auditEvents.createdAt))
+    .limit(50);
+}
+
+export type RuntimeConsoleResponse = {
+  settings: RuntimeSettings;
+  allowlists: { text: readonly string[]; vision: readonly string[] };
+  status: OperatorStatus;
+  audit: AuditEvent[];
+};
+
+export async function buildRuntimeConsole(
+  db: NodePgDatabase<typeof schema>,
+): Promise<RuntimeConsoleResponse> {
+  const [settings, status, audit] = await Promise.all([
+    readRuntimeSettings(db),
+    readOperatorStatus(db),
+    readRuntimeSettingsAudit(db),
+  ]);
+  return {
+    settings,
+    allowlists: {
+      text: TEXT_MODEL_ALLOWLIST,
+      vision: VISION_MODEL_ALLOWLIST,
+    },
+    status,
+    audit,
   };
 }

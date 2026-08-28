@@ -13,8 +13,15 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
 import type { SilkToMp3Transcoder } from "../../../infrastructure/media/audio-transcoder.js";
 import type { MimoAudioClient } from "../../../infrastructure/model_runtime/mimo-audio-client.js";
+import type { AudioTranscriptionsClient } from "../../../infrastructure/model_runtime/audio-transcriptions-client.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
+
+/** ASR 客户端统一接缝（MiMo 内联音频 / 标准 audio/transcriptions 均可） */
+export type VoiceTranscriptionClient = Pick<
+  MimoAudioClient | AudioTranscriptionsClient,
+  "transcribe"
+>;
 
 export type VoiceTranscriptionDependencies = {
   /** SILK→MP3 转码器；未注入视为平台转码能力缺失（诚实降级，不重试） */
@@ -36,7 +43,7 @@ const ASR_READY_MIME_TYPES = new Set([
 export async function processVoiceTranscription(
   db: NodePgDatabase<typeof schema>,
   storage: LocalFileStorage,
-  client: MimoAudioClient,
+  client: VoiceTranscriptionClient,
   model: string,
   mediaId: string,
   dependencies: VoiceTranscriptionDependencies,

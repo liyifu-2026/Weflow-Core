@@ -19,8 +19,8 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
-      "@weflow/contracts": ["../packages/contracts/src/index.ts"],
-      "@weflow/solution-sdk": ["../packages/solution-sdk/src/index.ts"]
+      "@weflow-leaif/contracts": ["../packages/contracts/src/index.ts"],
+      "@weflow-leaif/solution-sdk": ["../packages/solution-sdk/src/index.ts"]
     }
   },
   "include": [

@@ -30,6 +30,18 @@ const contactHistoryQuerySchema = z.object({
 const contactListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   before: z.string().min(1).optional(),
+  /**
+   * 关键字搜索：匹配 channelDisplayName / channelNickname /
+   * channelRemark / sharedAlias；空字符串视为不过滤。
+   */
+  q: z.string().trim().max(120).optional(),
+  /**
+   * 联系人白名单过滤：true=仅白名单 / false=仅非白名单 / 不传=全部
+   */
+  agentEnabled: z
+    .union([z.literal("true"), z.literal("false")])
+    .transform((value) => value === "true")
+    .optional(),
 });
 const patchSchema = z
   .object({
@@ -41,6 +53,8 @@ const patchSchema = z
       .optional(),
     agentEnabled: z.boolean().optional(),
     sharedAlias: z.string().trim().min(1).max(120).nullable().optional(),
+    /** 黑名单：true = 不建 Turn / 不进会话列表 / 不推通知 */
+    blocked: z.boolean().optional(),
   })
   .strict()
   .refine((patch) => Object.keys(patch).length > 0);
@@ -62,6 +76,12 @@ export function registerContactProfileRoutes(
       userId: identity.user.userId,
       limit: query.data.limit,
       before: query.data.before,
+      ...(query.data.q !== undefined && query.data.q.length > 0
+        ? { q: query.data.q }
+        : {}),
+      ...(query.data.agentEnabled !== undefined
+        ? { agentEnabled: query.data.agentEnabled }
+        : {}),
     });
     return { contacts: page.items, nextCursor: page.nextCursor };
   });

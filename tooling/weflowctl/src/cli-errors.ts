@@ -53,6 +53,11 @@ export const ErrorCodes = {
   RegistryHttpError: "registry_http_error",
   RegistryIdMismatch: "solution_registry_id_mismatch",
   RegistryVersionMismatch: "solution_registry_version_mismatch",
+  NpmPackageNotFound: "npm_package_not_found",
+  NpmVersionNotFound: "npm_version_not_found",
+  NpmDownloadFailed: "npm_download_failed",
+  NpmPackageInvalid: "npm_package_invalid",
+  NpmScopeMissing: "npm_scope_missing",
 } as const;
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
@@ -189,6 +194,36 @@ const PREFIX_HINTS: Array<{ prefix: string; code: string; hint?: string }> = [
     code: ErrorCodes.RegistryHttpError,
   },
   {
+    prefix: "npm_http_error:404",
+    code: ErrorCodes.NpmPackageNotFound,
+    hint: "The package was not found on npm. Check the package name and scope.",
+  },
+  {
+    prefix: "npm_http_error:401",
+    code: ErrorCodes.NpmDownloadFailed,
+    hint: "npm authentication failed. Check your npm token.",
+  },
+  {
+    prefix: "npm_http_error:403",
+    code: ErrorCodes.NpmDownloadFailed,
+    hint: "Access forbidden. The package may be private or restricted.",
+  },
+  {
+    prefix: "npm_http_error",
+    code: ErrorCodes.NpmDownloadFailed,
+    hint: "Check network connectivity and npm registry availability.",
+  },
+  {
+    prefix: "npm_version_not_found",
+    code: ErrorCodes.NpmVersionNotFound,
+    hint: "The specified version does not exist on npm. Run with --json to see available versions.",
+  },
+  {
+    prefix: "npm_package_invalid",
+    code: ErrorCodes.NpmPackageInvalid,
+    hint: "The npm package is missing required files (package.json). Ensure it is a valid package.",
+  },
+  {
     prefix: "yaml_adapter_required",
     code: ErrorCodes.YamlAdapterRequired,
     hint: "Only the JSON subset of YAML is accepted for manifests.",
@@ -258,6 +293,10 @@ export function classifyError(message: string): Classification {
     [
       "package_directory_required",
       "Pass the package directory or tarball path.",
+    ],
+    [
+      "npm_package_name_required",
+      "Pass the npm package name as the first argument (e.g. @weflow-leaif/customer-support-strategy).",
     ],
   ];
   for (const [prefix, hint] of directHints) {

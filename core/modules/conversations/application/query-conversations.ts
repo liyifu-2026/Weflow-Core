@@ -35,7 +35,7 @@ function anyOf(...conditions: SQLWrapper[]): SQL {
 /** 会话列表范围（服务端计算，Console 三区；all = 真正全部可见会话） */
 export type ConversationListScope = "attention" | "mine" | "others" | "all";
 
-/** 会话列表游标：attention 额外携带 score（风险+handoff 权重+未读） */
+/** 会话列表游标：attention 额外携带 score（handoff 权重+未读） */
 export type ConversationListCursor = {
   score?: number;
   latestMessageAt: string;
@@ -118,6 +118,11 @@ export function computeConversationPermissions(
  * 查询共享会话列表，包含联系人信息、最新消息、人工接管状态、未读计数与操作权限。
  * 支持 scope（attention/mine/others/all）与游标分页（before/limit）；
  * 不传 scope 时保持原有行为（全部会话，按最近消息时间倒序）。
+ *
+ * agentEnabled 可选：
+ * - true  → 仅返回联系人白名单（agent_enabled=true）的会话
+ * - false → 仅返回非白名单会话
+ * - 不传  → 全部会话（保持向后兼容）
  */
 export async function listSharedConversations(
   db: NodePgDatabase<typeof schema>,
@@ -126,17 +131,17 @@ export async function listSharedConversations(
     userId: string;
     contactId?: string;
     scope?: ConversationListScope;
+    agentEnabled?: boolean;
     before?: string;
   },
 ) {
-  const { limit, userId, scope, before } = input;
+  const { limit, userId, scope, before, agentEnabled } = input;
   const cursor = before ? decodeConversationListCursor(before) : undefined;
   const limitWithProbe = limit + 1;
   const unreadCustomerCount = sql<number>`count(*) filter (where ${schema.messages.direction} = 'inbound' and (${schema.conversationReadStates.lastReadAt} is null or ${schema.messages.occurredAt} > ${schema.conversationReadStates.lastReadAt}))`;
-  // attention 服务端排序权重：risk(high 300/medium 150) + handoff 状态(pending 200/transfer_pending 250/in_progress 100) + 未读
+  // attention 服务端排序权重：handoff 状态(pending 200/transfer_pending 250/in_progress 100) + 未读
   const attentionScore = sql<number>`(
-    CASE ${schema.caseStates.riskLevel} WHEN 'high' THEN 300 WHEN 'medium' THEN 150 ELSE 0 END
-    + CASE ${schema.handoffStates.status} WHEN 'pending' THEN 200 WHEN 'transfer_pending' THEN 250 WHEN 'in_progress' THEN 100 ELSE 0 END
+    CASE ${schema.handoffStates.status} WHEN 'pending' THEN 200 WHEN 'transfer_pending' THEN 250 WHEN 'in_progress' THEN 100 ELSE 0 END
     + ${unreadCustomerCount}
   )`;
 
@@ -188,6 +193,7 @@ export async function listSharedConversations(
         sharedAlias: schema.contactProfiles.sharedAlias,
         note: schema.contactProfiles.note,
         tags: schema.contactProfiles.tags,
+        agentEnabled: schema.contactProfiles.agentEnabled,
       },
       handoffStatus: schema.handoffStates.status,
       handoffReason: schema.handoffStates.reason,
@@ -197,7 +203,6 @@ export async function listSharedConversations(
       handoffAgentPaused: schema.handoffStates.agentPaused,
       handoffTargetUserId: schema.handoffStates.targetUserId,
       handoffAssigneeUsername: schema.users.username,
-      riskLevel: schema.caseStates.riskLevel,
       unreadCustomerCount,
     })
     .from(schema.conversations)
@@ -208,10 +213,6 @@ export async function listSharedConversations(
     .innerJoin(
       schema.contactProfiles,
       eq(schema.contactProfiles.contactId, schema.conversations.contactId),
-    )
-    .leftJoin(
-      schema.caseStates,
-      eq(schema.caseStates.conversationId, schema.conversations.conversationId),
     )
     .leftJoin(
       schema.handoffStates,
@@ -247,10 +248,17 @@ export async function listSharedConversations(
     .where(
       and(
         isNull(schema.conversationVisibility.hiddenAt),
+        // 黑名单联系人的会话不在任何会话列表出现（消息照常入库，联系人页可查）
+        eq(schema.contactProfiles.blocked, false),
         input.contactId
           ? eq(schema.conversations.contactId, input.contactId)
           : undefined,
         scopeCondition,
+        agentEnabled === true
+          ? eq(schema.contactProfiles.agentEnabled, true)
+          : agentEnabled === false
+            ? eq(schema.contactProfiles.agentEnabled, false)
+            : undefined,
       ),
     )
     .groupBy(
@@ -264,7 +272,7 @@ export async function listSharedConversations(
       schema.contactProfiles.sharedAlias,
       schema.contactProfiles.note,
       schema.contactProfiles.tags,
-      schema.caseStates.riskLevel,
+      schema.contactProfiles.agentEnabled,
       schema.handoffStates.status,
       schema.handoffStates.reason,
       schema.handoffStates.createdAt,
@@ -335,9 +343,7 @@ export async function listSharedConversations(
             ? {
                 score:
                   typeof last.unreadCustomerCount === "number"
-                    ? riskWeight(last.riskLevel) +
-                      handoffRank(last.handoffStatus) +
-                      last.unreadCustomerCount
+                    ? handoffRank(last.handoffStatus) + last.unreadCustomerCount
                     : 0,
               }
             : {}),
@@ -365,6 +371,9 @@ export async function listSharedConversations(
         void handoffTargetUserId;
         return {
           ...conversation,
+          // pg 对 count(*)（bigint）返回字符串；投影统一转数字，
+          // 避免客户端把 "0" 当 truthy 误显示未读红点。
+          unreadCustomerCount: Number(conversation.unreadCustomerCount ?? 0),
           handoff: handoffStatus
             ? {
                 status: handoffStatus,
@@ -393,11 +402,6 @@ export async function listSharedConversations(
     ),
     nextCursor,
   };
-}
-
-/** 风险权重（与 SQL 中 attentionScore 一致） */
-function riskWeight(riskLevel: string | null): number {
-  return riskLevel === "high" ? 300 : riskLevel === "medium" ? 150 : 0;
 }
 
 /** handoff 状态权重（与 SQL 中 attentionScore 一致） */
@@ -435,7 +439,6 @@ export async function searchSharedConversations(
       handoffReason: schema.handoffStates.reason,
       handoffCreatedAt: schema.handoffStates.createdAt,
       handoffAssignedUserId: schema.handoffStates.assignedUserId,
-      riskLevel: schema.caseStates.riskLevel,
     })
     .from(schema.conversations)
     .innerJoin(
@@ -445,10 +448,6 @@ export async function searchSharedConversations(
     .innerJoin(
       schema.contactProfiles,
       eq(schema.contactProfiles.contactId, schema.conversations.contactId),
-    )
-    .leftJoin(
-      schema.caseStates,
-      eq(schema.caseStates.conversationId, schema.conversations.conversationId),
     )
     .leftJoin(
       schema.handoffStates,
@@ -501,7 +500,6 @@ export async function searchSharedConversations(
           assignedUserId: row.handoffAssignedUserId,
         }
       : null,
-    riskLevel: row.riskLevel,
   }));
 }
 
@@ -564,7 +562,13 @@ export async function listHiddenConversations(
       schema.contactProfiles,
       eq(schema.contactProfiles.contactId, schema.conversations.contactId),
     )
-    .where(eq(schema.conversationVisibility.userId, userId))
+    .where(
+      and(
+        eq(schema.conversationVisibility.userId, userId),
+        // 黑名单联系人的会话不再出现（含隐藏列表；彻底移除，联系人页可见）
+        eq(schema.contactProfiles.blocked, false),
+      ),
+    )
     .orderBy(desc(schema.conversationVisibility.hiddenAt));
 }
 
@@ -689,7 +693,15 @@ export async function getSharedTranscript(
   const page = rows.slice(0, limit).reverse();
   const oldest = page[0];
   return {
-    messages: page,
+    messages: page.map((row) => ({
+      ...row,
+      // AI 员工头像：actor_id 是 Solution 提供的员工标识（不透明），
+      // 经平台 DiceBear 代理按标识确定性出图，Console/Mobile 渲染一致。
+      actorAvatarUrl:
+        row.actorType === "agent" && row.actorId
+          ? `/api/v1/avatars/dicebear/voxel-bot/${encodeURIComponent(row.actorId)}`
+          : null,
+    })),
     conversationRevision: conversation?.revision ?? 0,
     nextCursor:
       hasMore && oldest
@@ -884,6 +896,18 @@ export type ContactListSummary = {
   conversationId: string;
   latestMessageAt: string | null;
   latestMessageText: string;
+  /** 联系人白名单：true = 由 Agent 负责；false = 仅人工处理 */
+  agentEnabled: boolean;
+  /** 黑名单：true = 不进会话列表（本列表可见）、不建 Turn、不推通知 */
+  blocked: boolean;
+  /** 首次联系时间（最早一条消息） */
+  firstContactAt: string | null;
+  /** 历史会话总数 */
+  conversationCount: number;
+  /** 最近一次人工处理人（accept / manual_taken_over 的执行者） */
+  lastHandlerName: string | null;
+  /** 最近一次人工处理时间 */
+  lastHandlerAt: string | null;
 };
 
 /** 联系人列表游标：{latestMessageAt, contactId} */
@@ -925,6 +949,10 @@ export function decodeContactListCursor(
 /**
  * 联系人通讯录（按联系人聚合其可见会话的最近一条消息）。
  * 游标分页 {latestMessageAt, contactId}，排序最近消息倒序。
+ *
+ * 可选参数：
+ * - q：按 channelDisplayName / channelNickname / channelRemark / sharedAlias 模糊匹配（ILIKE）
+ * - agentEnabled：true=仅白名单、false=仅非白名单、不传=全部
  */
 export async function listContactsWithLatestConversation(
   db: NodePgDatabase<typeof schema>,
@@ -932,12 +960,18 @@ export async function listContactsWithLatestConversation(
     userId: string;
     limit: number;
     before?: string | undefined;
+    q?: string | undefined;
+    agentEnabled?: boolean | undefined;
   },
 ): Promise<{ items: ContactListSummary[]; nextCursor: string | null }> {
   const limitWithProbe = input.limit + 1;
   const cursor = input.before
     ? decodeContactListCursor(input.before)
     : undefined;
+  const trimmedQuery = input.q?.trim() ?? "";
+  const searchPattern =
+    trimmedQuery.length > 0 ? `%${trimmedQuery.replace(/[%_]/g, "\\$&")}%` : null;
+  const agentEnabledFilter = input.agentEnabled;
   const rows = await db.execute<{
     contactId: string;
     channelDisplayName: string | null;
@@ -948,6 +982,12 @@ export async function listContactsWithLatestConversation(
     conversationId: string;
     latestMessageAt: Date | string | null;
     latestMessageText: string | null;
+    agentEnabled: boolean;
+    blocked: boolean;
+    firstContactAt: Date | string | null;
+    conversationCount: number;
+    lastHandlerName: string | null;
+    lastHandlerAt: Date | string | null;
   }>(sql`
     SELECT
       p.contact_id AS "contactId",
@@ -958,7 +998,16 @@ export async function listContactsWithLatestConversation(
       p.avatar_url AS "avatarUrl",
       lc.conversation_id AS "conversationId",
       lc.latest_message_at AS "latestMessageAt",
-      lc.latest_message_text AS "latestMessageText"
+      lc.latest_message_text AS "latestMessageText",
+      p.agent_enabled AS "agentEnabled",
+      p.blocked AS "blocked",
+      -- 联系人维度聚合：首末联系时间 / 会话总数 / 最近一次人工处理人与时间
+      (SELECT MIN(msg.occurred_at) FROM conversation.messages msg
+        JOIN conversation.conversations cc ON cc.conversation_id = msg.conversation_id
+        WHERE cc.contact_id = p.contact_id) AS "firstContactAt",
+      (SELECT COUNT(*) FROM conversation.conversations cc WHERE cc.contact_id = p.contact_id) AS "conversationCount",
+      last_human.handler_name AS "lastHandlerName",
+      last_human.handled_at AS "lastHandlerAt"
     FROM conversation.contact_profiles p
     JOIN LATERAL (
       SELECT c.conversation_id, m.occurred_at AS latest_message_at, m.text AS latest_message_text
@@ -976,6 +1025,16 @@ export async function listContactsWithLatestConversation(
       ORDER BY m.occurred_at DESC NULLS LAST, c.conversation_id DESC
       LIMIT 1
     ) lc ON true
+    LEFT JOIN LATERAL (
+      SELECT u.username AS handler_name, ev.created_at AS handled_at
+      FROM handoff.events ev
+      JOIN identity.users u ON u.user_id = ev.actor_user_id
+      JOIN conversation.conversations cc ON cc.conversation_id = ev.conversation_id
+      WHERE cc.contact_id = p.contact_id
+        AND ev.event_type IN ('accepted', 'manual_taken_over')
+      ORDER BY ev.created_at DESC
+      LIMIT 1
+    ) last_human ON true
     WHERE lc.conversation_id IS NOT NULL
       ${
         cursor
@@ -987,6 +1046,23 @@ export async function listContactsWithLatestConversation(
         )
       )`
           : sql``
+      }
+      ${
+        searchPattern
+          ? sql`AND (
+        p.channel_display_name ILIKE ${searchPattern}
+        OR p.channel_nickname ILIKE ${searchPattern}
+        OR p.channel_remark ILIKE ${searchPattern}
+        OR p.shared_alias ILIKE ${searchPattern}
+      )`
+          : sql``
+      }
+      ${
+        agentEnabledFilter === true
+          ? sql`AND p.agent_enabled = true`
+          : agentEnabledFilter === false
+            ? sql`AND p.agent_enabled = false`
+            : sql``
       }
     ORDER BY lc.latest_message_at DESC NULLS LAST, p.contact_id DESC
     LIMIT ${limitWithProbe}
@@ -1020,6 +1096,21 @@ export async function listContactsWithLatestConversation(
           : new Date(row.latestMessageAt).toISOString()
         : null,
       latestMessageText: row.latestMessageText ?? "",
+      agentEnabled: row.agentEnabled,
+      blocked: row.blocked,
+      firstContactAt: row.firstContactAt
+        ? row.firstContactAt instanceof Date
+          ? row.firstContactAt.toISOString()
+          : new Date(row.firstContactAt).toISOString()
+        : null,
+      // pg 的 count(*)（bigint）返回字符串，统一转数字
+      conversationCount: Number(row.conversationCount ?? 0),
+      lastHandlerName: row.lastHandlerName,
+      lastHandlerAt: row.lastHandlerAt
+        ? row.lastHandlerAt instanceof Date
+          ? row.lastHandlerAt.toISOString()
+          : new Date(row.lastHandlerAt).toISOString()
+        : null,
     })),
     nextCursor,
   };

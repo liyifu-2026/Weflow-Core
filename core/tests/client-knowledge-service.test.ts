@@ -9,8 +9,22 @@ import {
   resolveKnowledgeEvidence,
   searchKnowledgeWorkspace,
 } from "../modules/knowledge/application/client-knowledge-service.js";
-import type { OpenAiCompatibleClient } from "../infrastructure/model_runtime/openai-compatible-client.js";
-import type { WeKnoraKnowledgeClient } from "../infrastructure/knowledge/weknora-knowledge-client.js";
+import type {
+  KnowledgeChatCompletionModel,
+  KnowledgeChatMessage,
+  KnowledgeProvider,
+  KnowledgeSearchOptions,
+} from "../modules/knowledge/contracts/knowledge-search.js";
+
+/** 目录聚合所需的最小 Provider 面（与服务的窄化签名对齐）。 */
+type LibraryClient = Pick<
+  KnowledgeProvider,
+  | "listKnowledgeBases"
+  | "listKnowledgeDocuments"
+  | "listKnowledgeTags"
+  | "listFaqEntries"
+  | "listWikiPages"
+>;
 
 describe("client knowledge source grouping", () => {
   it("groups chunks by document and keeps source metadata without raw scores", () => {
@@ -124,14 +138,16 @@ describe("client knowledge action output", () => {
   it("normalizes structured actions and keeps reference ids", async () => {
     const model = {
       complete: () =>
-        JSON.stringify({
-          reply: "建议先恢复文件。",
-          followUps: ["隔离区里还能看到文件吗？"],
-          troubleshootingSteps: ["确认安全软件白名单"],
-          risks: ["不要重复发送未知结果的请求"],
-          referenceIds: ["chunk-1"],
-        }),
-    } as unknown as OpenAiCompatibleClient;
+        Promise.resolve(
+          JSON.stringify({
+            reply: "建议先恢复文件。",
+            followUps: ["隔离区里还能看到文件吗？"],
+            troubleshootingSteps: ["确认安全软件白名单"],
+            risks: ["不要重复发送未知结果的请求"],
+            referenceIds: ["chunk-1"],
+          }),
+        ),
+    } satisfies KnowledgeChatCompletionModel;
     await expect(
       buildKnowledgeActionOutput(model, {
         answer: "原始回答",
@@ -147,8 +163,8 @@ describe("client knowledge action output", () => {
 
   it("uses a text fallback when the model returns non-json", async () => {
     const model = {
-      complete: () => "普通文本回答",
-    } as unknown as OpenAiCompatibleClient;
+      complete: () => Promise.resolve("普通文本回答"),
+    } satisfies KnowledgeChatCompletionModel;
     await expect(
       buildKnowledgeActionOutput(model, {
         answer: "普通文本回答",
@@ -215,7 +231,7 @@ describe("client knowledge library", () => {
               ]
             : [],
         ),
-    } as unknown as WeKnoraKnowledgeClient;
+    } satisfies LibraryClient;
 
     const result = await getKnowledgeLibrary(weknora);
     expect(result.status).toBe("ok");
@@ -247,7 +263,7 @@ describe("client knowledge library", () => {
       listFaqEntries: () => Promise.resolve([]),
       listWikiPages: () =>
         Promise.reject(new Error("weknora_request_failed:500")),
-    } as unknown as WeKnoraKnowledgeClient;
+    } satisfies LibraryClient;
 
     const result = await getKnowledgeLibrary(weknora);
     expect(result.status).toBe("ok");
@@ -276,7 +292,7 @@ describe("client knowledge workspace search depth", () => {
     }));
     const weknora = {
       search: vi.fn(() => Promise.resolve(rows.slice(0, 12))),
-    } as unknown as WeKnoraKnowledgeClient;
+    } satisfies Pick<KnowledgeProvider, "search">;
     const db = { insert: () => ({ values: () => Promise.resolve() }) } as never;
 
     const quick = await searchKnowledgeWorkspace(db, weknora, {
@@ -292,11 +308,11 @@ describe("client knowledge workspace search depth", () => {
   it("defaults to the quick evidence window", async () => {
     let requestedLimit: number | undefined;
     const weknora = {
-      search: vi.fn((_query: string, options: { limit?: number }) => {
-        requestedLimit = options.limit;
+      search: vi.fn((_query: string, options?: KnowledgeSearchOptions) => {
+        requestedLimit = options?.limit;
         return Promise.resolve([]);
       }),
-    } as unknown as WeKnoraKnowledgeClient;
+    } satisfies Pick<KnowledgeProvider, "search">;
     const db = { insert: () => ({ values: () => Promise.resolve() }) } as never;
 
     await searchKnowledgeWorkspace(db, weknora, {
@@ -356,23 +372,24 @@ describe("trusted evidence boundary", () => {
 
   it("resolves only the exact chunk returned for the requested document", async () => {
     const model = {
-      search: () => [
-        {
-          chunkId: "chunk-1",
-          knowledgeId: "doc-1",
-          knowledgeBaseId: "kb-1",
-          title: "V9 手册",
-          filename: "v9.pdf",
-          source: "file",
-          chunkType: "text",
-          content: "可信片段",
-          matchedContent: "可信片段",
-          score: 0.9,
-          startAt: 1,
-          endAt: 2,
-        },
-      ],
-    } as unknown as WeKnoraKnowledgeClient;
+      search: () =>
+        Promise.resolve([
+          {
+            chunkId: "chunk-1",
+            knowledgeId: "doc-1",
+            knowledgeBaseId: "kb-1",
+            title: "V9 手册",
+            filename: "v9.pdf",
+            source: "file",
+            chunkType: "text",
+            content: "可信片段",
+            matchedContent: "可信片段",
+            score: 0.9,
+            startAt: 1,
+            endAt: 2,
+          },
+        ]),
+    } satisfies Pick<KnowledgeProvider, "search">;
     await expect(
       resolveKnowledgeEvidence(
         model,
@@ -394,11 +411,11 @@ describe("trusted evidence boundary", () => {
   it("passes only trusted tray snapshots to selected-evidence generation", async () => {
     let prompt = "";
     const model = {
-      complete: (messages: Array<{ role: string; content: string }>) => {
+      complete: (messages: KnowledgeChatMessage[]) => {
         prompt = messages[1]?.content ?? "";
-        return "只基于托盘回答";
+        return Promise.resolve("只基于托盘回答");
       },
-    } as unknown as OpenAiCompatibleClient;
+    } satisfies KnowledgeChatCompletionModel;
     await generateKnowledgeAnswerFromEvidence(model, {
       query: "怎么处理？",
       evidence: [

@@ -55,4 +55,18 @@ for (const [dir, script] of steps) {
   run(dir, script);
 }
 
+// Channel 协议跨语言对齐：host 侧 channel_protocol.py 必须与 @weflow/contracts 权威一致
+process.stdout.write("\n=== channel protocol sync (--check) ===\n");
+{
+  const result = spawnSync(
+    process.execPath,
+    ["core/node_modules/tsx/dist/cli.mjs", "scripts/sync-channel-protocol.ts", "--check"],
+    { cwd: root, stdio: "inherit" },
+  );
+  if (result.status !== 0) {
+    process.stderr.write("\nFAILED: channel protocol is out of sync\n");
+    process.exit(result.status ?? 1);
+  }
+}
+
 process.stdout.write("\nplatform:verify PASS\n");

@@ -16,8 +16,8 @@ import type { ChannelMediaSource } from "../../channel/contracts/channel-media-s
 
 const SYSTEM_ACTOR = "system-channel-host";
 
-/** 参与同步的资产类型：图片（视觉描述）、文件附件（无派生阶段）、语音（转写） */
-const SYNC_KINDS = ["image", "file", "voice"] as const;
+/** 参与同步的资产类型：图片（视觉描述）、视频/文件附件（无派生阶段）、语音（转写） */
+const SYNC_KINDS = ["image", "file", "voice", "video"] as const;
 
 export async function syncChannelMedia(
   db: NodePgDatabase<typeof schema>,
@@ -61,7 +61,10 @@ export async function syncChannelMedia(
           ? await source.resolveFile(asset.sourceMediaRef)
           : asset.kind === "voice"
             ? await source.resolveAudio(asset.sourceMediaRef)
-            : await source.resolveImage(asset.sourceMediaRef);
+            : asset.kind === "video"
+              ? await (source.resolveVideo?.(asset.sourceMediaRef) ??
+                Promise.resolve({ state: "failed" as const, errorCode: "media_unreadable" }))
+              : await source.resolveImage(asset.sourceMediaRef);
       if (result.state === "pending") {
         await scheduleRetry(db, asset.mediaId, asset.attempt, "source_pending");
         continue;
@@ -104,9 +107,9 @@ export async function syncChannelMedia(
           await transaction
             .update(schema.mediaAssets)
             .set({
-              // 文件附件无派生阶段：落盘即可供人工查看。
+              // 文件/视频无派生阶段：落盘即可供人工查看。
               // 图片/语音仍需描述/转写，交给 media-processing-dispatcher。
-              status: asset.kind === "file" ? "ready" : "processing_queued",
+              status: asset.kind === "file" || asset.kind === "video" ? "ready" : "processing_queued",
               originalFileId: file.fileId,
               // thumbnail=Host 缩略图回退（可升级原图）；缺省 original
               sourceVariant:
@@ -183,6 +186,10 @@ function extensionForMime(kind: string, mimeType: string): string {
     if (mimeType === "audio/x-silk") return ".silk";
     if (mimeType === "audio/mpeg") return ".mp3";
     return ".audio";
+  }
+  if (kind === "video") {
+    if (mimeType === "video/mp4") return ".mp4";
+    return ".video";
   }
   return FILE_MIME_EXTENSIONS[mimeType] ?? ".bin";
 }
