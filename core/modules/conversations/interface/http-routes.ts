@@ -66,26 +66,35 @@ const manualReplyBody = z
       .string()
       .max(4_000)
       .optional()
-      .transform((v) => (v?.trim() || "")),
+      .transform((v) => v?.trim() || ""),
     clientRequestId: z.uuid(),
     expectedConversationRevision: z.number().int().min(0).optional(),
     /** 出站媒体（ADR：人工回复携带媒体）；mediaId 来自 POST /api/v1/media 上传 */
-    mediaId: z.string().regex(/^media:[a-f0-9]{64}$/).optional(),
-    /** 上传返回的媒体元数据（fileId/kind），用于落 mediaAssets */
+    mediaId: z
+      .string()
+      .regex(/^media:[a-f0-9]{64}$/)
+      .optional(),
+    /** 上传返回的媒体元数据（fileId/kind），用于落 mediaAssets（出站语音转发已随协议 v5 裁剪） */
     media: z
       .object({
         fileId: z.string().trim().min(1).max(36),
-        kind: z.enum(["image", "file", "voice", "video"]).optional(),
+        kind: z.enum(["image", "file", "video"]).optional(),
       })
       .optional(),
+    /** 素材空间引用（来自 POST /api/v1/assets；服务端派生 mediaId，文件无需重新上传） */
+    assetId: z.uuid().optional(),
     /** 引用回复的原通道消息（ADR-0006 群聊引用） */
     replyToChannelMessageId: z.string().trim().min(1).max(300).optional(),
     /** @ 提及的通道联系人（ADR-0006 群聊 @） */
-    mentionContactRefs: z.array(z.string().trim().min(1).max(256)).max(50).optional(),
+    mentionContactRefs: z
+      .array(z.string().trim().min(1).max(256))
+      .max(50)
+      .optional(),
   })
   .strict()
   .refine(
-    (data) => data.text.trim().length > 0 || data.mediaId || data.media,
+    (data) =>
+      data.text.trim().length > 0 || data.mediaId || data.media || data.assetId,
     { message: "text_required_for_non_media_messages", path: ["text"] },
   );
 const readBody = z
@@ -262,6 +271,7 @@ export function registerConversationRoutes(
               },
             }
           : {}),
+        ...(body.data.assetId ? { assetId: body.data.assetId } : {}),
         ...(body.data.replyToChannelMessageId
           ? { replyToChannelMessageId: body.data.replyToChannelMessageId }
           : {}),
@@ -275,6 +285,9 @@ export function registerConversationRoutes(
       }
       if (result.status === "handoff_not_assignee") {
         return reply.code(403).send({ error: "handoff_not_assignee" });
+      }
+      if (result.status === "asset_not_found") {
+        return reply.code(404).send({ error: "asset_not_found" });
       }
       if (result.status === "conversation_revision_conflict") {
         return reply.code(409).send({
@@ -330,13 +343,16 @@ export function registerConversationRoutes(
       return reply.code(503).send({ error: "channel_host_not_configured" });
     }
     try {
-      const response = await fetch(`${channelHost.baseUrl}/api/v1/channel/sync`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${channelHost.token}`,
+      const response = await fetch(
+        `${channelHost.baseUrl}/api/v1/channel/sync`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${channelHost.token}`,
+          },
+          signal: AbortSignal.timeout(10_000),
         },
-        signal: AbortSignal.timeout(10_000),
-      });
+      );
       if (!response.ok) {
         return reply.code(response.status).send({
           error: "channel_sync_failed",
@@ -377,7 +393,8 @@ export function registerConversationRoutes(
       // 验证会话存在且用户有接管权限
       const conversation = await db
         .select({
-          channelConversationId: databaseSchema.conversations.channelConversationId,
+          channelConversationId:
+            databaseSchema.conversations.channelConversationId,
           channelAccount: databaseSchema.conversations.channelAccount,
         })
         .from(databaseSchema.conversations)

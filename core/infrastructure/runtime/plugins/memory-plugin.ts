@@ -23,16 +23,20 @@ import { recallMemories } from "../../../modules/memory/application/recall-memor
 export type MemoryPluginOptions = {
   db: NodePgDatabase<typeof schema>;
   modelClient: TextModel;
-  model: string;
+  /**
+   * 模型名：静态字符串，或返回当前生效模型名的 getter。
+   * getter 形式供热加载场景使用（模型设置保存后即时刷新，无需重启）。
+   */
+  model: string | (() => string);
 };
 
 /** 创建记忆能力插件；依赖 text.model 能力（由组合根注入）。 */
-export function memoryPlugin(
-  options: MemoryPluginOptions,
-): PluginDefinition {
+export function memoryPlugin(options: MemoryPluginOptions): PluginDefinition {
+  const resolveModel = (): string =>
+    typeof options.model === "function" ? options.model() : options.model;
   const capture: MemoryCaptureService = {
     process: (db, job) =>
-      processMemoryCapture(db, options.modelClient, options.model, job),
+      processMemoryCapture(db, options.modelClient, resolveModel(), job),
   };
   const recall: MemoryRecallService = {
     recall: (db, conversationId, limit) =>

@@ -333,10 +333,6 @@ node tooling/weflowctl/dist/cli.js solution status <solution-id> \
 # 查看操作日志
 node tooling/weflowctl/dist/cli.js solution logs <operation-id> \
   --core-url http://127.0.0.1:3100 --admin-token <token>
-
-# Secret 配置状态（只读引用）
-node tooling/weflowctl/dist/cli.js solution secrets <solution-id> \
-  --core-url http://127.0.0.1:3100 --admin-token <token>
 ```
 
 ### 7.4 故障排查

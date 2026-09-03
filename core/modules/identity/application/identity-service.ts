@@ -15,6 +15,10 @@ import * as schema from "../../../infrastructure/postgres/schema.js";
 import { userAvatarPresetById } from "./avatar-presets.js";
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1_000;
+/** 移动端会话 TTL：30 天（配合"活跃即续期"滑动过期，避免每天重新输密码） */
+const MOBILE_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
+/** 滑动续期阈值：剩余寿命低于会话 TTL 的一半时，认证成功即自动延长 */
+const SESSION_RENEWAL_THRESHOLD = 0.5;
 
 /** 信息名片标签上限（与专家队列词表规模一致） */
 export const MAX_AGENT_TAGS = 7;
@@ -281,12 +285,14 @@ export async function createClosedUser(
  * 用户登录。
  * 验证用户名和密码，成功时创建会话并返回令牌。
  * 登录失败会执行哈希操作以防止时序攻击。
+ * mobile=true 时创建 30 天长时效会话（配合滑动续期，免去每日重登）。
  */
 export async function login(
   db: NodePgDatabase<typeof schema>,
   usernameInput: string,
   password: string,
   sourceIp: string,
+  options: { mobile?: boolean } = {},
 ): Promise<LoginResult | undefined> {
   const username = normalizeUsername(usernameInput);
   const rows = await db
@@ -310,14 +316,16 @@ export async function login(
     return undefined;
   }
 
+  const ttlMs = options.mobile ? MOBILE_SESSION_TTL_MS : SESSION_TTL_MS;
   const token = randomBytes(32).toString("base64url");
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  const expiresAt = new Date(Date.now() + ttlMs);
   await db.transaction(async (transaction) => {
     await transaction.insert(schema.userSessions).values({
       sessionId: randomUUID(),
       userId: user.userId,
       tokenDigest: tokenDigest(token),
       expiresAt,
+      ttlMs,
     });
     await transaction.insert(schema.auditEvents).values({
       auditId: randomUUID(),
@@ -326,7 +334,7 @@ export async function login(
       subjectType: "session",
       subjectId: user.userId,
       sourceIp,
-      metadata: {},
+      metadata: { channel: options.mobile ? "mobile" : "web" },
     });
   });
   return {
@@ -336,7 +344,11 @@ export async function login(
   };
 }
 
-/** 通过会话令牌认证用户，验证令牌有效性和会话未过期 */
+/**
+ * 通过会话令牌认证用户，验证令牌有效性和会话未过期。
+ * 滑动续期：会话剩余寿命低于其 TTL 一半时，自动延长一个完整 TTL。
+ * （服务端单点决策，客户端在每次请求中自动受益；撤销/改密路径不受影响。）
+ */
 export async function authenticate(
   db: NodePgDatabase<typeof schema>,
   token: string,
@@ -352,6 +364,9 @@ export async function authenticate(
       displayName: schema.users.displayName,
       tags: schema.users.tags,
       updatedAt: schema.users.updatedAt,
+      sessionId: schema.userSessions.sessionId,
+      expiresAt: schema.userSessions.expiresAt,
+      ttlMs: schema.userSessions.ttlMs,
     })
     .from(schema.userSessions)
     .innerJoin(
@@ -367,8 +382,19 @@ export async function authenticate(
       ),
     )
     .limit(1);
-  const user = rows[0];
-  return user ? projectAuthenticatedUser(user) : undefined;
+  const row = rows[0];
+  if (!row) return undefined;
+  const { sessionId, expiresAt, ttlMs, ...user } = row;
+  if (ttlMs != null && ttlMs > 0) {
+    const remaining = expiresAt.getTime() - Date.now();
+    if (remaining < ttlMs * SESSION_RENEWAL_THRESHOLD) {
+      await db
+        .update(schema.userSessions)
+        .set({ expiresAt: new Date(Date.now() + ttlMs) })
+        .where(eq(schema.userSessions.sessionId, sessionId));
+    }
+  }
+  return projectAuthenticatedUser(user);
 }
 
 /** 修改密码，同时撤销该用户的其他所有会话 */

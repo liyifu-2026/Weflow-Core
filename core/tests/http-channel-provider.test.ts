@@ -206,11 +206,11 @@ describe("HttpChannelProvider file media", () => {
 });
 
 describe("HttpChannelProvider protocol reconciliation", () => {
-  // 协议 v4：出站新增 recall + 受限 voice(video)
+  // 协议 v5：出站移除受限 voice 转发（recall 保留）
   const matchingCapabilities = {
-    protocolVersion: 4,
+    protocolVersion: 5,
     sendOperationStates: ["pending", "executing", "confirmed", "unknown", "failed"],
-    sendKinds: ["text", "file", "image", "reply", "mention", "poke", "recall", "voice"],
+    sendKinds: ["text", "file", "image", "reply", "mention", "poke", "recall"],
   };
 
   it("matching capabilities pass without error", async () => {
@@ -227,7 +227,7 @@ describe("HttpChannelProvider protocol reconciliation", () => {
       Response.json({ ...matchingCapabilities, protocolVersion: 99 }),
     );
     await expect(provider.ensureProtocol()).rejects.toThrow(
-      /channel_protocol_mismatch: protocol mismatch: protocolVersion 99 != 4/,
+      /channel_protocol_mismatch: protocol mismatch: protocolVersion 99 != 5/,
     );
     expect(provider.protocolStatus().ok).toBe(false);
   });

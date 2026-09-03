@@ -1,3 +1,4 @@
+import threading
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +14,9 @@ class FakeDownloader:
         self.calls = []
         self.thumb_calls = []
         self.voice_calls = []
+        self.original_calls = []
+        self.original_result = b"original-bytes"
+        self.original_done = threading.Event()
 
     def download_image(self, user, local_id, save_dir=None, allow_key_scan=True):
         self.calls.append(
@@ -35,6 +39,16 @@ class FakeDownloader:
             return None
         path = Path(save_dir) / "thumb.jpg"
         path.write_bytes(b"thumbnail-bytes")
+        return str(path)
+
+    def download_image_original(self, user, local_id, save_dir=None, timeout=30.0):
+        self.original_calls.append((user, local_id, save_dir))
+        if self.original_result is None:
+            self.original_done.set()
+            return None
+        path = Path(save_dir) / "ui-original.jpg"
+        path.write_bytes(self.original_result)
+        self.original_done.set()
         return str(path)
 
     def download_voice(self, user, local_id, save_dir=None):
@@ -155,6 +169,89 @@ class ChannelMediaTests(unittest.TestCase):
                 store, downloader, str(Path(directory) / "staging")
             )("wechat-media:v1:voice-pending")
             self.assertEqual(result.state, "pending")
+            store.close()
+
+
+class UiOriginalTriggerTests(unittest.TestCase):
+    def test_disabled_by_default_and_thumbnail_response_unaffected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = EventStore(str(Path(directory) / "events.sqlite3"))
+            capture_event(store, "wechat-media:v1:noui")
+            downloader = FakeDownloader(pending=True, thumbnail=True)
+            result = create_media_resolver(
+                store, downloader, str(Path(directory) / "staging")
+            )("wechat-media:v1:noui")
+            self.assertEqual(result.state, "ready")
+            self.assertEqual(result.variant, "thumbnail")
+            result.cleanup()
+            self.assertEqual(downloader.original_calls, [])
+            store.close()
+
+    def test_trigger_only_when_enabled_then_cache_hit_upgrades_to_original(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = EventStore(str(Path(directory) / "events.sqlite3"))
+            capture_event(store, "wechat-media:v1:ui1")
+            downloader = FakeDownloader(pending=True, thumbnail=True)
+            resolver = create_media_resolver(
+                store,
+                downloader,
+                str(Path(directory) / "staging"),
+                ui_original_enabled=True,
+            )
+
+            first = resolver("wechat-media:v1:ui1")
+            self.assertEqual(first.state, "ready")
+            self.assertEqual(first.variant, "thumbnail")
+            first.cleanup()
+            # 后台任务完成后，下一次请求命中缓存 → 原图
+            self.assertTrue(downloader.original_done.wait(timeout=5))
+            second = resolver("wechat-media:v1:ui1")
+            self.assertEqual(second.state, "ready")
+            self.assertEqual(second.variant, "original")
+            self.assertEqual(second.mime_type, "image/jpeg")
+            self.assertEqual(downloader.original_calls[0][0], "room-1")
+            self.assertEqual(downloader.original_calls[0][1], 2)
+            # 缓存结果不挂 cleanup（目录持久保留）
+            self.assertIsNone(second.cleanup)
+            store.close()
+
+    def test_trigger_when_both_original_and_thumbnail_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = EventStore(str(Path(directory) / "events.sqlite3"))
+            capture_event(store, "wechat-media:v1:ui2")
+            downloader = FakeDownloader(pending=True, thumbnail=False)
+            create_media_resolver(
+                store,
+                downloader,
+                str(Path(directory) / "staging"),
+                ui_original_enabled=True,
+            )("wechat-media:v1:ui2")
+            self.assertTrue(downloader.original_done.wait(timeout=5))
+            self.assertEqual(len(downloader.original_calls), 1)
+            store.close()
+
+    def test_failed_ui_attempt_does_not_pollute_response(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = EventStore(str(Path(directory) / "events.sqlite3"))
+            capture_event(store, "wechat-media:v1:ui3")
+            downloader = FakeDownloader(pending=True, thumbnail=True)
+            downloader.original_result = None  # UI 下载失败
+            resolver = create_media_resolver(
+                store,
+                downloader,
+                str(Path(directory) / "staging"),
+                ui_original_enabled=True,
+            )
+            result = resolver("wechat-media:v1:ui3")
+            self.assertEqual(result.state, "ready")
+            self.assertEqual(result.variant, "thumbnail")
+            result.cleanup()
+            self.assertTrue(downloader.original_done.wait(timeout=5))
+            # 失败后缓存目录被清理，后续请求回到缩略图（不误报原图）
+            second = resolver("wechat-media:v1:ui3")
+            self.assertEqual(second.state, "ready")
+            self.assertEqual(second.variant, "thumbnail")
+            second.cleanup()
             store.close()
 
 

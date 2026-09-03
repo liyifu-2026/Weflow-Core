@@ -73,11 +73,22 @@ integration("Agent duplicate reply guard", () => {
     isSelf: false,
   });
 
-  beforeAll(() => {
+  beforeAll(async () => {
     postgres = createPostgres(
       integrationDatabaseUrl,
       createLogger({ logLevel: "silent" }, "integration-test"),
     );
+    // 白名单模式（migration 0060）：预建 agentEnabled=true 的联系人，
+    // 否则 ingest 不会为新入站消息创建 Agent Turn。
+    await postgres.db
+      .insert(schema.contactProfiles)
+      .values({
+        contactId,
+        channel: "channel",
+        channelContactId: channelConversationId,
+        agentEnabled: true,
+      })
+      .onConflictDoNothing();
   });
 
   afterAll(async () => {

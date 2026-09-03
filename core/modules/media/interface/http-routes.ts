@@ -18,7 +18,8 @@ const mediaParams = z.object({
   mediaId: z.string().regex(/^media:[a-f0-9]{64}$/),
 });
 
-/** 出站媒体 kind 由 MIME 推导（与入站媒体约定一致） */
+/** 出站媒体 kind 由 MIME 推导（与入站媒体约定一致）。
+ *  音频按 file 处理：出站语音转发已随协议 v5 裁剪，人工上传的音频以文件消息发送。 */
 const MIME_KIND: Record<string, string> = {
   "image/jpeg": "image",
   "image/png": "image",
@@ -27,10 +28,10 @@ const MIME_KIND: Record<string, string> = {
   "image/bmp": "image",
   "video/mp4": "video",
   "video/quicktime": "video",
-  "audio/mpeg": "voice",
-  "audio/wav": "voice",
-  "audio/x-silk": "voice",
-  "audio/ogg": "voice",
+  "audio/mpeg": "file",
+  "audio/wav": "file",
+  "audio/x-silk": "file",
+  "audio/ogg": "file",
 };
 
 /** 注册媒体模块的所有 HTTP 路由 */
@@ -96,6 +97,7 @@ export function registerMediaRoutes(
     if (!params.success)
       return reply.code(400).send({ error: "invalid_request" });
     const originalFiles = alias(schema.storedFiles, "stored_files_original");
+    const derivedFiles = alias(schema.storedFiles, "stored_files_derived");
     const rows = await db
       .select({
         mediaId: schema.mediaAssets.mediaId,
@@ -115,6 +117,10 @@ export function registerMediaRoutes(
         originalFileId: originalFiles.fileId,
         originalMimeType: originalFiles.mimeType,
         originalSize: originalFiles.size,
+        // 语音派生播放文件（SILK→MP3）：存在时前端用它播放
+        derivedFileId: derivedFiles.fileId,
+        derivedMimeType: derivedFiles.mimeType,
+        derivedSize: derivedFiles.size,
       })
       .from(schema.mediaAssets)
       .innerJoin(
@@ -132,11 +138,23 @@ export function registerMediaRoutes(
         originalFiles,
         eq(schema.mediaAssets.originalImageFileId, originalFiles.fileId),
       )
+      .leftJoin(
+        derivedFiles,
+        eq(schema.mediaAssets.derivedFileId, derivedFiles.fileId),
+      )
       .where(eq(schema.mediaAssets.mediaId, params.data.mediaId))
       .limit(1);
     const media = rows[0];
     if (!media) return reply.code(404).send({ error: "media_not_found" });
-    const { originalFileId, originalMimeType, originalSize, ...rest } = media;
+    const {
+      originalFileId,
+      originalMimeType,
+      originalSize,
+      derivedFileId,
+      derivedMimeType,
+      derivedSize,
+      ...rest
+    } = media;
     return {
       media: {
         ...rest,
@@ -145,6 +163,13 @@ export function registerMediaRoutes(
               fileId: originalFileId,
               mimeType: originalMimeType,
               size: originalSize,
+            }
+          : null,
+        derived: derivedFileId
+          ? {
+              fileId: derivedFileId,
+              mimeType: derivedMimeType,
+              size: derivedSize,
             }
           : null,
       },
@@ -156,11 +181,17 @@ export function registerMediaRoutes(
     const params = mediaParams.safeParse(request.params);
     if (!params.success)
       return reply.code(400).send({ error: "invalid_request" });
+    const derivedFiles = alias(schema.storedFiles, "stored_files_derived");
     const rows = await db
       .select({
         status: schema.mediaAssets.status,
         mimeType: schema.storedFiles.mimeType,
         storageKey: schema.storedFiles.storageKey,
+        // 原始文件名（出站=暂存原名；入站=Host 上报），Content-Disposition 用
+        originalName: schema.storedFiles.originalName,
+        // 语音派生播放文件（SILK→MP3）：存在时优先返回（浏览器/移动端可播）
+        derivedMimeType: derivedFiles.mimeType,
+        derivedStorageKey: derivedFiles.storageKey,
       })
       .from(schema.mediaAssets)
       .innerJoin(
@@ -180,16 +211,32 @@ export function registerMediaRoutes(
           inArray(schema.mediaAssets.status, ["ready", "failed"]),
         ),
       )
+      .leftJoin(
+        derivedFiles,
+        eq(schema.mediaAssets.derivedFileId, derivedFiles.fileId),
+      )
       .where(eq(schema.mediaAssets.mediaId, params.data.mediaId))
       .limit(1);
     const media = rows[0];
     if (!media) return reply.code(404).send({ error: "media_not_ready" });
-    if (!(await storage.exists(media.storageKey)))
+    // 语音已转码出 MP3：优先返回可播放的派生文件
+    const playable =
+      media.derivedStorageKey && (await storage.exists(media.derivedStorageKey))
+        ? { mimeType: media.derivedMimeType, storageKey: media.derivedStorageKey }
+        : { mimeType: media.mimeType, storageKey: media.storageKey };
+    if (!(await storage.exists(playable.storageKey)))
       return reply.code(404).send({ error: "media_not_found" });
-    reply.header("content-type", media.mimeType);
+    reply.header("content-type", playable.mimeType);
     reply.header("cache-control", "private, no-store");
     reply.header("x-content-type-options", "nosniff");
-    return reply.send(storage.read(media.storageKey));
+    // RFC 5987 filename*：非 ASCII 文件名（中文等）在浏览器下载/移动端
+    // 分享时保留原名；filename= 为 ASCII 回退。
+    const contentName = media.originalName ?? "attachment";
+    reply.header(
+      "content-disposition",
+      `attachment; filename="${contentName.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(contentName)}`,
+    );
+    return reply.send(storage.read(playable.storageKey));
   });
 
   server.get(
@@ -205,6 +252,7 @@ export function registerMediaRoutes(
           status: schema.mediaAssets.status,
           mimeType: originalFiles.mimeType,
           storageKey: originalFiles.storageKey,
+          originalName: originalFiles.originalName,
         })
         .from(schema.mediaAssets)
         .innerJoin(
@@ -235,6 +283,11 @@ export function registerMediaRoutes(
       reply.header("content-type", media.mimeType);
       reply.header("cache-control", "private, no-store");
       reply.header("x-content-type-options", "nosniff");
+      const originalName = media.originalName ?? "attachment";
+      reply.header(
+        "content-disposition",
+        `attachment; filename="${originalName.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(originalName)}`,
+      );
       return reply.send(storage.read(media.storageKey));
     },
   );

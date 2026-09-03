@@ -256,8 +256,13 @@ class BackfillIdempotencyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             db = FakeWeChatDb()
             db.messages["room-1"] = [
-                _text_msg(1, 1, "很久以前", _ts(-24 * 60)),  # 60 天前
-                _text_msg(2, 2, "最近", _ts(-1)),  # 1 小时前
+                # 60 天前（固定基准；固定过去时间戳永远早于随时间前移的过滤线）
+                _text_msg(1, 1, "很久以前", _ts(-24 * 60)),
+                # 真实 1 小时前：不随时间推移落出 since_days 过滤线（时间炸弹修复）
+                _text_msg(
+                    2, 2, "最近",
+                    datetime.now(timezone.utc).timestamp() - 3600,
+                ),
             ]
             store = EventStore(str(Path(directory) / "events.sqlite3"))
             host = WeChatChannelHost(db, store)

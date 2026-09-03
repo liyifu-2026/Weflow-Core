@@ -21,8 +21,8 @@ class LockManager:
     ``process_lock``（multiprocessing.Lock）不可重入：同一线程内嵌套
     ``acquire`` 会永久阻塞。因此用线程局部计数实现**同线程重入**——同一
     线程重复获取时跳过进程锁（只需重入线程锁），保证
-    ``@uilock`` 修饰的函数互相调用（如 ``Chat.ForwardVoiceMessage``
-    内部调用 ``VoiceMessage.forward_to``）不会死锁。
+    ``@uilock`` 修饰的函数互相调用（如发送类方法内部再调用其他
+    ``@uilock`` 方法）不会死锁。
     """
 
     process_lock = multiprocessing.Lock()

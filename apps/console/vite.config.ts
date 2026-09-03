@@ -143,7 +143,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: Number(process.env.VITE_CONSOLE_PORT) || 5173,
     host: true,
     allowedHosts: ["web.leaif.com", "api.leaif.com", "leaif.com", "localhost", "127.0.0.1"],
     fs: {

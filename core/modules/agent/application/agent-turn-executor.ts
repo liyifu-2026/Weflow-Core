@@ -152,12 +152,8 @@ export class AgentTurnExecutor {
         this.db,
         this.modelClient,
         this.model,
-        input.turnId,
-        input.traceId,
-        this.dependencies.knowledgeSearch,
-        this.dependencies.skillRegistry,
-        this.dependencies.strategyRegistry,
-        this.dependencies.preResolveAiEmployeePrompt,
+        { turnId: input.turnId, traceId: input.traceId },
+        this.dependencies,
       );
     } else if (before.status === "queued") {
       const claimed = await turnService.claim(input.turnId, this.model, [
@@ -184,12 +180,8 @@ export class AgentTurnExecutor {
           this.db,
           this.modelClient,
           this.model,
-          input.turnId,
-          input.traceId,
-          this.dependencies.knowledgeSearch,
-          this.dependencies.skillRegistry,
-          this.dependencies.strategyRegistry,
-          this.dependencies.preResolveAiEmployeePrompt,
+          { turnId: input.turnId, traceId: input.traceId },
+          this.dependencies,
         );
       } else {
         // 预判分流：规则 + 极速 LLM 分类，高危转人工 / simple 走直答档。
@@ -271,13 +263,8 @@ export class AgentTurnExecutor {
               this.db,
               this.modelClient,
               this.model,
-              input.turnId,
-              input.traceId,
-              this.dependencies.knowledgeSearch,
-              this.dependencies.skillRegistry,
-              this.dependencies.strategyRegistry,
-              this.dependencies.preResolveAiEmployeePrompt,
-              this.dependencies.resolveAiEmployeeId,
+              { turnId: input.turnId, traceId: input.traceId },
+              this.dependencies,
             );
           }
         }

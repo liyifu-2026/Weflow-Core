@@ -160,11 +160,13 @@ export function registerIdentityRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
+    // mobile=true：创建 30 天长时效会话（服务端滑动续期，免去每日重登）
     const result = await login(
       db,
       parsed.data.username,
       parsed.data.password,
       request.ip,
+      { mobile: true },
     );
     if (!result) {
       return reply.code(401).send({ error: "invalid_credentials" });

@@ -4,6 +4,7 @@ import {
   loadUserAvatarPresets,
   presetImageUrl,
   presetIndexForSeed,
+  type UserAvatarPreset,
 } from "./user-avatar-presets";
 
 const props = withDefaults(defineProps<{ name?: string; size?: number }>(), {

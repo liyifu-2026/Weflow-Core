@@ -11,6 +11,7 @@ import * as schema from "../../../infrastructure/postgres/schema.js";
 import { lockConversationOwnership } from "../../../infrastructure/postgres/ownership-lock.js";
 import { scheduleMemoryCaptureInTransaction } from "../../memory/application/schedule-memory-capture.js";
 import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
+import { assetOutboundMediaId } from "../../assets/application/asset-service.js";
 
 /** 人工回复的创建结果 */
 export type ManualReplyResult =
@@ -21,6 +22,7 @@ export type ManualReplyResult =
     }
   | { status: "conversation_not_found" }
   | { status: "handoff_not_assignee" }
+  | { status: "asset_not_found" }
   | { status: "conversation_revision_conflict"; conversationRevision: number }
   | { status: "idempotency_conflict" };
 
@@ -54,7 +56,10 @@ export async function getManualReplyOutcome(
         eq(schema.messages.conversationId, input.conversationId),
         isMessageId
           ? eq(schema.messages.messageId, input.clientRequestId)
-          : eq(schema.messages.idempotencyKey, `manual:${input.clientRequestId}`),
+          : eq(
+              schema.messages.idempotencyKey,
+              `manual:${input.clientRequestId}`,
+            ),
       ),
     )
     .limit(1);
@@ -94,6 +99,8 @@ export async function createManualReply(
     mediaId?: string | null;
     /** 出站媒体文件信息（mediaId 之外的发送所需元数据） */
     media?: { fileId: string; kind?: string } | null;
+    /** 素材空间引用（先经 POST /api/v1/assets 上传；携带时由服务端派生 mediaId，文件无需重新上传） */
+    assetId?: string | null;
   },
 ): Promise<ManualReplyResult> {
   const result = await db.transaction(
@@ -138,6 +145,31 @@ export async function createManualReply(
         return { status: "handoff_not_assignee" };
       }
 
+      // 素材空间引用：解析素材 → 服务端确定性派生 mediaId（幂等重试安全）。
+      // 素材文件已在空间中持久持有，无需重新上传字节；发送复用 mediaAssets 出站链路。
+      let outboundMediaId: string | null = null;
+      let outboundMediaMeta: { fileId: string; kind: string } | null = null;
+      if (input.assetId) {
+        const assetRows = await transaction
+          .select({
+            fileId: schema.assetsItems.fileId,
+            category: schema.assetsItems.category,
+            deletedAt: schema.assetsItems.deletedAt,
+          })
+          .from(schema.assetsItems)
+          .where(eq(schema.assetsItems.assetId, input.assetId))
+          .limit(1);
+        const asset = assetRows[0];
+        if (!asset || asset.deletedAt) {
+          return { status: "asset_not_found" };
+        }
+        outboundMediaId = assetOutboundMediaId(
+          input.assetId,
+          input.clientRequestId,
+        );
+        outboundMediaMeta = { fileId: asset.fileId, kind: asset.category };
+      }
+
       const messageId = manualMessageId(
         input.actorUserId,
         input.conversationId,
@@ -153,7 +185,7 @@ export async function createManualReply(
           direction: "outbound",
           actorType: "user",
           actorId: input.actorUserId,
-          contentType: input.mediaId ? "media" : "text",
+          contentType: input.mediaId || outboundMediaId ? "media" : "text",
           channelType: 1,
           text: input.text,
           isSelf: true,
@@ -170,21 +202,23 @@ export async function createManualReply(
 
       const created = inserted[0];
       if (created) {
-        // 出站媒体：上传仅持有 storedFiles，这里创建 mediaAssets 关联到本条消息
-        if (input.mediaId && input.media) {
+        // 出站媒体：上传仅持有 storedFiles（或素材已持久持有），这里创建 mediaAssets 关联到本条消息
+        const outboundMedia = input.media ?? outboundMediaMeta;
+        const outboundMediaKey = input.mediaId ?? outboundMediaId;
+        if (outboundMediaKey && outboundMedia) {
           const now = new Date();
           await transaction
             .insert(schema.mediaAssets)
             .values({
-              mediaId: input.mediaId,
+              mediaId: outboundMediaKey,
               messageId: created.messageId,
               conversationId: input.conversationId,
-              sourceConversationId: `manual-upload:${input.media.fileId}`,
+              sourceConversationId: `manual-upload:${outboundMedia.fileId}`,
               sourceLocalId: null,
               sourceMediaRef: null,
-              kind: input.media.kind ?? "file",
+              kind: outboundMedia.kind ?? "file",
               status: "ready",
-              originalFileId: input.media.fileId,
+              originalFileId: outboundMedia.fileId,
               errorCode: null,
               description: null,
               processedAt: now,

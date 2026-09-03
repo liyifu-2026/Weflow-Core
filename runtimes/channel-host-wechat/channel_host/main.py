@@ -71,6 +71,10 @@ def main() -> None:
         downloader,
         str(media_staging),
         emoji_capture=_capture_emoji(db, media_staging),
+        # 原图 UI 下载开关（默认关）：开启后，原图/缩略图不可用或仅缩略图时，
+        # 后台线程用 UI 自动化触发微信下载原图（会短暂抢占微信窗口），
+        # 成果缓存于 <media_staging>/ui-original/，下次请求直接升级为原图。
+        ui_original_enabled=os.getenv("WECHAT_MEDIA_ORIGINAL_VIA_UI", "").strip() == "1",
     )
     key_service = ImageKeyService(
         downloader,

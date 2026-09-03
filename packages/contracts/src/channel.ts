@@ -71,6 +71,8 @@ export type ChannelMediaResult =
       readonly state: "ready";
       readonly body: ReadableStream<Uint8Array>;
       readonly mimeType: string;
+      /** Host 上报的原始文件名（Content-Disposition / 事件 fileName）；缺省未知 */
+      readonly fileName?: string | null;
       /** 缺省视为 original（兼容未上报变体的 Host） */
       readonly variant?: ChannelMediaVariant;
     }
@@ -118,11 +120,6 @@ export type ChannelSendPayload =
   | {
       /** 撤回最后一条己方消息（2 分钟窗口由微信判定） */
       readonly kind: "recall";
-    }
-  | {
-      /** 转发语音条：已落盘 .silk 文件路径（仅转发，不含录音） */
-      readonly kind: "voice";
-      readonly path: string;
     };
 
 // executing 是 Channel Host 的中间态（已认领、GUI 发送中），
@@ -156,6 +153,23 @@ export type CreateChannelSendOperationInput = {
 export interface ChannelSendOperations {
   create(input: CreateChannelSendOperationInput): Promise<ChannelSendOperation>;
   get(operationId: string): Promise<ChannelSendOperation | undefined>;
+}
+
+/**
+ * Host 明确拒收（HTTP 4xx）：请求本身无效（协议字段缺失/非法、账号不匹配等），
+ * 原样重试无意义。出站循环收到此错误应将当前消息标记 failed 并继续处理
+ * 后续消息；传输类故障（超时、5xx、网络不可达）仍应中断整轮等待重试，
+ * 防止一条无效消息队头堵塞冻结整个出站队列。
+ */
+export class ChannelSendRejectedError extends Error {
+  public constructor(
+    public readonly httpStatus: number,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "ChannelSendRejectedError";
+  }
 }
 
 /**
@@ -198,12 +212,14 @@ export interface ChannelContactSource {
 export const CHANNEL_PROTOCOL = {
   /**
    * 协议版本：任何枚举/错误码变更都必须递增。
-   * v4：出站新增 `recall`（撤回最后一条己方消息，2 分钟窗口）与受限 `voice`（转发已落盘 .silk 语音条）；
+   * v5：移除出站受限 `voice` 转发（PC 微信无语音条转发入口，.silk 以文件发送
+   *      接收方无法播放，功能裁剪）；入站 kind=voice SILK 事件与 media 拉取不变。
+   * v4：出站新增 `recall`（撤回最后一条己方消息，2 分钟窗口）；
    *      入站 `ChannelEvent.kind` 新增 `video`（local_type 43，video/mp4 落盘）。
    * v3：移除未实现的出站 `voice` 发送能力（仅保留入站 `kind=voice` SILK 语音事件与 audio/x-silk 媒体拉取）。
    * v2：ChannelEvent 新增可选 `historical` 标记（空库 Backfill 回溯事件）。
    */
-  protocolVersion: 4,
+  protocolVersion: 5,
   sendOperationStates: [
     "pending",
     "executing",
@@ -219,7 +235,6 @@ export const CHANNEL_PROTOCOL = {
     "mention",
     "poke",
     "recall",
-    "voice",
   ] as const,
   mediaStates: ["ready", "pending", "not_found", "failed"] as const,
   /** Host 侧可能返回的错误码全集（HTTP 层与发送层） */
@@ -237,7 +252,6 @@ export const CHANNEL_PROTOCOL = {
     "recall_not_found",
     "recall_unsupported",
     "video_not_found",
-    "voice_path_invalid",
     "reply_target_not_latest",
     "mention_member_not_found",
   ] as const,

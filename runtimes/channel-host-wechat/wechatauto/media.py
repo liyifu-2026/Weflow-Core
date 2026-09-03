@@ -43,6 +43,8 @@ import threading
 import time
 from typing import List, Optional, Tuple
 
+from .logger import wxlog
+
 V1_MAGIC = b"\x07\x08\x05\x56\x02\x05"
 V2_MAGIC = b"\x07\x08\x56\x32\x08\x07"
 V1_HEADER_SZ = 22  # 6B sig + 16B xor key
@@ -454,6 +456,16 @@ class MediaDownloader:
                     return os.path.join(root, f)
         return None
 
+    def _find_h_dat(self, user: str, md5: str) -> Optional[str]:
+        """查找原图 _h.dat 文件（点击「图片原始大小」后微信下载的高分辨率版本）。"""
+        base = os.path.join(self.db.account_dir, "msg", "attach", self._chat_md5(user))
+        target = md5 + "_h.dat"
+        for root, _, files in os.walk(base):
+            for f in files:
+                if f == target:
+                    return os.path.join(root, f)
+        return None
+
     # ------------------------------------------------------------------
     # 各类媒体下载
     # ------------------------------------------------------------------
@@ -461,6 +473,57 @@ class MediaDownloader:
         d = save_dir or self.save_dir
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, name)
+
+    # ------------------------------------------------------------------
+    # WXAM (wxgf) 解码：微信 4.x 普通图片的新存储格式，内部为 HEVC 裸流
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _extract_hevc(data: bytes) -> Optional[bytes]:
+        """从 wxgf 容器提取 HEVC Annex-B 裸流（自首个 NALU 起始码起）。"""
+        start = data.find(b"\x00\x00\x00\x01")
+        return data[start:] if start >= 0 else None
+
+    @staticmethod
+    def _ffmpeg_exe() -> Optional[str]:
+        import shutil
+        exe = shutil.which("ffmpeg")
+        if exe:
+            return exe
+        try:
+            import imageio_ffmpeg
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return None
+
+    def _wxgf_to_jpg(self, data: bytes) -> Optional[bytes]:
+        """用 ffmpeg 把 wxgf 内的 HEVC 裸流转码为 jpg。失败返回 None。"""
+        exe = self._ffmpeg_exe()
+        if exe is None:
+            return None
+        hevc = self._extract_hevc(data)
+        if not hevc:
+            return None
+        import subprocess
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "in.hevc")
+            dst = os.path.join(td, "out.jpg")
+            with open(src, "wb") as f:
+                f.write(hevc)
+            try:
+                r = subprocess.run(
+                    [exe, "-y", "-v", "error", "-i", src, "-frames:v", "1", dst],
+                    capture_output=True, timeout=30,
+                )
+            except Exception:
+                return None
+            if r.returncode == 0:
+                try:
+                    with open(dst, "rb") as f:
+                        out = f.read()
+                    return out if out[:3] == b"\xff\xd8\xff" else None
+                except OSError:
+                    return None
+        return None
 
     def _img_md5(self, row: dict) -> Optional[str]:
         pi = row.get("packed_info")
@@ -568,6 +631,199 @@ class MediaDownloader:
         with open(out, "wb") as f:
             f.write(data)
         return out
+
+    # ------------------------------------------------------------------
+    # 原图下载（UI 自动化触发微信下载原图）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _find_preview_button(ctrl, name, max_depth=8):
+        """在 PreviewWindow 中递归查找指定名称的按钮。"""
+        if max_depth <= 0:
+            return None
+        for kid in ctrl.GetChildren():
+            try:
+                if kid.Name == name:
+                    return kid
+                found = MediaDownloader._find_preview_button(kid, name, max_depth - 1)
+                if found:
+                    return found
+            except Exception:
+                pass
+        return None
+
+    def _save_image_bytes(self, data: bytes, user: str, local_id: int,
+                          save_dir: Optional[str]) -> Optional[str]:
+        """按魔数定扩展名落盘；wxgf 容器尝试 ffmpeg 转 jpg。"""
+        if data[:3] == b"\xff\xd8\xff":
+            ext = "jpg"
+        elif data[:4] == b"\x89PNG":
+            ext = "png"
+        elif data[:3] == b"GIF":
+            ext = "gif"
+        elif data[:4] == b"wxgf":
+            jpg = self._wxgf_to_jpg(data)
+            if jpg is not None:
+                out = self._out(save_dir, "%s_%s.jpg" % (user, local_id))
+                with open(out, "wb") as f:
+                    f.write(jpg)
+                return out
+            return None  # wxgf 容器且无法转码：不落盘为伪图片
+        else:
+            ext = "img"
+        out = self._out(save_dir, "%s_%s.%s" % (user, local_id, ext))
+        with open(out, "wb") as f:
+            f.write(data)
+        return out
+
+    def download_image_original(self, user: str, local_id: int, save_dir: Optional[str] = None,
+                                aes_key: Optional[str] = None, xor_key: Optional[int] = None,
+                                timeout: float = 30.0, chat_name: Optional[str] = None) -> Optional[str]:
+        """下载原图：通过 UI 自动化点击图片消息触发微信下载原图。
+
+        原理：群聊图片默认只下发缩略图（``_t.dat``），原图（``.dat``/``_h.dat``）
+        只有在微信中点击查看大图后才会下载到本地。本方法模拟用户点击图片消息，
+        等待原图下载完成后解密保存。
+
+        注意：会激活微信窗口并把鼠标移到图片上（用户操作会被短暂打断）。
+
+        Args:
+            user: 会话用户名（wxid 或群聊 ID）
+            local_id: 消息 local_id
+            save_dir: 保存目录（默认 ~/Documents/wechatauto_media）
+            aes_key: 图片 AES 密钥（可选，自动检测）
+            xor_key: XOR 密钥（可选，自动检测）
+            timeout: 等待原图下载的超时时间（秒）
+            chat_name: 用于 UI 搜索的会话名称（微信昵称，默认使用 user）
+
+        Returns:
+            解密后的原图文件路径，失败返回 None
+        """
+        row = self.db.get_message_row(user, local_id)
+        if not row or row.get("local_type") != 3:
+            return None
+        md5 = self._img_md5(row)
+        if not md5:
+            return None
+
+        # 已落地的原图/高清原图：直接解密，不打扰 UI
+        for finder in (self._find_h_dat,
+                       lambda u, m: self._find_dat(u, m, row["create_time"])):
+            existing = finder(user, md5)
+            if existing:
+                try:
+                    data = self.decrypt_image(existing, aes_key, xor_key)
+                except (ValueError, OSError, RuntimeError):
+                    continue
+                return self._save_image_bytes(data, user, local_id, save_dir)
+
+        import uiautomation as auto
+        from .guia import WinInput
+        from .uia_driver import WeChatUIA
+        from .wx import WeChat
+
+        _uia = WeChatUIA()
+        if not _uia.ensure_window():
+            return None
+        time.sleep(1.0)
+
+        clicked = False
+        try:
+            for _retry in range(3):
+                try:
+                    wx = WeChat()
+                    wx.ChatWith(chat_name or user)
+                    time.sleep(2.0)
+                    break
+                except Exception as e:
+                    wxlog.debug(f"ChatWith 重试 {_retry}: {type(e).__name__}: {e}")
+                    time.sleep(1.0)
+
+            lst = _uia._message_list()
+            if lst is None:
+                return None
+            inp = WinInput()
+            lst_rect = lst.BoundingRectangle
+
+            # 收集消息列表内的「图片」气泡（群聊图片气泡类名带 ReferItemView）
+            images = []
+            for ch in lst.GetChildren():
+                try:
+                    cn = ch.ClassName or ""
+                    nm = ch.Name or ""
+                    if nm == "图片" and "ChatBubble" in cn:
+                        r = ch.BoundingRectangle
+                        cx = int((r.left + r.right) / 2)
+                        cy = int((r.top + r.bottom) / 2)
+                        if (lst_rect.left <= cx <= lst_rect.right
+                                and lst_rect.top <= cy <= lst_rect.bottom):
+                            images.append(ch)
+                except Exception:
+                    continue
+
+            deadline = time.monotonic() + timeout
+            for img_ch in images:
+                if time.monotonic() > deadline:
+                    break
+                r = img_ch.BoundingRectangle
+                # UIA 矩形是全宽列表项；实际图片缩略图在左侧约 12% 宽度处。
+                # 用相对偏移（而非固定像素），窗口宽度/DPI 变化时可自适应。
+                cx = r.left + int((r.right - r.left) * 0.12)
+                cy = int((r.top + r.bottom) / 2)
+                inp.real_click(cx, cy)
+                time.sleep(3.0)
+
+                preview_win = None
+                candidates = [w for w in auto.GetRootControl().GetChildren()
+                              if "PreviewWindow" in (w.ClassName or "")]
+                # 优先选包含「图片原始大小」按钮的预览窗口
+                for w in candidates:
+                    if self._find_preview_button(w, "图片原始大小"):
+                        preview_win = w
+                        break
+                if preview_win is None and candidates:
+                    preview_win = max(
+                        candidates,
+                        key=lambda w: (w.BoundingRectangle.right - w.BoundingRectangle.left)
+                        * (w.BoundingRectangle.bottom - w.BoundingRectangle.top),
+                    )
+                if not preview_win:
+                    continue
+
+                btn = self._find_preview_button(preview_win, "图片原始大小")
+                if btn:
+                    try:
+                        btn.Click()
+                    except Exception:
+                        btn_r = btn.BoundingRectangle
+                        inp.real_click(int((btn_r.left + btn_r.right) / 2),
+                                       int((btn_r.top + btn_r.bottom) / 2))
+                    time.sleep(3.0)
+
+                h_dat = self._find_h_dat(user, md5)
+                if h_dat and os.path.getsize(h_dat) > 102400:
+                    clicked = True
+                    break
+                # 预览窗口可能停留：按 ESC 关闭后继续下一张
+                try:
+                    import win32api
+                    import win32con
+                    win32api.keybd_event(win32con.VK_ESCAPE, 0, 0, 0)
+                    win32api.keybd_event(win32con.VK_ESCAPE, 0, 2, 0)
+                except Exception:
+                    pass
+                time.sleep(1.0)
+        except Exception as e:
+            wxlog.debug(f"原图下载 UI 流程异常: {type(e).__name__}: {e}")
+
+        if not clicked:
+            return None
+
+        # 直接解密 _h.dat（点击「图片原始大小」后下载的原图）
+        h_dat = self._find_h_dat(user, md5)
+        if not h_dat:
+            return None
+        data = self.decrypt_image(h_dat, aes_key, xor_key)
+        return self._save_image_bytes(data, user, local_id, save_dir)
 
     def download_voice(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
         """语音：media_0.db VoiceInfo.voice_data（SILK 二进制），落盘 .silk"""

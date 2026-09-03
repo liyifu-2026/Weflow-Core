@@ -36,7 +36,10 @@ import type {
   ChannelSendPayload,
   CreateChannelSendOperationInput,
 } from "../../modules/channel/contracts/channel-send-operations.js";
-import { CHANNEL_PROTOCOL } from "../../modules/channel/contracts/channel-send-operations.js";
+import {
+  CHANNEL_PROTOCOL,
+  ChannelSendRejectedError,
+} from "@weflow-leaif/contracts";
 import type { PluginDefinition } from "../runtime/kernel/index.js";
 import { CHANNEL_EVENTS_CAPABILITY } from "../runtime/capabilities/channel-events.js";
 import { CHANNEL_MEDIA_CAPABILITY } from "../runtime/capabilities/channel-media.js";
@@ -110,7 +113,15 @@ const hostSendOperationSchema = z
     conversationRef: z.string().min(1),
     payload: z
       .object({
-        kind: z.enum(["text", "reply", "mention", "poke", "image", "file", "recall", "voice"]),
+        kind: z.enum([
+          "text",
+          "reply",
+          "mention",
+          "poke",
+          "image",
+          "file",
+          "recall",
+        ]),
         text: z.string().optional(),
         replyToChannelMessageId: z.string().optional(),
         mentionContactRefs: z.array(z.string()).optional(),
@@ -138,6 +149,8 @@ export class ChannelProviderError extends Error {
       | "channel_protocol_mismatch",
     message: string,
     options?: ErrorOptions,
+    /** Host 返回的 HTTP 状态码（仅 channel_http_error 时已知） */
+    public readonly httpStatus?: number,
   ) {
     super(`${code}: ${message}`, options);
     this.name = "ChannelProviderError";
@@ -200,7 +213,7 @@ export class HttpChannelProvider
           signal: AbortSignal.timeout(this.#timeoutMs),
         },
       );
-    } catch (error) {
+    } catch {
       // host 不可达不判失配——transport 层已有自己的错误语义
       this.#protocolOk = true;
       this.#protocolDetail = "host unreachable; protocol check skipped";
@@ -211,22 +224,30 @@ export class HttpChannelProvider
       payload = (await response.json()) as Record<string, unknown>;
     } catch {
       this.#protocolOk = true;
-      this.#protocolDetail = "host returned non-JSON capabilities; check skipped";
+      this.#protocolDetail =
+        "host returned non-JSON capabilities; check skipped";
       return;
     }
     const problems: string[] = [];
     const version = payload["protocolVersion"];
     if (version !== CHANNEL_PROTOCOL.protocolVersion) {
-      problems.push(`protocolVersion ${String(version)} != ${String(CHANNEL_PROTOCOL.protocolVersion)}`);
+      problems.push(
+        `protocolVersion ${String(version)} != ${String(CHANNEL_PROTOCOL.protocolVersion)}`,
+      );
     }
     const states = new Set(
-      Array.isArray(payload["sendOperationStates"]) ? (payload["sendOperationStates"] as string[]) : [],
+      Array.isArray(payload["sendOperationStates"])
+        ? (payload["sendOperationStates"] as string[])
+        : [],
     );
     for (const state of CHANNEL_PROTOCOL.sendOperationStates) {
-      if (!states.has(state)) problems.push(`missing sendOperationState: ${state}`);
+      if (!states.has(state))
+        problems.push(`missing sendOperationState: ${state}`);
     }
     const kinds = new Set(
-      Array.isArray(payload["sendKinds"]) ? (payload["sendKinds"] as string[]) : [],
+      Array.isArray(payload["sendKinds"])
+        ? (payload["sendKinds"] as string[])
+        : [],
     );
     for (const kind of CHANNEL_PROTOCOL.sendKinds) {
       if (!kinds.has(kind)) problems.push(`missing sendKind: ${kind}`);
@@ -245,7 +266,10 @@ export class HttpChannelProvider
   }
 
   /** 只读协议状态（供 dev doctor / 诊断端点） */
-  public protocolStatus(): { ok: boolean | undefined; detail: string | undefined } {
+  public protocolStatus(): {
+    ok: boolean | undefined;
+    detail: string | undefined;
+  } {
     return { ok: this.#protocolOk, detail: this.#protocolDetail };
   }
 
@@ -274,6 +298,8 @@ export class HttpChannelProvider
       throw new ChannelProviderError(
         "channel_http_error",
         `Host returned ${String(response.status)}`,
+        undefined,
+        response.status,
       );
     }
     try {
@@ -407,6 +433,8 @@ export class HttpChannelProvider
       throw new ChannelProviderError(
         "channel_http_error",
         `Host returned ${String(response.status)}`,
+        undefined,
+        response.status,
       );
     }
     const mimeType = response.headers.get("content-type")?.split(";")[0];
@@ -427,7 +455,17 @@ export class HttpChannelProvider
       response.headers.get("x-media-variant") === "thumbnail"
         ? ("thumbnail" as const)
         : ("original" as const);
-    return { state: "ready", body: response.body, mimeType, variant };
+    // Content-Disposition 文件名：Host 对文件附件上报微信原始文件名
+    //（RFC 5987 filename* 优先，退回 ASCII filename）。
+    const disposition = response.headers.get("content-disposition");
+    const fileName = parseContentDispositionFileName(disposition);
+    return {
+      state: "ready",
+      body: response.body,
+      mimeType,
+      variant,
+      ...(fileName ? { fileName } : {}),
+    };
   }
 
   public async get(
@@ -464,9 +502,25 @@ export class HttpChannelProvider
     }
     if (response.status === 404 && allowNotFound) return undefined;
     if (!response.ok) {
+      // Host 明确拒收且属于「请求本身无效」（400/413/422：payload 非法、
+      // 过大、不可处理）——翻译为契约错误供出站循环做单条隔离。
+      // 401/403（认证配置）、404/405（协议/路由）、409（冲突/账号不匹配）
+      // 等不是单条消息的问题，仍按 HTTP 错误中断整轮，防止误杀整个队列。
+      if (
+        response.status === 400 ||
+        response.status === 413 ||
+        response.status === 422
+      ) {
+        throw new ChannelSendRejectedError(
+          response.status,
+          `Host rejected request with ${String(response.status)}`,
+        );
+      }
       throw new ChannelProviderError(
         "channel_http_error",
         `Host returned ${String(response.status)}`,
+        undefined,
+        response.status,
       );
     }
     try {
@@ -564,8 +618,6 @@ function parseSendOperation(value: unknown): ChannelSendOperation {
           return { kind: "poke" };
         case "recall":
           return { kind: "recall" };
-        case "voice":
-          return { kind: "voice", path: operation.payload.path ?? "" };
         case "image":
           return {
             kind: "image",
@@ -616,4 +668,27 @@ function requestHeaders(input: RequestInit["headers"]): Record<string, string> {
     }
   }
   return headers;
+}
+
+/**
+ * 解析 Content-Disposition 中的文件名。
+ * 优先 RFC 5987 `filename*=UTF-8''...`（非 ASCII 原名），退回 ASCII `filename="..."`。
+ * 无头或解析失败返回 undefined（调用方回退 mediaId 命名）。
+ */
+export function parseContentDispositionFileName(
+  disposition: string | null,
+): string | undefined {
+  if (!disposition) return undefined;
+  const utf8Match = /filename\*=(?:UTF-8'')([^;]+)/i.exec(disposition);
+  if (utf8Match?.[1]) {
+    try {
+      const decoded = decodeURIComponent(utf8Match[1].replace(/^"|"$/g, ""));
+      if (decoded.trim()) return decoded;
+    } catch {
+      // encodeURIComponent 残缺时退回 ASCII filename
+    }
+  }
+  const asciiMatch = /filename="([^"]+)"/i.exec(disposition);
+  const ascii = asciiMatch?.[1]?.trim();
+  return ascii || undefined;
 }

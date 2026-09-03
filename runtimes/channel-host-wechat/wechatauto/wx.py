@@ -318,34 +318,6 @@ class Chat:
             return WxResponse.failure('撤回失败（消息已过期或控件不可识别）')
         return WxResponse.success(f'已撤回对 {target} 发送的最近一条消息')
 
-    @uilock
-    def ForwardVoiceMessage(
-            self,
-            who: str = None,
-            target: str = None,
-            save_dir: str = None,
-        ) -> WxResponse:
-        """转发语音消息（从本地媒体库提取 SILK 文件发送给目标）。
-
-        微信不支持右键直接转发语音，故实现为「找到本地语音文件 → 以文件
-        消息发送」。默认转发本会话最近一条语音到 target（不指定则发给
-        本会话对象自身）。
-
-        Args:
-            who: 语音所在会话，不指定则用当前会话
-            target: 转发目标联系人，不指定则转发给 who 本身
-            save_dir: 语音文件临时保存目录
-
-        Returns:
-            WxResponse
-        """
-        chat = Chat(who or self.who, self._gui, self._db) if who else self
-        msgs = chat.GetAllMessage()
-        for m in msgs:
-            if getattr(m, 'type', None) == 'voice':
-                return m.forward_to(target or chat.who, save_dir=save_dir)
-        return WxResponse.failure(f'会话「{chat.who}」最近 50 条中没有语音消息')
-
     # -- 信息 -------------------------------------------------------------
 
     def ChatInfo(self) -> Dict[str, str]:

@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import { pathToFileURL } from "node:url";
 import { runProcess } from "../../infrastructure/runtime/run-process.js";
 import { OpenAiCompatibleClient } from "../../infrastructure/model_runtime/openai-compatible-client.js";
+import { HotReloadableClient } from "../../infrastructure/model_runtime/hot-reloadable-client.js";
 import { openAiTextModelPlugin } from "../../infrastructure/model/openai-text-model-provider.js";
 import { AGENT_TURN_QUEUE } from "../../infrastructure/redis/agent-turn-dispatcher.js";
 import {
@@ -37,15 +38,14 @@ import { KNOWLEDGE_SEARCH_CAPABILITY } from "../../infrastructure/runtime/capabi
 import { TEXT_MODEL_CAPABILITY } from "../../infrastructure/runtime/capabilities/text-model.js";
 import { weknoraKnowledgePlugin } from "../../infrastructure/knowledge/weknora-knowledge-provider.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
+import { startModelSettingsReloader } from "../../modules/operations/application/model-settings-hot.js";
 import { discoverAgentPlugins } from "../../infrastructure/solutions/agent-plugin-discovery.js";
 import { readModelSettingsRuntime } from "../../modules/operations/application/model-settings.js";
 import {
   classifyForTriage,
   extractTriagePolicy,
 } from "../../modules/agent/application/triage-classifier.js";
-import {
-  createCachedExtensionSettingsReader,
-} from "../../modules/solution/application/read-extension-settings.js";
+import { createCachedExtensionSettingsReader } from "../../modules/solution/application/read-extension-settings.js";
 import {
   MapSkillRegistry,
   type AgentSkill,
@@ -65,8 +65,8 @@ await runProcess({
       return () => undefined;
     }
     // 平台大模型设置（Operator Control Plane）：DB 覆盖 env 默认值。
-    // 修改后需重启 worker 生效（启动时读取一次）。
-    const modelSettings = await readModelSettingsRuntime(postgres.db, {
+    // 热加载：Console 保存后即时生效，无需重启 worker（见 model-settings-hot）。
+    const modelDefaults = {
       textModel: {
         name: config.model.name,
         baseUrl: config.model.baseUrl,
@@ -108,50 +108,94 @@ await runProcess({
             },
           }
         : {}),
-    });
-    const model = {
-      ...config.model,
-      baseUrl: modelSettings.textModel.baseUrl,
-      ...(modelSettings.textModel.apiKey !== undefined
-        ? { apiKey: modelSettings.textModel.apiKey }
-        : {}),
-      name: modelSettings.textModel.name as typeof config.model.name,
     };
-    // 创建 OpenAI 兼容的 LLM 客户端
-    const client = new OpenAiCompatibleClient({
-      baseUrl: model.baseUrl,
-      apiKey: model.apiKey,
-      model: model.name,
-      timeoutMs: model.timeoutMs,
-    });
+    const modelSettings = await readModelSettingsRuntime(
+      postgres.db,
+      modelDefaults,
+    );
+    // 闭包内使用的常量：避免 apply 回调中 TS 对 config.model 收窄丢失。
+    const textTimeoutMs = config.model.timeoutMs;
+
+    // 可热更新的主力模型客户端：swap 原子替换快照，飞行中请求用旧实例完成。
+    const hotTextClient = new HotReloadableClient(
+      new OpenAiCompatibleClient({
+        baseUrl: modelSettings.textModel.baseUrl,
+        apiKey: modelSettings.textModel.apiKey ?? "",
+        model: modelSettings.textModel.name,
+        timeoutMs: textTimeoutMs,
+      }),
+    );
 
     // Triage 预判分流：策略来自客服 Solution 的扩展设置（30s 缓存），
     // 未安装/未配置时回落默认策略（enabled=false → 整层短路，零行为变化）。
-    // 模型槽位启动时读取一次（DB 可覆盖 env）；改动模型设置需重启 worker。
+    // 模型槽位随热加载更新：triage/fast 客户端与传给 classifyForTriage 的
+    // 模型名在每次设置变化时重建/刷新，无需重启 worker。
     const readPipelineSettings = createCachedExtensionSettingsReader(
       postgres.db,
-      { solutionId: "weflow.customer-support", extensionId: "support-pipeline" },
+      {
+        solutionId: "weflow.customer-support",
+        extensionId: "support-pipeline",
+      },
     );
-    const triageClient =
-      config.triage && modelSettings.triageModel
-        ? new OpenAiCompatibleClient({
-            baseUrl: modelSettings.triageModel.baseUrl,
-            apiKey: modelSettings.triageModel.apiKey ?? "",
-            model: modelSettings.triageModel.name,
-            timeoutMs: config.triage.timeoutMs,
-          })
+    // 当前生效的分流/直答端点快照（applyModelSettings 内整体替换）。
+    let triageEndpoint:
+      { client: OpenAiCompatibleClient; model: string } | undefined;
+    let fastEndpoint:
+      { client: OpenAiCompatibleClient; model: string } | undefined;
+    // 记忆提取引用的模型名快照（随热加载刷新，经闭包读取最新值）。
+    let memoryModelName = modelSettings.textModel.name;
+
+    /** 按最新模型设置重建/替换所有派生客户端（热加载核心）。 */
+    const applyModelSettings = (settings: typeof modelSettings): void => {
+      hotTextClient.swap(
+        new OpenAiCompatibleClient({
+          baseUrl: settings.textModel.baseUrl,
+          apiKey: settings.textModel.apiKey ?? "",
+          model: settings.textModel.name,
+          timeoutMs: textTimeoutMs,
+        }),
+      );
+      memoryModelName = settings.textModel.name;
+      triageEndpoint = settings.triageModel
+        ? {
+            client: new OpenAiCompatibleClient({
+              baseUrl: settings.triageModel.baseUrl,
+              apiKey: settings.triageModel.apiKey ?? "",
+              model: settings.triageModel.name,
+              timeoutMs: config.triage?.timeoutMs ?? 3_000,
+            }),
+            model: settings.triageModel.name,
+          }
         : undefined;
-    const fastClient =
-      config.fast && modelSettings.fastModel
-        ? new OpenAiCompatibleClient({
-            baseUrl: modelSettings.fastModel.baseUrl,
-            apiKey: modelSettings.fastModel.apiKey ?? "",
-            model: modelSettings.fastModel.name,
-            timeoutMs: config.fast.timeoutMs,
-          })
+      fastEndpoint = settings.fastModel
+        ? {
+            client: new OpenAiCompatibleClient({
+              baseUrl: settings.fastModel.baseUrl,
+              apiKey: settings.fastModel.apiKey ?? "",
+              model: settings.fastModel.name,
+              timeoutMs: config.fast?.timeoutMs ?? 3_000,
+            }),
+            model: settings.fastModel.name,
+          }
         : undefined;
-    const fastModelName = modelSettings.fastModel?.name;
-    if (!triageClient) {
+      logger.info(
+        {
+          textModel: settings.textModel.name,
+          triageModel: settings.triageModel?.name ?? "(none)",
+          fastModel: settings.fastModel?.name ?? "(none)",
+        },
+        "model settings hot-reloaded",
+      );
+    };
+    applyModelSettings(modelSettings);
+    const stopModelSettingsReloader = startModelSettingsReloader(
+      postgres.db,
+      modelDefaults,
+      modelSettings,
+      applyModelSettings,
+    );
+
+    if (!triageEndpoint) {
       logger.info("Triage classifier disabled (no model endpoint configured)");
     }
     // 可选的 WeKnora 知识库客户端
@@ -159,14 +203,15 @@ await runProcess({
       ? new WeKnoraKnowledgeClient(config.weknora)
       : undefined;
     const kernel = new RuntimeKernel();
-    kernel.register(openAiTextModelPlugin(client));
+    kernel.register(openAiTextModelPlugin(hotTextClient));
     if (weknora) kernel.register(weknoraKnowledgePlugin(weknora));
-    // 记忆插件（D6 插件化下沉）：capture/recall 能力经 kernel 注册
+    // 记忆插件（D6 插件化下沉）：capture/recall 能力经 kernel 注册；
+    // 模型名经 getter 随热加载刷新（记忆请求同时应用 baseUrl/apiKey/模型名）。
     kernel.register(
       memoryPlugin({
         db: postgres.db,
-        modelClient: client,
-        model: model.name,
+        modelClient: hotTextClient,
+        model: () => memoryModelName,
       }),
     );
     await kernel.start();
@@ -273,6 +318,28 @@ await runProcess({
     }
     // 对话轮次执行器，确保同一对话的任务串行执行
     const conversationTurns = new ConversationTurnExecutor();
+    /** 按 job 构建分流依赖：快照当前生效的 triage/fast 端点（热加载后即新值）。 */
+    const buildTriageDeps = () => {
+      const currentTriage = triageEndpoint;
+      if (!currentTriage) return undefined;
+      const currentFast = fastEndpoint;
+      return {
+        classify: async (context: {
+          triggerText: string;
+          recentInboundTexts: string[];
+        }) =>
+          classifyForTriage({
+            policy: extractTriagePolicy(await readPipelineSettings()),
+            client: currentTriage.client,
+            model: currentTriage.model,
+            triggerText: context.triggerText,
+            recentInboundTexts: context.recentInboundTexts,
+          }),
+        ...(currentFast
+          ? { fastClient: currentFast.client, fastModel: currentFast.model }
+          : {}),
+      };
+    };
     // Agent Turn 工作队列消费者
     const worker = new Worker<JobEnvelope>(
       AGENT_TURN_QUEUE,
@@ -287,9 +354,12 @@ await runProcess({
         // 才是跨 Worker、跨实例的最终并发权威。
         await conversationTurns.run(conversationId, async () => {
           // 运行时模型选择：每次消费读 runtime_settings（10s 缓存），
-          // 切换模型无需重启；实际使用模型写入 agentTurns.model 供核对
+          // 切换模型无需重启；实际使用模型写入 agentTurns.model 供核对。
+          // 连接端点（baseUrl/apiKey/槽位）同样热加载：Executor 每次
+          // 构建时快照最新客户端，保存模型设置后无需重启。
           const runtime = await readRuntimeSettings(postgres.db);
           const activeModel = runtime.textModel;
+          const triage = buildTriageDeps();
           const executor = new AgentTurnExecutor(
             postgres.db,
             textModel,
@@ -302,32 +372,7 @@ await runProcess({
                 ? { preResolveAiEmployeePrompt }
                 : {}),
               ...(resolveAiEmployeeId ? { resolveAiEmployeeId } : {}),
-              ...(triageClient
-                ? {
-                    triage: {
-                      classify: async (
-                        context: {
-                          triggerText: string;
-                          recentInboundTexts: string[];
-                        },
-                      ) =>
-                        classifyForTriage({
-                          policy: extractTriagePolicy(
-                            await readPipelineSettings(),
-                          ),
-                          client: triageClient,
-                          ...(modelSettings.triageModel
-                            ? { model: modelSettings.triageModel.name }
-                            : {}),
-                          triggerText: context.triggerText,
-                          recentInboundTexts: context.recentInboundTexts,
-                        }),
-                      ...(fastClient && fastModelName
-                        ? { fastClient, fastModel: fastModelName }
-                        : {}),
-                    },
-                  }
-                : {}),
+              ...(triage ? { triage } : {}),
             },
           );
           await executor.execute({
@@ -412,13 +457,14 @@ await runProcess({
     });
     logger.info(
       {
-        model: model.name,
+        model: memoryModelName,
         concurrency: config.agentWorkerConcurrency,
         memoryConcurrency: config.memoryCaptureConcurrency,
       },
       "Agent Worker started",
     );
     return async () => {
+      stopModelSettingsReloader();
       await Promise.all([worker.close(), memoryWorker.close()]);
       await kernel.stop();
     };

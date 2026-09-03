@@ -11,6 +11,7 @@ from channel_host.http_host import ChannelHostHttpServer
 from channel_host.outbound import (
     SendAttempt,
     WeChatChannelSender,
+    _dispatch_send,
     process_send_operations,
 )
 
@@ -329,6 +330,99 @@ class SendOperationContractTests(unittest.TestCase):
                 server.close()
                 store.close()
 
+    def test_mention_with_contract_field_is_accepted_and_round_trips(self):
+        """ADR-0006 回归：Core 发送 mentionContactRefs（契约字段）必须被接受。
+
+        回归背景：Host 曾只认 legacy members 字段，契约 mention POST 一律
+        400 且不落操作 —— Core 出站轮询每轮在 create() 处中断，队头堵塞
+        冻结后续全部消息。
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            store = EventStore(str(Path(directory) / "events.sqlite3"))
+            server = ChannelHostHttpServer(store, token="host-secret")
+            server.start()
+            try:
+                created = self._post(
+                    server.base_url,
+                    {
+                        "operationId": "op-mention-contract",
+                        "conversationRef": "45740750295@chatroom",
+                        "payload": {
+                            "kind": "mention",
+                            "text": "@可可猫",
+                            "mentionContactRefs": ["contact:channel:wxid_x:可可猫"],
+                        },
+                    },
+                )
+                self.assertEqual(created["state"], "pending")
+                self.assertEqual(
+                    created["payload"]["mentionContactRefs"],
+                    ["contact:channel:wxid_x:可可猫"],
+                )
+                self.assertNotIn("members", created["payload"])
+                fetched = self._get(
+                    f"{server.base_url}/api/v1/channel/send-operations/op-mention-contract"
+                )
+                self.assertEqual(fetched, created)
+                # legacy members 兼容：接受并归一化为契约字段
+                legacy = self._post(
+                    server.base_url,
+                    {
+                        "operationId": "op-mention-legacy",
+                        "conversationRef": "45740750295@chatroom",
+                        "payload": {
+                            "kind": "mention",
+                            "text": "@李四",
+                            "members": ["李四"],
+                        },
+                    },
+                )
+                self.assertEqual(legacy["payload"]["mentionContactRefs"], ["李四"])
+                self.assertNotIn("members", legacy["payload"])
+            finally:
+                server.close()
+                store.close()
+
+    def test_reply_with_contract_field_is_accepted_and_round_trips(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = EventStore(str(Path(directory) / "events.sqlite3"))
+            server = ChannelHostHttpServer(store, token="host-secret")
+            server.start()
+            try:
+                created = self._post(
+                    server.base_url,
+                    {
+                        "operationId": "op-reply-contract",
+                        "conversationRef": "wxid-contact",
+                        "payload": {
+                            "kind": "reply",
+                            "text": "收到",
+                            "replyToChannelMessageId": "84",
+                        },
+                    },
+                )
+                self.assertEqual(created["payload"]["replyToChannelMessageId"], "84")
+                self.assertNotIn("target_message_id", created["payload"])
+                legacy = self._post(
+                    server.base_url,
+                    {
+                        "operationId": "op-reply-legacy",
+                        "conversationRef": "wxid-contact",
+                        "payload": {
+                            "kind": "reply",
+                            "text": "收到",
+                            "target_message_id": "85",
+                        },
+                    },
+                )
+                self.assertEqual(
+                    legacy["payload"]["replyToChannelMessageId"], "85"
+                )
+                self.assertNotIn("target_message_id", legacy["payload"])
+            finally:
+                server.close()
+                store.close()
+
     @staticmethod
     def _post(base_url, body):
         request = Request(
@@ -365,6 +459,28 @@ class FakeSender:
 
     def send_text(self, _conversation_ref, _text):
         self.send_calls += 1
+        return SendAttempt("confirmed")
+
+
+class RecordingDispatchSender:
+    """Captures send_at/send_reply kwargs for dispatch contract tests."""
+
+    def __init__(self):
+        self.at_calls = []
+        self.reply_calls = []
+
+    def current_high_water(self, _conversation_ref):
+        return 41
+
+    def find_self_text_after(self, _conversation_ref, _text, _baseline_sort_seq):
+        return None
+
+    def send_at(self, conversation_ref, members, text):
+        self.at_calls.append((conversation_ref, list(members), text))
+        return SendAttempt("confirmed")
+
+    def send_reply(self, conversation_ref, text, target_message_id=None):
+        self.reply_calls.append((conversation_ref, text, target_message_id))
         return SendAttempt("confirmed")
 
 
@@ -437,6 +553,175 @@ class FakeContactDb:
 class UnresolvedContactDb:
     def get_nickname(self, conversation_ref):
         return conversation_ref
+
+
+class DispatchContractTests(unittest.TestCase):
+    """dispatch 层消费 ADR-0006 契约字段的回归测试。"""
+
+    def test_dispatch_mention_reads_contract_field(self):
+        sender = RecordingDispatchSender()
+        attempt = _dispatch_send(
+            sender,
+            "45740750295@chatroom",
+            {
+                "kind": "mention",
+                "text": "@可可猫",
+                "mentionContactRefs": ["contact:channel:wxid_x:可可猫"],
+            },
+        )
+        self.assertEqual(attempt.state, "confirmed")
+        self.assertEqual(sender.at_calls, [("45740750295@chatroom", ["contact:channel:wxid_x:可可猫"], "@可可猫")])
+
+    def test_dispatch_mention_without_refs_fails_cleanly(self):
+        sender = RecordingDispatchSender()
+        attempt = _dispatch_send(
+            sender,
+            "45740750295@chatroom",
+            {"kind": "mention", "text": "@可可猫"},
+        )
+        self.assertEqual(attempt.state, "failed")
+        self.assertEqual(attempt.error, "mention_members_required")
+        self.assertEqual(sender.at_calls, [])
+
+    def test_dispatch_reply_reads_contract_field(self):
+        sender = RecordingDispatchSender()
+        attempt = _dispatch_send(
+            sender,
+            "wxid-contact",
+            {
+                "kind": "reply",
+                "text": "收到",
+                "replyToChannelMessageId": "84",
+            },
+        )
+        self.assertEqual(attempt.state, "confirmed")
+        self.assertEqual(sender.reply_calls, [("wxid-contact", "收到", "84")])
+
+
+class MemberNameResolutionTests(unittest.TestCase):
+    """send_at 成员引用 → GUI 可见名字 的解析测试。"""
+
+    def test_contact_channel_ref_is_unwrapped_and_resolved_to_nickname(self):
+        class MemberDb:
+            def get_nickname(self, user):
+                return "可可猫" if user == "wxid_keke" else user
+
+        sender = WeChatChannelSender(db=MemberDb())
+        self.assertEqual(
+            sender._resolve_member_name("contact:channel:wxid_keke"), "可可猫"
+        )
+
+    def test_account_qualified_contact_ref_uses_last_segment(self):
+        class MemberDb:
+            def get_nickname(self, user):
+                return f"昵称:{user}"
+
+        sender = WeChatChannelSender(db=MemberDb())
+        self.assertEqual(
+            sender._resolve_member_name("contact:channel:account-a:wxid_keke"),
+            "昵称:wxid_keke",
+        )
+
+    def test_display_name_token_passes_through(self):
+        sender = WeChatChannelSender(db=FakeContactDb())
+        self.assertEqual(sender._resolve_member_name("可可猫"), "可可猫")
+
+    def test_unresolvable_ref_falls_back_to_raw_ref(self):
+        sender = WeChatChannelSender(db=UnresolvedContactDb())
+        self.assertEqual(
+            sender._resolve_member_name("contact:channel:wxid_ghost"),
+            "wxid_ghost",
+        )
+
+
+class FakeAtGui:
+    """模拟 GUI.at_member 弹层选人路径（send_at 的 UI 段）。"""
+
+    def __init__(self, result=None):
+        self.result = result or {"status": "成功"}
+        self.calls = []
+
+    def at_member(self, member, text, who=None, verify=False):
+        self.calls.append((member, text, who, verify))
+        return self.result
+
+
+class _RosterDb:
+    """带群成员名册的 DB 桩：wxid_in 在群里，wxid_out 不在。"""
+
+    def __init__(self, roster=None, raise_on_roster=False):
+        self._roster = roster if roster is not None else ["wxid_in"]
+        self._raise = raise_on_roster
+        self.roster_calls = []
+
+    def get_nickname(self, user):
+        return f"昵称:{user}"
+
+    def get_group_members(self, chatroom_wxid):
+        self.roster_calls.append(chatroom_wxid)
+        if self._raise:
+            raise RuntimeError("roster unavailable")
+        return [{"username": u, "nick_name": f"昵称:{u}", "remark": None,
+                 "is_owner": False} for u in self._roster]
+
+
+class GroupMembershipPreflightTests(unittest.TestCase):
+    """send_at 成员资格预检：roster 命中即秒判 not_found，省掉 UI 弹层。"""
+
+    ROOM = "45740750295@chatroom"
+
+    def test_out_of_group_ref_fails_without_touching_ui(self):
+        gui = FakeAtGui()
+        sender = WeChatChannelSender(
+            db=_RosterDb(), gui_factory=lambda: gui
+        )
+        attempt = sender.send_at(
+            self.ROOM, ["contact:channel:wxid_out"], "@不在群里"
+        )
+        self.assertEqual(attempt.state, "failed")
+        self.assertEqual(attempt.error, "mention_member_not_found")
+        self.assertEqual(gui.calls, [])
+
+    def test_in_group_ref_proceeds_to_ui(self):
+        gui = FakeAtGui()
+        sender = WeChatChannelSender(
+            db=_RosterDb(), gui_factory=lambda: gui
+        )
+        attempt = sender.send_at(
+            self.ROOM, ["contact:channel:wxid_in"], "@在群里 你好"
+        )
+        self.assertEqual(attempt.state, "confirmed")
+        self.assertEqual(len(gui.calls), 1)
+
+    def test_display_name_token_skips_preflight(self):
+        # 显示名 token 无法按 wxid 对照名册 → 跳过预检走原 UI 路径
+        gui = FakeAtGui()
+        sender = WeChatChannelSender(
+            db=_RosterDb(), gui_factory=lambda: gui
+        )
+        attempt = sender.send_at(self.ROOM, ["可可猫"], "@可可猫")
+        self.assertEqual(attempt.state, "confirmed")
+        self.assertEqual(len(gui.calls), 1)
+
+    def test_roster_failure_falls_back_to_ui(self):
+        gui = FakeAtGui()
+        sender = WeChatChannelSender(
+            db=_RosterDb(raise_on_roster=True), gui_factory=lambda: gui
+        )
+        attempt = sender.send_at(
+            self.ROOM, ["contact:channel:wxid_out"], "@不在群里"
+        )
+        self.assertEqual(attempt.state, "confirmed")
+        self.assertEqual(len(gui.calls), 1)
+
+    def test_private_chat_never_consults_roster(self):
+        db = _RosterDb()
+        sender = WeChatChannelSender(db=db, gui_factory=lambda: FakeAtGui())
+        attempt = sender.send_at(
+            "wxid-friend", ["contact:channel:wxid_anyone"], "@某人"
+        )
+        self.assertEqual(attempt.state, "confirmed")
+        self.assertEqual(db.roster_calls, [])
 
 
 if __name__ == "__main__":

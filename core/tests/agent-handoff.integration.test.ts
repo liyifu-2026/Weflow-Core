@@ -60,6 +60,7 @@ integration("agent automatic handoff", () => {
       contactId,
       channel: "channel",
       channelContactId: `handoff-agent-${suffix}`,
+      agentEnabled: true,
     });
     await postgres.db.insert(schema.conversations).values({
       conversationId,

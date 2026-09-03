@@ -36,6 +36,7 @@ import { registerContactAvatarRoutes } from "../../modules/contacts/interface/av
 import { AvatarProxyService } from "../../modules/contacts/application/avatar-proxy-service.js";
 import { registerMemoryRoutes } from "../../modules/memory/interface/http-routes.js";
 import { registerMediaRoutes } from "../../modules/media/interface/http-routes.js";
+import { registerAssetRoutes } from "../../modules/assets/interface/http-routes.js";
 import { registerNotificationRoutes } from "../../modules/notifications/interface/http-routes.js";
 import { registerCollaborationRoutes } from "../../modules/collaboration/interface/http-routes.js";
 import { registerKnowledgeRoutes } from "../../modules/knowledge/interface/http-routes.js";
@@ -55,6 +56,11 @@ import { startMobileHandoffMaintenance } from "../../modules/handoff/application
 import { startMemoryMaintenance } from "../../modules/memory/application/memory-maintenance.js";
 import { routeMediaToHuman } from "../../modules/handoff/application/route-media-to-human.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
+import { createCachedExtensionSettingsReader } from "../../modules/solution/application/read-extension-settings.js";
+import {
+  extractGroupChatSettings,
+  resolveGroupChatPolicy,
+} from "../../modules/agent/application/group-chat-policy.js";
 import {
   currentChannelCursor,
   ingestChannelEvents,
@@ -94,6 +100,11 @@ await runProcess({
     registerHandoffRoutes(server, postgres.db);
     registerMemoryRoutes(server, postgres.db);
     registerMediaRoutes(server, postgres.db, `${config.fileStorageRoot}/media`);
+    registerAssetRoutes(
+      server,
+      postgres.db,
+      new LocalFileStorage(`${config.fileStorageRoot}/assets`),
+    );
     registerNotificationRoutes(server, postgres.db);
     registerCollaborationRoutes(server, postgres.db);
     const knowledgeClient = config.weknora
@@ -127,52 +138,52 @@ await runProcess({
         knowledgeConfigured: Boolean(config.weknora),
         inspectKnowledge: () => inspectKnowledgeEngine(config.weknora),
         inspectChannelHost: async () => {
-        if (!config.channelHost)
-          return { status: "not_configured" as const, summary: "尚未配置" };
-        try {
-          const response = await fetch(
-            `${config.channelHost.baseUrl}/api/v1/status`,
-            {
-              headers: {
-                authorization: `Bearer ${config.channelHost.token}`,
+          if (!config.channelHost)
+            return { status: "not_configured" as const, summary: "尚未配置" };
+          try {
+            const response = await fetch(
+              `${config.channelHost.baseUrl}/api/v1/status`,
+              {
+                headers: {
+                  authorization: `Bearer ${config.channelHost.token}`,
+                },
+                signal: AbortSignal.timeout(5_000),
               },
+            );
+            if (!response.ok)
+              return {
+                status: "unreachable" as const,
+                summary: `状态端点返回 ${String(response.status)}`,
+              };
+            return { status: "healthy" as const, summary: "服务可访问" };
+          } catch {
+            return {
+              status: "unreachable" as const,
+              summary: "连接失败",
+            };
+          }
+        },
+        inspectModel: async () => {
+          if (!config.model)
+            return { status: "not_configured" as const, summary: "尚未配置" };
+          try {
+            const response = await fetch(`${config.model.baseUrl}/models`, {
+              headers: { authorization: `Bearer ${config.model.apiKey}` },
               signal: AbortSignal.timeout(5_000),
-            },
-          );
-          if (!response.ok)
+            });
+            if (!response.ok)
+              return {
+                status: "unreachable" as const,
+                summary: `模型端点返回 ${String(response.status)}`,
+              };
+            return { status: "healthy" as const, summary: "服务可访问" };
+          } catch {
             return {
               status: "unreachable" as const,
-              summary: `状态端点返回 ${String(response.status)}`,
+              summary: "连接失败",
             };
-          return { status: "healthy" as const, summary: "服务可访问" };
-        } catch {
-          return {
-            status: "unreachable" as const,
-            summary: "连接失败",
-          };
-        }
-      },
-      inspectModel: async () => {
-        if (!config.model)
-          return { status: "not_configured" as const, summary: "尚未配置" };
-        try {
-          const response = await fetch(`${config.model.baseUrl}/models`, {
-            headers: { authorization: `Bearer ${config.model.apiKey}` },
-            signal: AbortSignal.timeout(5_000),
-          });
-          if (!response.ok)
-            return {
-              status: "unreachable" as const,
-              summary: `模型端点返回 ${String(response.status)}`,
-            };
-          return { status: "healthy" as const, summary: "服务可访问" };
-        } catch {
-          return {
-            status: "unreachable" as const,
-            summary: "连接失败",
-          };
-        }
-      },
+          }
+        },
       },
       {
         textModel: {
@@ -319,6 +330,15 @@ await runProcess({
       const channelMedia = channelKernel.get(CHANNEL_MEDIA_CAPABILITY);
       const channelSendOperations = channelKernel.get(CHANNEL_SEND_CAPABILITY);
       const channelContacts = channelKernel.get(CHANNEL_CONTACTS_CAPABILITY);
+      // 群聊策略读取器：读客服 Solution 扩展设置（30s TTL 缓存），
+      // 群 override > 全局 > 平台默认（仅@）；读取失败逐项回落默认。
+      const readGroupChatSettings = createCachedExtensionSettingsReader(
+        postgres.db,
+        {
+          solutionId: "weflow.customer-support",
+          extensionId: "support-pipeline",
+        },
+      );
       const stopChannelHostPoller = startChannelEventPoller({
         source: channelSource,
         db: postgres.db,
@@ -328,7 +348,18 @@ await runProcess({
           currentCursor: (db) =>
             currentChannelCursor(db, "channel-host").then(String),
           ingestEvents: (db, events, nextCursor) =>
-            ingestChannelEvents(db, events, nextCursor, logger),
+            ingestChannelEvents(db, events, nextCursor, logger, {
+              resolvePolicy: async (conversationRef) => {
+                try {
+                  return resolveGroupChatPolicy(
+                    extractGroupChatSettings(await readGroupChatSettings()),
+                    conversationRef,
+                  );
+                } catch {
+                  return extractGroupChatSettings(undefined).global;
+                }
+              },
+            }),
         },
       });
       const stopChannelHostOutboundPoller = startChannelOutboundPoller({
@@ -338,6 +369,9 @@ await runProcess({
         sendOutbound: (db) =>
           processOutboundMessages(db, channelSendOperations, {
             fileStorageRoot: config.fileStorageRoot,
+            logger: {
+              warn: (obj, msg) => logger.warn(obj, msg),
+            },
           }),
       });
       const stopChannelHostMediaPoller = startChannelMediaPoller({

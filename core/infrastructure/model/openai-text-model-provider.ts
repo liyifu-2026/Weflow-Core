@@ -2,13 +2,12 @@ import type { TextGenerationRequest } from "../../modules/model/contracts/text-g
 import type { TextGenerationResult } from "../../modules/model/contracts/text-generation-result.js";
 import { TextModelError } from "../../modules/model/contracts/text-model-error.js";
 import type { TextModel } from "../../modules/model/contracts/text-model.js";
-import type { OpenAiCompatibleClient } from "../model_runtime/openai-compatible-client.js";
 import type { PluginDefinition } from "../runtime/kernel/index.js";
 import { TEXT_MODEL_CAPABILITY } from "../runtime/capabilities/text-model.js";
 
 /** Provider adapter: protocol details remain behind the TextModel capability. */
 export class OpenAiTextModelProvider implements TextModel {
-  public constructor(private readonly client: OpenAiCompatibleClient) {}
+  public constructor(private readonly client: TextModel) {}
 
   async generate(
     request: TextGenerationRequest,
@@ -21,9 +20,7 @@ export class OpenAiTextModelProvider implements TextModel {
   }
 }
 
-export function openAiTextModelPlugin(
-  client: OpenAiCompatibleClient,
-): PluginDefinition {
+export function openAiTextModelPlugin(client: TextModel): PluginDefinition {
   return {
     name: "openai-text-model",
     provides: [TEXT_MODEL_CAPABILITY],

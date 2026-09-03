@@ -7,6 +7,7 @@ import time
 from typing import Callable, Optional, Protocol
 
 from .event_store import EventStore
+from .protocol_normalize import mention_contact_refs, reply_target_id
 
 
 @dataclass(frozen=True)
@@ -58,9 +59,6 @@ class MessageSender(Protocol):
         ...
 
     def send_recall(self, conversation_ref: str) -> SendAttempt:
-        ...
-
-    def send_voice(self, conversation_ref: str, path: str) -> SendAttempt:
         ...
 
 
@@ -179,15 +177,31 @@ class WeChatChannelSender:
             target_name = self._resolve_gui_target(conversation_ref)
         except ContactResolutionError as error:
             return SendAttempt("failed", str(error))
-        if not members:
+        resolved = [self._resolve_member_name(member) for member in members]
+        if not resolved:
             return SendAttempt("failed", "at_requires_at_least_one_member")
+        # 成员资格预检（适配器内优化，不改协议）：roster 可用时，@ 一个不在
+        # 群里的成员引用直接映射为 mention_member_not_found，省掉一次注定
+        # 失败的 UI 弹层操作（抢窗口、耗时长）。显示名 token 不做预检
+        # （名册按 wxid 记录，无法反查显示名）；roster 读取失败/能力缺失
+        # 一律跳过预检，保持原有 UI 路径兜底。
+        member_refs = self._group_member_refs(conversation_ref)
+        if member_refs is not None:
+            prefix = "contact:channel:"
+            for member in members:
+                token = member.strip()
+                if not token.startswith(prefix):
+                    continue
+                raw_ref = token[len(prefix) :].rsplit(":", 1)[-1]
+                if raw_ref and raw_ref not in member_refs:
+                    return SendAttempt("failed", "mention_member_not_found")
         try:
             if self._gui is None:
                 self._gui = self._gui_factory()
             # 参照 replica：循环逐个 @ 成员（弹层 OCR 选人），任一失败即失败
             last_result = None
-            for member in members:
-                last_result = self._gui.at_member(member, text if member == members[-1] else "", who=target_name, verify=True)
+            for member in resolved:
+                last_result = self._gui.at_member(member, text if member == resolved[-1] else "", who=target_name, verify=True)
                 if not _is_verified_success(last_result):
                     # 成员未在群弹层命中时按 failed 透传，便于 Core 映射为 mention_member_not_found
                     msg = last_result.get("message") if isinstance(last_result, dict) else None
@@ -237,24 +251,6 @@ class WeChatChannelSender:
             return SendAttempt("confirmed")
         return SendAttempt("failed", "recall_window_expired")
 
-    def send_voice(self, conversation_ref: str, path: str) -> SendAttempt:
-        try:
-            target_name = self._resolve_gui_target(conversation_ref)
-        except ContactResolutionError as error:
-            return SendAttempt("failed", str(error))
-        if not isinstance(path, str) or not path.strip():
-            return SendAttempt("failed", "voice_path_invalid")
-        if not path.lower().endswith(".silk"):
-            return SendAttempt("failed", "voice_path_invalid")
-        try:
-            if self._gui is None:
-                self._gui = self._gui_factory()
-            # 仅转发已落盘 .silk（由入站 download_voice 产生），复用文件粘贴链路
-            result = self._gui.send_file(path, target_name, verify=True)
-        except Exception as error:
-            return SendAttempt("unknown", _error_text(error))
-        return _gui_result_to_attempt(result)
-
     def _resolve_gui_target(self, conversation_ref: str) -> str:
         """Map an opaque conversation ref to the name visible in WeChat UI.
 
@@ -283,6 +279,52 @@ class WeChatChannelSender:
         raise ContactResolutionError(
             f"未找到可发送目标 {conversation_ref} 的昵称，已取消发送（不按 wxid 搜索）"
         )
+
+    def _group_member_refs(self, conversation_ref: str) -> Optional[set[str]]:
+        """群成员 wxid 集合（只读 contact.db 名册）；不可用时返回 None。
+
+        仅对群会话（``xxx@chatroom``）生效。任何异常都吞掉并返回 None——
+        预检是纯优化，绝不阻断发送路径。
+        """
+        if not conversation_ref.endswith("@chatroom"):
+            return None
+        get_members = getattr(self.db, "get_group_members", None)
+        if not callable(get_members):
+            return None
+        try:
+            members = get_members(conversation_ref)
+        except Exception:
+            return None
+        refs = set()
+        for item in members or []:
+            username = item.get("username") if isinstance(item, dict) else None
+            if isinstance(username, str) and username:
+                refs.add(username)
+        return refs or None
+
+    def _resolve_member_name(self, member: str) -> str:
+        """Map a mention member reference to a GUI-visible member token.
+
+        The Core layer treats contact refs as opaque. A ref shaped like
+        ``contact:channel:[<account>:]<ref>`` carries the raw channel ref
+        (wxid / chatroom id) in its last segment; unwrap it and prefer the
+        contact-db nickname/remark, falling back to the raw ref. Non-ref
+        tokens (display names chosen by the operator UI) pass through.
+        """
+        token = member.strip()
+        if not token.startswith("contact:channel:"):
+            return token
+        raw_ref = token[len("contact:channel:") :].rsplit(":", 1)[-1]
+        get_nickname = getattr(self.db, "get_nickname", None)
+        if not callable(get_nickname):
+            return raw_ref
+        try:
+            name = get_nickname(raw_ref)
+        except Exception:
+            return raw_ref
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+        return raw_ref
 
 
 def process_send_operations(
@@ -599,28 +641,19 @@ def _dispatch_send(
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
             return SendAttempt("failed", "reply_text_required")
-        target = payload.get("target_message_id")
-        return sender.send_reply(conversation_ref, text, target)
+        return sender.send_reply(
+            conversation_ref, text, reply_target_id(payload)
+        )
     if kind == "mention":
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
             return SendAttempt("failed", "mention_text_required")
-        members = payload.get("members")
-        if not isinstance(members, list) or not members:
+        members = mention_contact_refs(payload)
+        if not members:
             return SendAttempt("failed", "mention_members_required")
-        str_members = [str(m) for m in members if isinstance(m, str) and m.strip()]
-        if not str_members:
-            return SendAttempt("failed", "mention_members_required")
-        return sender.send_at(conversation_ref, str_members, text)
+        return sender.send_at(conversation_ref, members, text)
     if kind == "poke":
         return sender.send_tickle(conversation_ref)
     if kind == "recall":
         return sender.send_recall(conversation_ref)
-    if kind == "voice":
-        path = payload.get("path")
-        if not isinstance(path, str) or not path.strip():
-            return SendAttempt("failed", "voice_path_invalid")
-        if not path.lower().endswith(".silk"):
-            return SendAttempt("failed", "voice_path_invalid")
-        return sender.send_voice(conversation_ref, path)
     return SendAttempt("failed", f"unsupported_send_kind:{kind}")

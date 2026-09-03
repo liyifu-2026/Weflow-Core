@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from .event_store import EventStore, SendOperationConflict
 from .media import ChannelMediaReadResult
+from .protocol_normalize import clean_string_list, normalize_send_payload
 from . import channel_protocol as _protocol
 from . import __version__ as _host_version
 
@@ -476,7 +477,15 @@ def _parse_send_request(
 
 
 def _validate_send_payload(kind: object, payload: dict) -> dict[str, object]:
-    """Validate a send payload by kind and return a normalised copy."""
+    """Validate a send payload by kind and return a normalised copy.
+
+    Wire contract (ADR-0006 / ``@weflow-leaif/contracts``) fields are the
+    canonical spelling: ``replyToChannelMessageId`` and
+    ``mentionContactRefs``. Legacy spellings (``target_message_id`` /
+    ``members``) stay accepted for compatibility and are normalised away
+    before persistence, so stored payloads and GET responses always speak
+    the contract dialect that Core's strict schema can parse.
+    """
     if not isinstance(kind, str):
         raise ValueError("payload.kind is required")
     if kind == "text":
@@ -498,31 +507,23 @@ def _validate_send_payload(kind: object, payload: dict) -> dict[str, object]:
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
             raise ValueError("reply payload requires non-empty text")
-        target = payload.get("target_message_id")
+        normalized = normalize_send_payload(payload)
         result: dict[str, object] = {"kind": "reply", "text": text}
+        target = normalized.get("replyToChannelMessageId")
         if isinstance(target, str) and target.strip():
-            result["target_message_id"] = target
+            result["replyToChannelMessageId"] = target
         return result
     if kind == "mention":
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():
             raise ValueError("mention payload requires non-empty text")
-        members = payload.get("members")
-        if not isinstance(members, list) or not members:
-            raise ValueError("mention payload requires at least one member")
-        str_members = [str(m) for m in members if isinstance(m, str) and str(m).strip()]
-        if not str_members:
-            raise ValueError("mention payload requires valid member names")
-        return {"kind": "mention", "text": text, "members": str_members}
+        normalized = normalize_send_payload(payload)
+        refs = clean_string_list(normalized.get("mentionContactRefs"))
+        if refs is None:
+            raise ValueError("mention payload requires mentionContactRefs")
+        return {"kind": "mention", "text": text, "mentionContactRefs": refs}
     if kind == "poke":
         return {"kind": "poke"}
     if kind == "recall":
         return {"kind": "recall"}
-    if kind == "voice":
-        path = payload.get("path")
-        if not isinstance(path, str) or not path.strip():
-            raise ValueError("voice payload requires a local .silk path")
-        if not path.lower().endswith(".silk"):
-            raise ValueError("voice_path_invalid: expected .silk file")
-        return {"kind": "voice", "path": path}
     raise ValueError(f"unsupported payload kind: {kind}")

@@ -4,6 +4,7 @@ import {
   collectSkillHints,
   collectSkillHintsAfterKnowledge,
   resolveExecutionStrategy,
+  skillHintLabel,
 } from "../modules/agent/application/reply-policy.js";
 import type { SkillRegistry } from "../modules/agent/contracts/agent-skill.js";
 import type { ExecutionStrategyRegistry } from "../modules/agent/contracts/execution-strategy.js";
@@ -18,7 +19,8 @@ vi.mock("../modules/agent/application/execution-profile-service.js", () => ({
 describe("reply-policy buildSystemPrompt", () => {
   it("默认（私聊、无知识库）不含 knowledge/群聊提示", () => {
     const prompt = buildSystemPrompt(false);
-    expect(prompt).toContain("你是 Weflow 平台上的通用会话代理");
+    expect(prompt).toContain("你是通用会话代理");
+    expect(prompt).not.toContain("Weflow");
     expect(prompt).not.toContain("retrieve_knowledge 时提供 knowledge_query");
     expect(prompt).not.toContain("群聊场景");
   });
@@ -140,6 +142,23 @@ describe("reply-policy collectSkillHints", () => {
       history,
     );
     expect(hints).toEqual(["ok@2.0.0: \"hint\""]);
+  });
+
+  it("带命名空间的 Skill id 只保留末段（内部标识不进入模型上下文）", () => {
+    expect(skillHintLabel("weflow.customer-support/product-troubleshooting", "1.0.0"))
+      .toBe("product-troubleshooting@1.0.0");
+    const hints = collectSkillHints(
+      fakeSkillRegistry([
+        {
+          id: "weflow.customer-support/product-troubleshooting",
+          version: "1.0.0",
+          beforeKnowledge: () => ({ tip: "查错误 2272" }),
+        },
+      ]),
+      history,
+    );
+    expect(hints).toEqual(['product-troubleshooting@1.0.0: {"tip":"查错误 2272"}']);
+    expect(hints.join("\n")).not.toContain("weflow.");
   });
 });
 

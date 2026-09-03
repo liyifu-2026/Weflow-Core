@@ -10,6 +10,7 @@
  */
 import { and, eq, ne } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { Readable } from "node:stream";
 import type { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
 import type { SilkToMp3Transcoder } from "../../../infrastructure/media/audio-transcoder.js";
 import type { MimoAudioClient } from "../../../infrastructure/model_runtime/mimo-audio-client.js";
@@ -83,6 +84,15 @@ export async function processVoiceTranscription(
 
   // 可重试失败写入的 errorCode；终态失败路径直接 return，不经此外层落库
   let retryableErrorCode = "asr_request_failed";
+  // 已落盘的派生 MP3；失败回滚时清除（声明在 try 外，catch 可见）
+  let derivedFile: {
+    fileId: string;
+    originalName: string;
+    mimeType: string;
+    size: number;
+    checksum: string;
+    storageKey: string;
+  } | null = null;
   try {
     if (
       !dependencies.transcoder &&
@@ -106,6 +116,8 @@ export async function processVoiceTranscription(
     const source: Buffer = Buffer.concat(chunks);
     let transcriptionInput: Buffer = source;
     let transcriptionMime = row.file.mimeType;
+    // 转码出的 MP3 同时落盘（derived_file_id），媒体内容端点优先返回，
+    // 前端才能实际播放（audio/x-silk 原文件浏览器/移动端均不支持）。
     if (!ASR_READY_MIME_TYPES.has(row.file.mimeType)) {
       const transcoder = dependencies.transcoder;
       if (!transcoder) {
@@ -122,6 +134,11 @@ export async function processVoiceTranscription(
       try {
         transcriptionInput = await transcoder.transcodeToMp3(source);
         transcriptionMime = "audio/mpeg";
+        derivedFile = await storage.write(
+          Readable.from(transcriptionInput),
+          `${mediaId}.mp3`,
+          "audio/mpeg",
+        );
       } catch (error) {
         if ((error as { code?: string }).code === "transcode_unavailable") {
           // 运行中发现转码工具缺失：同样终态失败，不重试
@@ -145,12 +162,23 @@ export async function processVoiceTranscription(
       transcriptionMime,
     );
     await db.transaction(async (transaction) => {
+      if (derivedFile) {
+        await transaction
+          .insert(schema.storedFiles)
+          .values({
+            ...derivedFile,
+            ownerModule: "media",
+            createdByUserId: "system-media-worker",
+          })
+          .onConflictDoNothing();
+      }
       await transaction
         .update(schema.mediaAssets)
         .set({
           status: "ready",
           description,
           descriptionModel: model,
+          ...(derivedFile ? { derivedFileId: derivedFile.fileId } : {}),
           processedAt: new Date(),
           errorCode: null,
           updatedAt: new Date(),
@@ -173,6 +201,10 @@ export async function processVoiceTranscription(
     });
   } catch (error) {
     // 转写/转码失败：回退排队等待有界重试；错误向上抛给 BullMQ 记录
+    if (derivedFile) {
+      // 已落盘的派生 MP3 随失败回滚清除，避免孤儿文件
+      await storage.remove(derivedFile.storageKey).catch(() => undefined);
+    }
     await db
       .update(schema.mediaAssets)
       .set({

@@ -10,6 +10,7 @@ import { mkdir, rename, stat, unlink } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import type { FileStorage } from "./types.js";
 
 /** 文件写入结果类型 */
 export type StoredFileWrite = {
@@ -21,8 +22,8 @@ export type StoredFileWrite = {
   storageKey: string;
 };
 
-/** 本地文件存储类 */
-export class LocalFileStorage {
+/** 本地文件存储类（实现平台 FileStorage seam） */
+export class LocalFileStorage implements FileStorage {
   readonly #root: string;
 
   constructor(root: string) {

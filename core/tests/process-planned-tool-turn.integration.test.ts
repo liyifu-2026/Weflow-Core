@@ -30,6 +30,7 @@ integration("planned tool turn recovery", () => {
       contactId,
       channel: "channel",
       channelContactId: `planned-tool-retry-${suffix}`,
+      agentEnabled: true,
     });
     await postgres.db.insert(schema.conversations).values({
       conversationId,

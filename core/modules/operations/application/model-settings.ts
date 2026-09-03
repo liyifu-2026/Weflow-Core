@@ -8,7 +8,8 @@
  * - API key 属于 secret：读取时永不回显，只暴露 hasApiKey 标志；
  *   写入时传空串/缺省表示保持原值。
  * - 所有修改写 audit.events（previous/next + operationId 分组）。
- * - 消费方（agent-worker）启动时读取一次；修改后需重启 worker 生效。
+ * - 消费方（agent-worker）经 model-settings-hot 热加载：保存后即时生效，
+ *   无需重启 worker（写路径在路由层提交成功后广播失效）。
  */
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
@@ -253,7 +254,8 @@ export async function readModelSettings(
   db: NodePgDatabase<typeof schema>,
   defaults: ModelSettingsDefaults,
 ): Promise<ModelSettingsView> {
-  const textName = (await readRow(db, TEXT_KEYS.name)) ?? defaults.textModel.name;
+  const textName =
+    (await readRow(db, TEXT_KEYS.name)) ?? defaults.textModel.name;
   const textBaseUrl =
     (await readRow(db, TEXT_KEYS.baseUrl)) ?? defaults.textModel.baseUrl;
   const textKey = await readRow(db, TEXT_KEYS.apiKey);
@@ -454,7 +456,10 @@ export async function updateModelSettings(
     }
 
     for (const candidate of candidates) {
-      if (candidate.next === undefined || candidate.next === candidate.previous) {
+      if (
+        candidate.next === undefined ||
+        candidate.next === candidate.previous
+      ) {
         continue;
       }
       await transaction

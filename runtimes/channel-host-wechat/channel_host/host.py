@@ -307,7 +307,11 @@ class WeChatChannelHost:
             mime_type=mime_type,
             account=self.account,
             mentioned=_detect_mentioned(
-                normalized_content, is_self, self._get_self_nickname()
+                normalized_content,
+                is_self,
+                self._get_self_nickname(),
+                self_ref=self_ref,
+                is_group=conversation_ref.endswith("@chatroom"),
             ),
             reply_to_channel_message_id=_extract_reply_to_id(message),
         )
@@ -777,24 +781,43 @@ def _message_chat_discovery_key(max_sort_seq: int) -> str:
 
 
 def _detect_mentioned(
-    content: str, is_self: bool, self_nickname: Optional[str]
+    content: str,
+    is_self: bool,
+    self_nickname: Optional[str],
+    *,
+    self_ref: Optional[str] = None,
+    is_group: bool = False,
 ) -> Optional[bool]:
     """Detect whether the current user was @-mentioned in a group message.
 
     WeChat 4.x embeds @ mentions as ``@nickname`` in the message text.
-    Only meaningful for inbound (non-self) messages; self messages and
-    conversations without a known nickname yield ``None``.
+    Only meaningful for inbound (non-self) messages; self messages yield
+    ``None``.
+
+    Detection layers (first hit wins):
+    1. Exact ``@nickname`` match (original behaviour).
+    2. ``@wxid`` match — some WeChat 4.x variants keep the raw sender id
+       inside the mention token instead of the nickname.
+    3. Group fallback: any ``@`` token in a group message counts as
+       mentioned when layers 1-2 fail. Deliberately fail-open: a false
+       positive costs one extra model call, a false negative silently
+       drops the user's request. Private chats never use the fallback.
     """
     if is_self:
         return None
-    if not self_nickname:
-        return None
     if not isinstance(content, str) or not content:
         return None
-    # Match @nickname at word boundaries; WeChat inserts a non-breaking
-    # space or regular space after the nickname token.
-    pattern = f"@{re.escape(self_nickname)}"
-    return bool(re.search(pattern, content))
+    if self_nickname:
+        pattern = f"@{re.escape(self_nickname)}"
+        if re.search(pattern, content):
+            return True
+    if self_ref:
+        pattern = f"@{re.escape(str(self_ref))}"
+        if re.search(pattern, content):
+            return True
+    if is_group and "@" in content:
+        return True
+    return False
 
 
 def _extract_reply_to_id(message: Optional[dict]) -> Optional[str]:

@@ -36,6 +36,7 @@ import {
   type ModelSettingsDefaults,
   type ModelSettingsPatch,
 } from "../application/model-settings.js";
+import { notifyModelSettingsChanged } from "../application/model-settings-hot.js";
 import { buildDashboardCards } from "../application/dashboard-cards.js";
 import {
   readAdminOverview,
@@ -213,6 +214,8 @@ export function registerOperationsRoutes(
       patch: body.data as ModelSettingsPatch,
       defaults: modelDefaults,
     });
+    // 热加载：同进程订阅者立即重读；跨进程由 worker 轮询兜底。
+    notifyModelSettingsChanged();
     return result;
   });
 

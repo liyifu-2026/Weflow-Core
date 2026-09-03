@@ -107,7 +107,7 @@ async function saveModelSettings() {
     asrApiKeyInput.value = "";
     triageApiKeyInput.value = "";
     fastApiKeyInput.value = "";
-    modelNotice.value = "已保存；重启 Agent Worker 后生效";
+    modelNotice.value = "已保存，约 15 秒内自动生效，无需重启";
   } catch (reason) {
     modelError.value =
       reason instanceof Error ? reason.message : "模型设置保存失败";
@@ -160,7 +160,8 @@ const categories = computed(() => {
   const map = new Map<string, string>();
   for (const item of filteredPluginSettings.value) {
     const fallback = item.category === "general" ? "通用" : item.category;
-    const label = CATEGORY_LABELS[item.category] || item.categoryLabel || fallback;
+    const label =
+      CATEGORY_LABELS[item.category] || item.categoryLabel || fallback;
     if (!map.has(item.category)) {
       map.set(item.category, label);
     }
@@ -202,8 +203,12 @@ onMounted(() => {
     <section class="wf-panel wf-model-settings">
       <div class="wf-panel-head">
         <h2>平台大模型</h2>
-        <span v-if="modelNotice" class="wf-settings-notice">{{ modelNotice }}</span>
-        <span v-if="modelError" class="wf-settings-error">{{ modelError }}</span>
+        <span v-if="modelNotice" class="wf-settings-notice">{{
+          modelNotice
+        }}</span>
+        <span v-if="modelError" class="wf-settings-error">{{
+          modelError
+        }}</span>
       </div>
       <div v-if="!modelSettings" class="wf-panel-body">
         <span class="wf-skeleton">正在加载模型设置…</span>
@@ -539,7 +544,9 @@ onMounted(() => {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.24);
   opacity: 0;
   visibility: hidden;
-  transition: opacity 140ms ease, visibility 140ms ease;
+  transition:
+    opacity 140ms ease,
+    visibility 140ms ease;
   pointer-events: none;
 }
 .wf-model-hint:hover::after,

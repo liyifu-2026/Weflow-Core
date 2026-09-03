@@ -21,6 +21,7 @@ import {
 } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
+import { groupDisplayName } from "../../contacts/application/group-display-name.js";
 
 /** and()/or() 的 drizzle 返回可能为 undefined（参数含可选时），这里保证得到 SQL */
 function allOf(...conditions: SQLWrapper[]): SQL {
@@ -197,8 +198,7 @@ export async function listSharedConversations(
       },
       handoffStatus: schema.handoffStates.status,
       handoffReason: schema.handoffStates.reason,
-      handoffCreatedAt: schema.handoffStates.createdAt,
-      handoffAssignedUserId: schema.handoffStates.assignedUserId,
+      handoffCreatedAt: schema.handoffStates.createdAt,      handoffAssignedUserId: schema.handoffStates.assignedUserId,
       handoffAssignedQueueId: schema.handoffStates.assignedQueueId,
       handoffAgentPaused: schema.handoffStates.agentPaused,
       handoffTargetUserId: schema.handoffStates.targetUserId,
@@ -369,8 +369,24 @@ export async function listSharedConversations(
         ...conversation
       }) => {
         void handoffTargetUserId;
+        // 群聊显示名兜底：未设群名的群 displayName 是裸 @chatroom ID
+        const contactOut = conversation.contact
+          ? {
+              ...conversation.contact,
+              channelDisplayName: groupDisplayName(
+                conversation.contact.channelDisplayName,
+                conversation.contact.channelContactId,
+              ),
+            }
+          : conversation.contact;
         return {
           ...conversation,
+          contact: contactOut,
+          // 群聊识别（ADR-0006）：channel 会话 ref 以 @chatroom 结尾即群聊；
+          // 由通道会话 ID 派生，零存储成本。前端据此展示群徽标与群聊约束。
+          chatType: conversation.channelConversationId.endsWith("@chatroom")
+            ? ("group" as const)
+            : ("private" as const),
           // pg 对 count(*)（bigint）返回字符串；投影统一转数字，
           // 避免客户端把 "0" 当 truthy 误显示未读红点。
           unreadCustomerCount: Number(conversation.unreadCustomerCount ?? 0),
@@ -648,10 +664,40 @@ export async function getSharedTranscript(
   before?: MessageCursor,
 ) {
   const [conversation] = await db
-    .select({ revision: schema.conversations.revision })
+    .select({
+      revision: schema.conversations.revision,
+      channelConversationId: schema.conversations.channelConversationId,
+      channelAccount: schema.conversations.channelAccount,
+    })
     .from(schema.conversations)
     .where(eq(schema.conversations.conversationId, conversationId))
     .limit(1);
+  const chatType = conversation?.channelConversationId.endsWith("@chatroom")
+    ? ("group" as const)
+    : ("private" as const);
+  // 群聊消息的发送者昵称解析：actorId（wxid）→ 同账号联系人资料
+  // （共享别名 > 显示名 > 昵称）。群成员本身就在联系人同步范围内。
+  const senderNames = new Map<string, string>();
+  if (chatType === "group") {
+    const memberRows = await db
+      .select({
+        channelContactId: schema.contactProfiles.channelContactId,
+        channelDisplayName: schema.contactProfiles.channelDisplayName,
+        channelNickname: schema.contactProfiles.channelNickname,
+        channelRemark: schema.contactProfiles.channelRemark,
+        sharedAlias: schema.contactProfiles.sharedAlias,
+      })
+      .from(schema.contactProfiles)
+      .where(eq(schema.contactProfiles.channelAccount, conversation?.channelAccount ?? "default"));
+    for (const row of memberRows) {
+      const resolved =
+        row.sharedAlias?.trim() ||
+        row.channelDisplayName?.trim() ||
+        row.channelNickname?.trim() ||
+        "";
+      if (resolved) senderNames.set(row.channelContactId, resolved);
+    }
+  }
   const rows = await db
     .select({
       messageId: schema.messages.messageId,
@@ -660,6 +706,10 @@ export async function getSharedTranscript(
       actorId: schema.messages.actorId,
       contentType: schema.messages.contentType,
       mediaId: schema.mediaAssets.mediaId,
+      // 媒体细分类型（image/file/voice/video）：前端据此选图片/文件卡片组件
+      mediaKind: schema.mediaAssets.kind,
+      // 文件名（出站 manual 行=暂存原名；入站/回声行=Host 上报原名）
+      mediaFileName: schema.storedFiles.originalName,
       // 图片视觉描述 / 语音转写文字（前端气泡展示）
       mediaDescription: schema.mediaAssets.description,
       text: schema.messages.text,
@@ -671,6 +721,15 @@ export async function getSharedTranscript(
     .leftJoin(
       schema.mediaAssets,
       eq(schema.mediaAssets.messageId, schema.messages.messageId),
+    )
+    // 文件名从 originalFileId（manual 上传）/ originalImageFileId（入站图片
+    // 原图）/ derivedFileId（语音派生）三者取最先命中的 stored_files 原名。
+    .leftJoin(
+      schema.storedFiles,
+      or(
+        eq(schema.storedFiles.fileId, schema.mediaAssets.originalFileId),
+        eq(schema.storedFiles.fileId, schema.mediaAssets.originalImageFileId),
+      ),
     )
     .where(
       and(
@@ -693,15 +752,28 @@ export async function getSharedTranscript(
   const page = rows.slice(0, limit).reverse();
   const oldest = page[0];
   return {
-    messages: page.map((row) => ({
-      ...row,
-      // AI 员工头像：actor_id 是 Solution 提供的员工标识（不透明），
-      // 经平台 DiceBear 代理按标识确定性出图，Console/Mobile 渲染一致。
-      actorAvatarUrl:
-        row.actorType === "agent" && row.actorId
-          ? `/api/v1/avatars/dicebear/voxel-bot/${encodeURIComponent(row.actorId)}`
-          : null,
-    })),
+    messages: page.map((row) => {
+      // 群聊发送者昵称：入站消息 actorId（wxid）解析为可读名；
+      // 未同步的成员回落 wxid 尾号。私聊恒为 null。
+      const senderName =
+        chatType === "group" &&
+        row.direction === "inbound" &&
+        row.actorId
+          ? (senderNames.get(row.actorId) ??
+            `wx…${row.actorId.slice(-6)}`)
+          : null;
+      return {
+        ...row,
+        // AI 员工头像：actor_id 是 Solution 提供的员工标识（不透明），
+        // 经平台 DiceBear 代理按标识确定性出图，Console/Mobile 渲染一致。
+        actorAvatarUrl:
+          row.actorType === "agent" && row.actorId
+            ? `/api/v1/avatars/dicebear/voxel-bot/${encodeURIComponent(row.actorId)}`
+            : null,
+        senderName,
+      };
+    }),
+    chatType,
     conversationRevision: conversation?.revision ?? 0,
     nextCursor:
       hasMore && oldest
@@ -1084,7 +1156,9 @@ export async function listContactsWithLatestConversation(
   return {
     items: page.map((row) => ({
       contactId: row.contactId,
-      channelDisplayName: row.channelDisplayName,
+      // 群聊显示名兜底：未设群名的群 displayName 是裸 @chatroom ID，
+      // 读取时兜底为「群聊 xxxxx」（不写库；群名后续同步覆盖自然生效）
+      channelDisplayName: groupDisplayName(row.channelDisplayName, row.contactId),
       channelNickname: row.channelNickname,
       channelRemark: row.channelRemark,
       sharedAlias: row.sharedAlias,

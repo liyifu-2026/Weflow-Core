@@ -11,4 +11,7 @@ export type {
   ChannelSendOperations,
 } from "@weflow-leaif/contracts";
 
-export { CHANNEL_PROTOCOL } from "@weflow-leaif/contracts";
+export {
+  CHANNEL_PROTOCOL,
+  ChannelSendRejectedError,
+} from "@weflow-leaif/contracts";

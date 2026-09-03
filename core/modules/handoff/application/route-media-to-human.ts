@@ -10,6 +10,7 @@ import type { Logger } from "pino";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { createHandoff } from "./handoff-service.js";
+import { buildHandoffBriefing } from "./handoff-briefing.js";
 
 /** 幂等路由媒体消息到人工路径（会话已在人工周期则跳过） */
 export async function routeMediaToHuman(
@@ -26,6 +27,11 @@ export async function routeMediaToHuman(
     .where(eq(schema.handoffStates.conversationId, media.conversationId))
     .limit(1);
   if (handoff[0]?.agentPaused) return;
+  const [conversation] = await db
+    .select({ revision: schema.conversations.revision })
+    .from(schema.conversations)
+    .where(eq(schema.conversations.conversationId, media.conversationId))
+    .limit(1);
   const result = await createHandoff(db, {
     conversationId: media.conversationId,
     actorUserId: "system",
@@ -35,6 +41,12 @@ export async function routeMediaToHuman(
       .slice(0, 20)}`,
     summary: "vision_disabled: media routed to human",
     sourceIp: "server2",
+    // 必须携带结构化简报（v2）：转交给具体客服要求 briefing.version === 2，
+    // 缺失会导致后续转接一律 invalid_transition。
+    briefing: buildHandoffBriefing({
+      sourceConversationRevision: conversation?.revision ?? 0,
+      handoffReason: "vision_disabled: media routed to human",
+    }),
   });
   if (result.status !== "ok" && result.status !== "invalid_transition") {
     logger.warn(

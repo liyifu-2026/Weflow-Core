@@ -92,9 +92,14 @@ export async function syncChannelMedia(
         continue;
       }
 
+      // 落盘命名：优先 Host 上报的原始文件名（文件附件显示/下载都需要
+      // 真名，如「合同.pdf」）；无文件名时退回 mediaId+扩展名（旧行为）。
+      const diskName =
+        ("fileName" in result && result.fileName) ||
+        `${asset.mediaId}${extensionForMime(asset.kind, result.mimeType)}`;
       const file = await storage.write(
         Readable.fromWeb(result.body),
-        `${asset.mediaId}${extensionForMime(asset.kind, result.mimeType)}`,
+        diskName,
         result.mimeType,
       );
       try {

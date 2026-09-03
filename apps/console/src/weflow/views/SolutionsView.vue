@@ -60,21 +60,12 @@ type Operation = {
 type Detail = Installation & {
   recentOperations: Operation[];
 };
-type SecretSlotStatus = {
-  name: string;
-  kind: string;
-  required: boolean;
-  configured: boolean;
-  refType?: string;
-  refValue?: string;
-};
 
 const loading = ref(true);
 const error = ref("");
 const installations = ref<Installation[]>([]);
 const selected = ref<Installation | null>(null);
 const detail = ref<Detail | null>(null);
-const secrets = ref<SecretSlotStatus[]>([]);
 const detailLoading = ref(false);
 const route = useRoute();
 const router = useRouter();
@@ -295,7 +286,6 @@ async function selectSolution(installation: Installation) {
   await router.replace({ query: { ...route.query, solution: installation.solutionId } });
   detailLoading.value = true;
   detail.value = null;
-  secrets.value = [];
   try {
     const data = await api<Detail>(
       `/api/v1/admin/solutions/${encodeURIComponent(installation.solutionId)}`,
@@ -307,10 +297,6 @@ async function selectSolution(installation: Installation) {
       ...(data.manifest ? { manifest: data.manifest } : {}),
       ...(data.health ? { health: data.health } : {}),
     };
-    const secretData = await api<{ slots: SecretSlotStatus[] }>(
-      `/api/v1/admin/solutions/${encodeURIComponent(installation.solutionId)}/secrets`,
-    );
-    secrets.value = secretData.slots;
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "加载详情失败";
   } finally {
@@ -321,7 +307,6 @@ async function selectSolution(installation: Installation) {
 function closeDetail() {
   selected.value = null;
   detail.value = null;
-  secrets.value = [];
   if (route.query.solution) {
     const query = { ...route.query };
     delete query.solution;
@@ -987,18 +972,6 @@ onMounted(async () => {
             <div v-if="detail.recentOperations.length === 0" class="wf-empty">暂无操作记录</div>
           </div>
         </section>
-        <section class="wf-drawer-section">
-          <h3>Secret 配置状态</h3>
-          <div v-if="detailLoading" class="wf-muted">加载中…</div>
-          <div v-else class="wf-drawer-secret-list">
-            <div v-for="slot in secrets" :key="slot.name" class="wf-drawer-secret-row">
-              <span>{{ slot.name }}</span>
-              <span class="wf-status" :class="slot.configured ? 'good' : 'warn'">{{ slot.configured ? '已配置' : '缺失' }}</span>
-              <span v-if="slot.configured" class="wf-muted">{{ slot.refType }}:{{ slot.refValue }}</span>
-            </div>
-            <div v-if="secrets.length === 0" class="wf-empty">暂无 Secret Slot 信息</div>
-          </div>
-        </section>
       </div>
     </WfDrawer>
     <div v-if="wizardOpen" class="wf-modal-mask" @click.self="wizardOpen = false">
@@ -1361,15 +1334,13 @@ onMounted(async () => {
   gap: 8px;
   flex-wrap: wrap;
 }
-.wf-drawer-operation-list,
-.wf-drawer-secret-list {
+.wf-drawer-operation-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
   margin-top: 8px;
 }
-.wf-drawer-operation-row,
-.wf-drawer-secret-row {
+.wf-drawer-operation-row {
   padding: 10px 12px;
   border: 1px solid var(--wf-border);
   border-radius: var(--wf-radius-control);
@@ -1380,13 +1351,6 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-}
-.wf-drawer-secret-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 .wf-drawer-section h3 {
   margin: 0 0 4px;

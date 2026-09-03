@@ -57,7 +57,11 @@ export function classifyError(error: unknown): string {
  */
 export async function hasNewerAgentTurn(
   db: Database,
-  turn: typeof schema.agentTurns.$inferSelect,
+  turn: {
+    turnId: string;
+    conversationId: string;
+    triggerMessageId: string;
+  },
 ): Promise<boolean> {
   const [trigger] = await db
     .select({

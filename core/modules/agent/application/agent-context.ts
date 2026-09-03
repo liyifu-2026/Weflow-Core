@@ -39,6 +39,7 @@ export async function buildAgentContext(
       text: schema.messages.text,
       contentType: schema.messages.contentType,
       mediaDescription: schema.mediaAssets.description,
+      actorId: schema.messages.actorId,
     })
     .from(schema.messages)
     .leftJoin(
@@ -49,6 +50,59 @@ export async function buildAgentContext(
     .orderBy(desc(schema.messages.occurredAt))
     .limit(20);
   history.reverse();
+  // 群聊：把入站消息的发送者 wxid 解析成可读昵称（同账号联系人资料，
+  // 群成员本身在联系人同步范围内），让模型区分群里谁在问。
+  const senderNames = new Map<string, string>();
+  if (chatType === "group") {
+    const memberRows = await db
+      .select({
+        channelContactId: schema.contactProfiles.channelContactId,
+        channelDisplayName: schema.contactProfiles.channelDisplayName,
+        channelNickname: schema.contactProfiles.channelNickname,
+        channelRemark: schema.contactProfiles.channelRemark,
+        sharedAlias: schema.contactProfiles.sharedAlias,
+      })
+      .from(schema.contactProfiles)
+      .where(eq(schema.contactProfiles.channelAccount, "default"));
+    for (const row of memberRows) {
+      const resolved =
+        row.sharedAlias?.trim() ||
+        row.channelDisplayName?.trim() ||
+        row.channelNickname?.trim() ||
+        "";
+      if (resolved) senderNames.set(row.channelContactId, resolved);
+    }
+  }
+  const senderOf = (message: (typeof history)[number]): string | null =>
+    chatType === "group" &&
+    message.direction === "inbound" &&
+    message.actorId
+      ? (senderNames.get(message.actorId) ?? `wx…${message.actorId.slice(-6)}`)
+      : null;
+  type HistoryRow = (typeof history)[number];
+  /**
+   * 多模态消息统一渲染为文本：
+   * - 图片有视觉描述 → "图片观察：{描述}"；无描述 → 诚实占位（禁止编造）
+   * - 语音优先媒体转写、其次消息内文本；都没有 → 诚实占位
+   * - 纯文本原样返回
+   */
+  const messageText = (message: HistoryRow): string => {
+    switch (message.contentType) {
+      case "image":
+        return message.mediaDescription
+          ? `图片观察：${message.mediaDescription}`
+          : "[对方发送了一张图片，当前无法查看内容]";
+      case "voice":
+        if (message.mediaDescription) {
+          return `语音转写：${message.mediaDescription}`;
+        }
+        return message.text
+          ? `语音转写：${message.text}`
+          : "[对方发来一条语音，转写不可用]";
+      default:
+        return message.text;
+    }
+  };
   // 召回最近 12 条已确认的长期记忆（memory_enabled OFF 时不 recall）
   const runtime = await readRuntimeSettings(db);
   const memories = !runtime.memoryEnabled
@@ -63,20 +117,12 @@ export async function buildAgentContext(
     .filter((message) => message.direction === "inbound")
     .slice(-3);
   const batchSummary = {
-    inbound_messages: latestInbound.map((message) =>
-      message.contentType === "image" && message.mediaDescription
-        ? `图片观察：${message.mediaDescription}`
-        : message.contentType === "image"
-          ? "[对方发送了一张图片，当前无法查看内容]"
-          : message.contentType === "voice" && message.mediaDescription
-            ? `语音转写：${message.mediaDescription}`
-            : // 通道侧已提供转写文本（如微信自动转文字）时直接用文本理解
-              message.contentType === "voice" && message.text
-              ? `语音转写：${message.text}`
-              : message.contentType === "voice"
-                ? "[对方发来一条语音，转写不可用]"
-                : message.text,
-    ),
+    inbound_messages: latestInbound.map((message) => {
+      const sender = senderOf(message);
+      const text = messageText(message);
+      // 群聊批次摘要带发送者名，模型可区分群里谁在问
+      return sender ? `${sender}：${text}` : text;
+    }),
   };
   const now = new Date();
   const nowText = formatCurrentTime(now);
@@ -85,21 +131,20 @@ export async function buildAgentContext(
       ? "\n当前会话类型：群聊（回复应简洁，避免包含私人信息或针对特定联系人的个性化内容）"
       : "\n当前会话类型：私聊";
   return {
-    history: history.map((message) => ({
-      role: message.direction === "inbound" ? "user" : "assistant",
-      content:
-        message.contentType === "image" && message.mediaDescription
-          ? `[图片观察：${message.mediaDescription}]`
-          : message.contentType === "image"
-            ? "[对方发送了一张图片，当前无法查看内容]"
-            : message.contentType === "voice" && message.mediaDescription
-              ? `[语音转写：${message.mediaDescription}]`
-              : message.contentType === "voice" && message.text
-                ? `[语音转写：${message.text}]`
-                : message.contentType === "voice"
-                  ? "[对方发来一条语音，转写不可用]"
-                  : message.text,
-    })),
+    history: history.map((message) => {
+      const sender = senderOf(message);
+      // 群聊历史入站消息带发送者前缀；私聊与出站保持原样
+      const content = sender
+        ? `${sender}：${messageText(message)}`
+        : messageText(message);
+      return {
+        role:
+          message.direction === "inbound"
+            ? ("user" as const)
+            : ("assistant" as const),
+        content,
+      };
+    }),
     prompt: `${chatTypeHint}\n\n当前时间：${nowText}\n\n上一人工接管周期结果（受控上下文；不含内部转交链）：${JSON.stringify(
       previousHumanCycle,
     )}\n\n本批次消息摘要（由程序生成，不重复询问其中已确认的信息）：${JSON.stringify(

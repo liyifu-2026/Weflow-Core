@@ -115,15 +115,6 @@ node tooling/weflowctl/dist/cli.js solution diff <solution-id> \
   --manifest solutions/knowledge/solution.manifest.json \
   --lock solutions/knowledge/solution.lock.json \
   --core-url http://127.0.0.1:3100 --admin-token <token>
-
-# Secret 配置引用（只存引用，不存明文 Secret）
-node tooling/weflowctl/dist/cli.js solution secrets <solution-id> \
-  --core-url http://127.0.0.1:3100 --admin-token <token>
-node tooling/weflowctl/dist/cli.js solution secret set <solution-id> <slot-name> \
-  --type env --ref API_KEY \
-  --core-url http://127.0.0.1:3100 --admin-token <token>
-node tooling/weflowctl/dist/cli.js solution secret unset <solution-id> <slot-name> \
-  --core-url http://127.0.0.1:3100 --admin-token <token>
 ```
 
 > 以上以 `solutions/knowledge` 为例；`weflowctl solution verify` 需要公钥，官方基础 Solution 当前为 dev-unsigned 占位签名，请使用 `solution validate` 做 SDK 级校验（见 `scripts/solution-verify.mjs`）。

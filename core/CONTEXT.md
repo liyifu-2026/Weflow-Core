@@ -64,6 +64,10 @@ _Avoid_: 通道维护指令、普通消息状态
 以 `mediaId` 引用并由 Core 管理元数据、派生结果、访问和保留期的非文本内容。  
 _Avoid_: Conversation 中的 Base64、知识文档
 
+**Asset**:  
+素材空间中持久持有的可复用非文本内容（`assets.items`，按 image/file 分类），上传即入空间、可搜索、可整理（重命名/软删除）；发送时按「素材 + 会话 + clientRequestId」确定性派生 `mediaId` 走 Media 出站链路，文件字节无需重复上传。  
+_Avoid_: 一次性 manual-upload 文件（ownerModule=manual-upload）、知识文档
+
 **Agent Turn**:  
 针对一次触发，由 Execution Strategy 决策、上下文组装、模型推理和工具执行组成的编排过程。AgentDecision 只包含通用字段：`reply_segments`、`next_action`（reply / ask_for_information / retrieve_knowledge / call_tool / handoff / no_action）、`no_action_reason`、`requires_human`、`risk_level`、`handoff_briefing`、`knowledge_query`、`tool`。  
 _Avoid_: 常驻聊天会话、模型调用本身
@@ -85,6 +89,7 @@ _Avoid_: 内置业务策略、硬编码 Prompt
 - **用户** 分为 **operator** 与 **admin**；两者都可处理会话，只有管理员可管理账号、知识、策略和系统
 - 一个 **End User** 对应一个 **Contact Profile**，并拥有零个或多个 **Conversation**
 - 一个 **Conversation** 可引用多个 **Media**
+- 多个 **Media** 可源自同一个 **Asset**（素材转发不复制文件字节）
 - **Memory** 关联 End User 或会话语境，但不保存完整 **Conversation**
 - **Knowledge** 可被 **Contact Profile** 关联，并在 **Agent Turn** 中按需检索
 - **Handoff** 由策略或用户触发，只能通过客户端处理，不通过通道指令处理

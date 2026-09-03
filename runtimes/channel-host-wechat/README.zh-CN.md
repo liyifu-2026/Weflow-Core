@@ -12,7 +12,7 @@
 本项目复刻上游 wxauto 项目，目标是实现对当前微信 4.x Windows 客户端的自动化
 （读取消息、发送消息、媒体下载、朋友圈），非网页版，直接操作本机客户端。
 
-> 当前版本：1.1.0
+> 当前版本：1.2.0
 >
 > **兼容范围**：Windows 10/11 ｜ Python 3.9+（已在 3.12 验证）｜ 微信 **4.1.12+**
 > （数据库读取路线对微信版本不敏感；坐标+OCR 发送路线依赖 4.1.12+ 自绘渲染
@@ -33,6 +33,50 @@
 ---
 
 ## 版本记录
+
+### v1.2.0（2026-08-31）
+
+- **compress_content 回退**（对应上游 v1.1.10）：消息内容解压/解码后仍为
+  `[类型]` 占位符时，改用 `compress_content` 列再解一次（zstd → blob 提取），
+  长文本/特殊类型不再退化为占位符。`get_messages` / `get_new_messages` 的
+  SELECT 补齐 `compress_content` 列；`_friendly_content` 升级为惰性双包名
+  zstd 导入（`zstandard`/`zstd`）并清理「容器头+明文+填充」格式中的填充字节。
+- **群成员枚举与群名互查**（对应上游 v1.2.0，只读 contact.db，无需 UI）：
+  新增 `get_groups()` / `get_group_members(chatroom_wxid)`（chat_room +
+  chatroom_member + contact 三表关联，含 is_owner 标记）、
+  `group_name_to_id(name)`（精确→子串宽松匹配）、`group_id_to_name(wxid)`。
+  可与 `at_member()` 等 UI 自动化配合使用。
+  Channel Host 发送路径已内部接入成员资格预检：@ 一个不在群里的成员引用
+  直接映射 `mention_member_not_found`，省掉注定失败的 UI 弹层操作（仅群会话、
+  仅 `contact:channel:` 引用生效；名册不可用时回退原 UI 路径，协议无改动）。
+- **原图下载**（对应上游 v1.1.10）：新增 `MediaDownloader.download_image_original()`——
+  已落地原图/`_h.dat` 时直接解密（不打扰 UI）；否则通过 UI 自动化点击图片消息
+  触发微信下载原图（激活微信窗口、点图、点「图片原始大小」），等待落地后解密
+  保存。新增 `_find_h_dat` 原图定位与 wxgf（WXAM/HEVC）→ jpg 的 ffmpeg 转码
+  兜底（本机 ffmpeg 路径约定见 CONTEXT.md）。
+- **Channel Host 原图 UI 下载接入（默认关闭）**：媒体解析器新增
+  `ui_original_enabled` 开关（环境变量 `WECHAT_MEDIA_ORIGINAL_VIA_UI=1`）。
+  开启后，原图不可用（仅缩略图兜底/两者皆无）时由后台线程触发 UI 下载原图，
+  成果缓存于 `<media_staging>/ui-original/<media_ref>/`，下次请求直接升级为
+  原图——Core 的「查看原图」入口与 support-web/mobile 前端零改动自动受益。
+  约束：全局串行（同时至多 1 个 UI 任务）、每条 media_ref 至多尝试 2 次、
+  失败不影响当次响应；人工操作微信时建议关闭。
+- 自带回归测试：`test_db_text_decode.py`（compress 回退）、`test_db_groups.py`
+  （群 API）、`test_media_original.py`（原图下载可测部分）、
+  `channel_host/tests/test_media.py`（UI 原图触发/缓存/降级语义）。
+
+### v1.1.3（2026-08-31）
+
+- **修复 WAL 合并后坏缓存死循环**（对应上游 v1.2.0.1）：`_check_merged` 原来只查
+  `sqlite_master`（schema 树），数据页损坏仍能通过校验，坏缓存被 stamp 标为「最新」
+  后被轮询复用，反复抛 `database disk image is malformed` 形成死循环。现改用
+  `PRAGMA quick_check` 全库校验（含数据页/索引页）。
+- 新增 `_invalidate_cache()`：清空解密 `.db`/`.stamp` 缓存；`_open()` 在缓存库
+  打开失败时自动失效缓存。
+- 消息查询统一入口 `_run_msg_query`：`get_messages` / `get_message_row` /
+  `get_new_messages` 命中 malformed 时自动「清缓存 → 重建 → 重试一次」，常驻
+  进程（channel-host 轮询）具备自愈能力，不再因坏缓存停摆。
+- `_msg_conn` 及时关闭分片库连接，避免 Windows 文件占用。
 
 ### v1.1.2（2026-08-16）
 

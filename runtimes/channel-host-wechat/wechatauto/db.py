@@ -38,6 +38,8 @@ from typing import Dict, List, Optional, Tuple
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+from .logger import wxlog
+
 PAGE_SZ = 4096
 RESERVE_SZ = 80  # IV(16) + HMAC(64)
 STAMP_VERSION = 2  # 解密缓存 stamp 格式版本，改合并逻辑时递增以强制重建
@@ -497,9 +499,14 @@ class WeChatDB:
                 raise RuntimeError("数据库合并失败(文件被微信并发改写): %s" % rel)
             else:
                 old = None  # 合并结果损坏 → 全量重建重试
-        conn = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        conn.text_factory = _sqlite_text_factory
+        try:
+            conn = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            conn.text_factory = _sqlite_text_factory
+        except sqlite3.DatabaseError:
+            # quick_check 通过后缓存仍可能被微信并发改写损坏；清掉避免坏 stamp 被反复复用
+            self._invalidate_cache(dst)
+            raise
         return conn
 
     @staticmethod
@@ -507,10 +514,12 @@ class WeChatDB:
         try:
             conn = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)
             try:
-                conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+                # quick_check 全库校验（含数据页/索引页）：只查 sqlite_master 的旧
+                # 校验漏过数据页损坏，坏缓存被 stamp 标为最新后会被轮询反复复用
+                check = conn.execute("PRAGMA quick_check").fetchone()
+                return bool(check) and check[0] == "ok"
             finally:
                 conn.close()
-            return True
         except sqlite3.DatabaseError:
             return False
 
@@ -628,76 +637,143 @@ class WeChatDB:
                 c.close()
         return found
 
+    @staticmethod
+    def _invalidate_cache(dst: str) -> None:
+        """删除解密缓存库与 stamp，下次访问强制全量重建。"""
+        for path in (dst, dst + ".stamp"):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def _run_msg_query(self, user: str, run) -> List[dict]:
+        """消息查询统一入口：命中 malformed 时清缓存 → 重建 → 自动重试一次。
+
+        背景（对应上游 v1.2.0.1）：旧缓存校验只查 schema 树，数据页损坏仍能通过
+        校验并写入「最新」stamp，之后每次轮询复用坏缓存反复抛
+        ``database disk image is malformed`` 形成死循环，常驻轮询进程从此停摆。
+        """
+        for attempt in (0, 1):
+            conn = None
+            try:
+                found = self._msg_conn(user)
+                if not found:
+                    return []
+                conn, table = found
+                rows = run(conn, table)
+                return [self._msg_row_to_dict(r) for r in rows]
+            except sqlite3.DatabaseError as e:
+                if "malformed" not in str(e).lower() or attempt == 1:
+                    raise
+                wxlog.warning(f"消息库缓存损坏({user})，清缓存重建后重试: {e}")
+                for rel in self._message_dbs():
+                    self._invalidate_cache(os.path.join(
+                        self.workdir, rel.replace(os.sep, "__")))
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        return []  # pragma: no cover - 重试循环只有两次，必然 return/raise
+
     def get_messages(self, user: str, limit: int = 20, offset: int = 0) -> List[dict]:
         """读取指定会话（微信号/群号）的最近消息"""
-        found = self._msg_conn(user)
-        if not found:
-            return []
-        conn, table = found
-        try:
-            rows = conn.execute(
+        return self._run_msg_query(
+            user,
+            lambda conn, table: conn.execute(
                 "SELECT local_id, local_type, real_sender_id, create_time, "
-                "message_content, source, packed_info_data, sort_seq "
+                "message_content, source, packed_info_data, compress_content, sort_seq "
                 "FROM %s ORDER BY sort_seq DESC LIMIT ? OFFSET ?" % table,
                 (limit, offset),
-            ).fetchall()
-        finally:
-            conn.close()
-        return [self._msg_row_to_dict(r) for r in rows]
+            ).fetchall(),
+        )
 
     def get_message_row(self, user: str, local_id: int) -> Optional[dict]:
-        """按 local_id 读取一条消息的完整原始字段（媒体下载用，含 server_id/packed_info）"""
-        found = self._msg_conn(user)
-        if not found:
-            return None
-        conn, table = found
-        try:
+        """按 local_id 读取一条消息的完整原始字段（媒体下载用，含 server_id/packed_info）。
+
+        注意：必须绕过 ``_run_msg_query`` 的二次转换——它的出口会对每行调用
+        ``_msg_row_to_dict``（读取原始 sqlite Row 的 ``message_content`` 列），
+        而本方法的查询结果已是转换后的 dict（key=``content``），二次转换必然
+        KeyError。该 bug 曾导致所有媒体拉取 ``media_source_error`` 失败。
+        """
+        def _query(conn, table):
             row = conn.execute(
                 "SELECT local_id, local_type, server_id, real_sender_id, create_time, "
                 "message_content, source, packed_info_data, compress_content, sort_seq "
                 "FROM %s WHERE local_id=? LIMIT 1" % table,
                 (local_id,),
             ).fetchone()
-        finally:
-            conn.close()
-        if not row:
-            return None
-        return {
-            "local_id": row["local_id"],
-            "local_type": row["local_type"],
-            "server_id": row["server_id"],
-            "sender_id": row["real_sender_id"],
-            "create_time": row["create_time"],
-            "content": row["message_content"],
-            "source": row["source"],
-            "packed_info": row["packed_info_data"],
-            "compress_content": row["compress_content"],
-            "sort_seq": row["sort_seq"],
-        }
+            if not row:
+                return None
+            return [{
+                "local_id": row["local_id"],
+                "local_type": row["local_type"],
+                "server_id": row["server_id"],
+                "sender_id": row["real_sender_id"],
+                "create_time": row["create_time"],
+                "content": row["message_content"],
+                "source": row["source"],
+                "packed_info": row["packed_info_data"],
+                "compress_content": row["compress_content"],
+                "sort_seq": row["sort_seq"],
+            }]
+
+        # 与 _run_msg_query 相同的 malformed 自愈语义，但不做出口二次转换
+        for attempt in (0, 1):
+            conn = None
+            try:
+                found = self._msg_conn(user)
+                if not found:
+                    return None
+                conn, table = found
+                rows = _query(conn, table)
+                return rows[0] if rows else None
+            except sqlite3.DatabaseError as e:
+                if "malformed" not in str(e).lower() or attempt == 1:
+                    raise
+                wxlog.warning(f"消息库缓存损坏({user})，清缓存重建后重试: {e}")
+                for rel in self._message_dbs():
+                    self._invalidate_cache(os.path.join(
+                        self.workdir, rel.replace(os.sep, "__")))
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except sqlite3.Error:
+                        pass
+        return None
 
     def get_new_messages(self, user: str, since_seq: int = 0, limit: int = 200) -> List[dict]:
         """返回 sort_seq > since_seq 的新消息（升序），供轮询监听使用"""
-        found = self._msg_conn(user)
-        if not found:
-            return []
-        conn, table = found
-        try:
-            rows = conn.execute(
+        return self._run_msg_query(
+            user,
+            lambda conn, table: conn.execute(
                 "SELECT local_id, local_type, real_sender_id, create_time, "
-                "message_content, source, packed_info_data, sort_seq "
+                "message_content, source, packed_info_data, compress_content, sort_seq "
                 "FROM %s WHERE sort_seq > ? ORDER BY sort_seq ASC LIMIT ?" % table,
                 (since_seq, limit),
-            ).fetchall()
-        finally:
-            conn.close()
-        return [self._msg_row_to_dict(r) for r in rows]
+            ).fetchall(),
+        )
 
-    @staticmethod
-    def _msg_row_to_dict(r) -> dict:
+    def _msg_row_to_dict(self, r) -> dict:
         content = r["message_content"]
         mtype = WeChatDB._msg_type_name(r["local_type"])
         if isinstance(content, bytes):
             content = WeChatDB._friendly_content(content, mtype)
+        # 内容为占位符且有 compress_content 时，用压缩内容再解一次
+        placeholder = "[%s]" % mtype
+        if content == placeholder:
+            try:
+                cc = r["compress_content"]
+            except (KeyError, IndexError):
+                cc = None
+            if isinstance(cc, bytes) and cc:
+                cc_text = WeChatDB._friendly_content(cc, mtype)
+                # 须含可打印字符：纯控制字符的「成功解码」是垃圾数据
+                if (cc_text != placeholder and cc_text.strip()
+                        and any(ch.isprintable() for ch in cc_text)):
+                    content = cc_text
         return {
             "local_id": r["local_id"],
             "type": mtype,
@@ -709,19 +785,17 @@ class WeChatDB:
 
     @staticmethod
     def _friendly_content(content: bytes, mtype) -> str:
-        if content[:4] == b"\x28\xb5\x2f\xfd":
-            decompressed = _decompress_zstandard(content)
-            if decompressed:
-                try:
-                    text = decompressed.decode("utf-8").strip()
-                except UnicodeDecodeError:
-                    text = ""
-                if text:
-                    return text
         try:
             text = content.decode("utf-8")
         except UnicodeDecodeError:
             if content[:4] == b"\x28\xb5\x2f\xfd":
+                # zstd 压缩的长文本消息：惰性导入 zstandard/zstd 解压
+                zstd = _get_zstd_module()
+                if zstd is not None:
+                    text = _zstd_decompress(zstd, content)
+                    if text:
+                        return text
+                # 回退到 blob 提取（无法 zstd 解压时直接剥离容器头）
                 text = _extract_text_from_blob(content)
                 if text:
                     return text
@@ -730,7 +804,11 @@ class WeChatDB:
                 if md5:
                     return "[图片 md5=%s]" % md5.group(1).decode()
             return "[%s]" % mtype
-        return text.strip() or "[%s]" % mtype
+        # 「容器头+明文+\x01\x00 填充」格式：明文取首个 \x01 之前的部分
+        cleaned = text.strip()
+        if cleaned and b"\x01\x00" in content:
+            cleaned = cleaned.split("\x01")[0].strip()
+        return cleaned or "[%s]" % mtype
 
     def get_sessions(self, limit: int = 100) -> List[dict]:
         """会话列表（来自 session.db）"""
@@ -879,6 +957,166 @@ class WeChatDB:
                 return row["remark"] or row["nick_name"] or user
             break
         return user
+
+    # ------------------------------------------------------------------
+    # 群成员（contact.db 读取，无需 UI）
+    # ------------------------------------------------------------------
+    def _contact_conn(self) -> Optional[sqlite3.Connection]:
+        """打开 contact.db（调用方负责 close）；失败返回 None。"""
+        for rel, path, _ in self._db_files:
+            if os.path.basename(path) != "contact.db":
+                continue
+            try:
+                return self._open(rel)
+            except Exception:
+                return None
+        return None
+
+    def get_groups(self) -> List[dict]:
+        """列出所有群聊。
+
+        Returns:
+            List[dict]，每条：username(群 wxid), name(群名), owner(群主 wxid),
+            member_count(成员数), members(List[dict] 成员详情，见 get_group_members)。
+        """
+        conn = self._contact_conn()
+        if not conn:
+            return []
+        try:
+            rooms = conn.execute(
+                "SELECT id, username, owner FROM chat_room"
+            ).fetchall()
+            room_by_id = {r["id"]: r for r in rooms}
+            if not room_by_id:
+                return []
+            placeholders = ",".join("?" * len(room_by_id))
+            members = conn.execute(
+                "SELECT room_id, member_id FROM chatroom_member "
+                "WHERE room_id IN (%s)" % placeholders,
+                tuple(room_by_id.keys()),
+            ).fetchall()
+            member_ids = sorted({m["member_id"] for m in members})
+            contact = {}
+            if member_ids:
+                mp = ",".join("?" * len(member_ids))
+                rows = conn.execute(
+                    "SELECT id, username, nick_name, remark FROM contact "
+                    "WHERE id IN (%s)" % mp, tuple(member_ids),
+                ).fetchall()
+                contact = {r["id"]: r for r in rows}
+            # 群 wxid -> 群名（contact 表里 @chatroom 行的 nick_name）
+            room_names = {}
+            for r in conn.execute(
+                    "SELECT username, nick_name FROM contact "
+                    "WHERE username LIKE '%@chatroom'").fetchall():
+                room_names[r["username"]] = r["nick_name"] or r["username"]
+        finally:
+            conn.close()
+        groups = []
+        for rid, room in room_by_id.items():
+            ms = []
+            for m in members:
+                if m["room_id"] != rid:
+                    continue
+                c = contact.get(m["member_id"])
+                if c is None:
+                    continue
+                ms.append({
+                    "username": c["username"],
+                    "nick_name": c["nick_name"],
+                    "remark": c["remark"],
+                    "is_owner": c["username"] == room["owner"],
+                })
+            groups.append({
+                "username": room["username"],
+                "name": room_names.get(room["username"], room["username"]),
+                "owner": room["owner"],
+                "member_count": len(ms),
+                "members": ms,
+            })
+        return groups
+
+    def group_name_to_id(self, name: str) -> Optional[str]:
+        """按群名查找群 wxid（形如 ``xxx@chatroom``）；找不到返回 None。
+
+        精确匹配优先，其次做「子串包含」的宽松匹配（可能返回多个，取第一个）。
+        """
+        conn = self._contact_conn()
+        if not conn:
+            return None
+        try:
+            rows = conn.execute(
+                "SELECT username, nick_name FROM contact "
+                "WHERE username LIKE '%@chatroom'").fetchall()
+        finally:
+            conn.close()
+        exact = None
+        fuzzy = []
+        for r in rows:
+            nm = r["nick_name"] or r["username"]
+            if nm == name:
+                exact = r["username"]
+            elif name and name in nm:
+                fuzzy.append(r["username"])
+            elif nm == r["username"] and name in nm:  # 无群名时按 username 兜底
+                fuzzy.append(r["username"])
+        return exact or (fuzzy[0] if fuzzy else None)
+
+    def group_id_to_name(self, chatroom_wxid: str) -> Optional[str]:
+        """按群 wxid 查群名；找不到返回 None。"""
+        conn = self._contact_conn()
+        if not conn:
+            return None
+        try:
+            r = conn.execute(
+                "SELECT nick_name, username FROM contact "
+                "WHERE username=? LIMIT 1", (chatroom_wxid,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if not r:
+            return None
+        return r["nick_name"] or r["username"]
+
+    def get_group_members(self, chatroom_wxid: str) -> List[dict]:
+        """枚举指定群聊的成员列表（静态读库，无需 UI）。
+
+        Args:
+            chatroom_wxid: 群 wxid（形如 ``xxx@chatroom``）。
+
+        Returns:
+            List[dict]，每条：username(wxid/微信号), nick_name, remark,
+            is_owner(是否群主)。按 username 排序。
+        """
+        conn = self._contact_conn()
+        if not conn:
+            return []
+        try:
+            room = conn.execute(
+                "SELECT id, owner FROM chat_room WHERE username=? LIMIT 1",
+                (chatroom_wxid,),
+            ).fetchone()
+            if not room:
+                return []
+            rows = conn.execute(
+                "SELECT m.member_id, c.username, c.nick_name, c.remark "
+                "FROM chatroom_member m "
+                "LEFT JOIN contact c ON c.id = m.member_id "
+                "WHERE m.room_id=? AND c.username IS NOT NULL",
+                (room["id"],),
+            ).fetchall()
+        finally:
+            conn.close()
+        members = []
+        for r in rows:
+            members.append({
+                "username": r["username"],
+                "nick_name": r["nick_name"],
+                "remark": r["remark"],
+                "is_owner": r["username"] == room["owner"],
+            })
+        members.sort(key=lambda x: x["username"])
+        return members
 
     # ------------------------------------------------------------------
     # 历史消息全量导出
@@ -1183,6 +1421,44 @@ class WeChatDB:
                     conn.close()
                 except Exception:
                     pass
+
+
+_ZSTD_MODULE = None
+
+
+def _get_zstd_module():
+    """惰性加载 zstd 模块，兼容 `zstandard` / `zstd` 两种包名。
+
+    WeChat 4.x 长文本消息的 message_content 为 zstd 压缩帧；缺少该第三方
+    库时无法解压（会退化为 `[类型]` 占位符）。此函数做了延迟导入 + 双包名
+    兼容，缺失库时返回 None（由调用方决定如何兜底）。
+    """
+    global _ZSTD_MODULE
+    if _ZSTD_MODULE is not None:
+        return _ZSTD_MODULE
+    for mod_name in ("zstandard", "zstd"):
+        try:
+            _ZSTD_MODULE = __import__(mod_name)
+            return _ZSTD_MODULE
+        except Exception:
+            continue
+    _ZSTD_MODULE = False
+    return None
+
+
+def _zstd_decompress(zstd, content: bytes) -> Optional[str]:
+    """用 zstd 解压微信消息帧并解码 UTF-8，失败返回 None。"""
+    if not content:
+        return None
+    try:
+        dctx = zstd.ZstdDecompressor()
+        decompressed = dctx.decompress(content, max_output_size=200000)
+        if not decompressed:
+            return None
+        text = decompressed.decode("utf-8", "ignore").strip()
+        return text if text else None
+    except Exception:
+        return None
 
 
 def _decompress_zstandard(content: bytes) -> Optional[bytes]:

@@ -213,9 +213,9 @@ describe("runDoctor + summarize", () => {
 
 describe("checkChannelProtocol", () => {
   const protocol = {
-    protocolVersion: 4,
+    protocolVersion: 5,
     sendOperationStates: ["pending", "executing", "confirmed", "unknown", "failed"],
-    sendKinds: ["text", "file", "image", "reply", "mention", "poke", "recall", "voice"],
+    sendKinds: ["text", "file", "image", "reply", "mention", "poke", "recall"],
   };
   const envWithHost = {
     ...ENV,
@@ -233,7 +233,7 @@ describe("checkChannelProtocol", () => {
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
-          protocolVersion: 1,
+          protocolVersion: protocol.protocolVersion,
           sendOperationStates: protocol.sendOperationStates,
           sendKinds: protocol.sendKinds,
         }),
@@ -261,7 +261,7 @@ describe("checkChannelProtocol", () => {
     try {
       const result = await checkChannelProtocol(envWithHost, fakeProbe({ http: async () => ({ status: 200 }) }), protocol);
       assert.equal(result.status, "fail");
-      assert.match(result.detail, /protocolVersion 2 != 1/);
+      assert.match(result.detail, /protocolVersion 2 != 5/);
       assert.match(result.detail, /缺 sendOperationState: executing/);
       assert.match(result.detail, /缺 sendKind: file/);
     } finally {
