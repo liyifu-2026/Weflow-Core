@@ -22,7 +22,10 @@ export const MODEL_NAME_ALLOWLIST = [
   "deepseek-v4-pro",
 ] as const;
 
-export const VISION_MODEL_NAME_ALLOWLIST = ["mimo-v2.5"] as const;
+export const VISION_MODEL_NAME_ALLOWLIST = [
+  "mimo-v2.5",
+  "deepseek-v4-flash-vision-exp",
+] as const;
 
 /** 环境默认值（config 传入，作为 DB 缺失时的 fallback） */
 export type ModelSettingsDefaults = {

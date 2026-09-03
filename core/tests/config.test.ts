@@ -75,8 +75,11 @@ describe("runtime configuration", () => {
       baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
       name: "mimo-v2.5",
     });
-    process.env.VISION_MODEL = "mimo-v2.5-pro";
-    expect(() => loadConfig()).toThrow();
+    // Phase 4 视觉直读：模型名放宽为开放字符串（新增
+    // deepseek-v4-flash-vision-exp），未知模型不再被 config 拒绝；
+    // 运行时白名单校验由 runtime-settings 承担。
+    process.env.VISION_MODEL = "deepseek-v4-flash-vision-exp";
+    expect(loadConfig().vision?.name).toBe("deepseek-v4-flash-vision-exp");
   });
 
   it("loads WeKnora as an optional, separately scoped integration", () => {

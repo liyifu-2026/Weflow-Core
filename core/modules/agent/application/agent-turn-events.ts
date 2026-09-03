@@ -11,6 +11,7 @@ export type AgentTurnEventType =
   | "context_built"
   | "triaged"
   | "policy_decided"
+  | "model_reasoning"
   | "knowledge_retrieved"
   | "tool_completed"
   | "draft_generated"

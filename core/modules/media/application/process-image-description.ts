@@ -26,7 +26,7 @@ export async function processImageDescription(
   db: NodePgDatabase<typeof schema>,
   storage: LocalFileStorage,
   client: MimoVisionClient,
-  model: "mimo-v2.5",
+  model: string,
   mediaId: string,
 ): Promise<void> {
   const originalFiles = alias(schema.storedFiles, "stored_files_original");

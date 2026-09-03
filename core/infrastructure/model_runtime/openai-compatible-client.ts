@@ -41,6 +41,24 @@ export type ChatMessage = {
   content: string | ChatContentPart[];
 };
 
+/** 思维链截断上限：草稿纸不进审计事实，仅展示用。 */
+export const REASONING_MAX_CHARS = 8_000;
+
+/**
+ * 从 OpenAI 兼容响应里提取推理模型思维链（reasoning_content）。
+ * 缺失/空串返回 undefined（不落空事件）；超长截断。
+ */
+export function extractReasoning(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const choices = (payload as { choices?: unknown }).choices;
+  if (!Array.isArray(choices) || choices.length === 0) return undefined;
+  const message = (choices[0] as { message?: { reasoning_content?: unknown } })
+    ?.message;
+  const raw = message?.reasoning_content;
+  if (typeof raw !== "string" || raw.trim() === "") return undefined;
+  return raw.slice(0, REASONING_MAX_CHARS);
+}
+
 /** 补全选项 */
 export type CompletionOptions = {
   jsonObject?: boolean;
@@ -132,10 +150,12 @@ export class OpenAiCompatibleClient implements TextModel {
 
       const parsed = responseSchema.parse(await response.json());
       const content = parsed.choices[0]?.message.content.trim();
+      const reasoning = extractReasoning(parsed);
       if (content) {
         const finishReason = parsed.choices[0]?.finish_reason;
         return {
           text: content,
+          ...(reasoning ? { reasoning } : {}),
           modelId: parsed.model ?? options.model ?? this.#options.model,
           ...(finishReason
             ? { finishReason: normalizeFinishReason(finishReason) }

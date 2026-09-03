@@ -18,7 +18,7 @@ export class MimoVisionClient {
     private readonly options: {
       baseUrl: string;
       apiKey: string;
-      model: "mimo-v2.5";
+      model: string;
       timeoutMs: number;
       fetch?: typeof globalThis.fetch;
     },

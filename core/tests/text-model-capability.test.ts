@@ -51,7 +51,7 @@ describe("TextModel capability", () => {
       "agent-model",
     );
 
-    expect(response).toBe('{"next_action":"no_action"}');
+    expect(response.text).toBe('{"next_action":"no_action"}');
     expect(generate).toHaveBeenCalledWith({
       messages: [{ role: "user", content: "hello" }],
       modelId: "agent-model",
@@ -85,7 +85,7 @@ describe("TextModel capability", () => {
         ],
         "m",
       ),
-    ).resolves.toBe('{"next_action":"no_action"}');
+    ).resolves.toMatchObject({ text: '{"next_action":"no_action"}' });
     expect(generate).toHaveBeenCalledTimes(2);
     const retryRequest = generate.mock.calls[1]?.[0] as
       { messages: unknown[] } | undefined;

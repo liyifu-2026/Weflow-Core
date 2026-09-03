@@ -9,6 +9,12 @@ import type { TextModelMessage } from "../../model/contracts/text-generation-req
 import { TextModelError } from "../../model/contracts/text-model-error.js";
 import type { TextModel } from "../../model/contracts/text-model.js";
 
+/** 决策模型调用结果：text 为决策 JSON；reasoning 为思维链（可缺省）。 */
+export type AgentDecisionResponse = {
+  text: string;
+  reasoning?: string | undefined;
+};
+
 /**
  * 调用 LLM 完成 Agent 决策
  * 要求返回 JSON 对象格式的响应
@@ -18,14 +24,14 @@ export async function completeAgentDecision(
   textModel: TextModel,
   messages: TextModelMessage[],
   runtimeModel?: string,
-): Promise<string> {
+): Promise<AgentDecisionResponse> {
   try {
     const result = await textModel.generate({
       messages,
       ...(runtimeModel ? { modelId: runtimeModel } : {}),
       output: "structured",
     });
-    return result.text;
+    return { text: result.text, reasoning: result.reasoning };
   } catch (error) {
     // 空响应时截取系统提示 + 最近 4 条消息重试（减少上下文长度）
     if (!isEmptyResponse(error)) throw error;
@@ -37,7 +43,7 @@ export async function completeAgentDecision(
       ...(runtimeModel ? { modelId: runtimeModel } : {}),
       output: "structured",
     });
-    return result.text;
+    return { text: result.text, reasoning: result.reasoning };
   }
 }
 

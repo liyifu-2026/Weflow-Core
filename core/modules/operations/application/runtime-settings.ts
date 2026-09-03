@@ -25,7 +25,7 @@ export const TEXT_MODEL_ALLOWLIST = [
   "deepseek-v4-pro",
 ] as const;
 
-export const VISION_MODEL_ALLOWLIST = ["mimo-v2.5"] as const;
+export const VISION_MODEL_ALLOWLIST = ["mimo-v2.5", "deepseek-v4-flash-vision-exp"] as const;
 
 /** 运行时设置的类型化结构（业务代码只允许通过它访问） */
 export type RuntimeSettings = {

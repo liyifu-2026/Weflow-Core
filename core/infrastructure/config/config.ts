@@ -51,7 +51,7 @@ const environmentSchema = z.object({
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(60_000),
   VISION_BASE_URL: z.url().default("https://token-plan-cn.xiaomimimo.com/v1"),
   VISION_API_KEY: z.string().min(1).optional(),
-  VISION_MODEL: z.literal("mimo-v2.5").default("mimo-v2.5"),
+  VISION_MODEL: z.string().min(1).default("mimo-v2.5"),
   VISION_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(60_000),
   /** 语音转写模型（复用视觉端点与密钥；实测端点不支持音频时可覆盖为 mimo-v2.5-asr） */
   ASR_MODEL: z.string().min(1).default("mimo-v2.5"),
@@ -127,7 +127,7 @@ export type RuntimeConfig = {
     | {
         baseUrl: string;
         apiKey: string;
-        name: "mimo-v2.5";
+        name: string;
         timeoutMs: number;
         /** 语音转写模型名（同一端点） */
         asrModel: string;

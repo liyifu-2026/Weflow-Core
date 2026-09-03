@@ -9,6 +9,8 @@ export type TextGenerationUsage = {
 
 export type TextGenerationResult = {
   text: string;
+  /** 推理模型思维链（reasoning_content）；仅展示用，不进审计事实。 */
+  reasoning?: string;
   /** Effective provider model identifier, for observability only. */
   modelId: string;
   finishReason?: TextGenerationFinishReason;

@@ -202,9 +202,9 @@ export async function processAgentTurn(
     );
     const decision = strategy
       ? agentActionToDecision(
-          strategy.parseModelResponse({ text: modelResponse }),
+          strategy.parseModelResponse({ text: modelResponse.text }),
         )
-      : parseAgentDecision(modelResponse);
+      : parseAgentDecision(modelResponse.text);
     await recordAgentTurnEvent(db, {
       turnId: turn.turnId,
       conversationId: turn.conversationId,
@@ -418,8 +418,16 @@ export async function processPlannedToolTurn(
     model,
   );
   const decision = strategy
-    ? agentActionToDecision(strategy.parseModelResponse({ text: response }))
-    : parseAgentDecision(response);
+    ? agentActionToDecision(strategy.parseModelResponse({ text: response.text }))
+    : parseAgentDecision(response.text);
+  if (response.reasoning) {
+    await recordAgentTurnEvent(db, {
+      turnId: job.turnId,
+      conversationId: execution.conversationId,
+      eventType: "model_reasoning",
+      payload: { reasoning: response.reasoning },
+    });
+  }
 
   // 决策后处理：gate → 工具步数预算 → no_action → 校验 → 落库
   await commitDecisionDisposition({

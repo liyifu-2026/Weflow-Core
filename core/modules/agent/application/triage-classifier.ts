@@ -157,7 +157,7 @@ export async function classifyForTriage(input: {
       ], input.model),
       policy.timeoutMs,
     );
-    const parsed = parseTriageResponse(response);
+    const parsed = parseTriageResponse(response.text);
     if (parsed) return parsed;
   } catch {
     // fall through to degraded pass-through
