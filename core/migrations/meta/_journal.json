@@ -421,6 +421,41 @@
       "when": 1788600000000,
       "tag": "0062_user_avatar_preset",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1788686400000,
+      "tag": "0064_voice_derived_file",
+      "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1788690000000,
+      "tag": "0065_session_ttl",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1788690000001,
+      "tag": "0063_contact_blocked",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1788690000002,
+      "tag": "0066_asset_space",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1788690000003,
+      "tag": "0067_turn_admission",
+      "breakpoints": true
     }
   ]
 }

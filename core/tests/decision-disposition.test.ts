@@ -27,6 +27,7 @@ import {
   memoryWatermarkMessageId,
 } from "../modules/agent/application/decision-disposition.js";
 import {
+  commitAgentTurnFailure,
   commitAgentTurnNoAction,
   commitAgentTurnOutcome,
   commitAgentTurnSuperseded,
@@ -165,5 +166,141 @@ describe("commitDecisionDisposition fresh path ordering", () => {
         turnId: "turn-test",
       }),
     );
+  });
+});
+
+describe("commitDecisionDisposition Phase 2 branches", () => {
+  it("fresh wait 决策：走 NoAction 落库（reason=waiting_for_user），不落 outcome/工具检查点", async () => {
+    vi.mocked(hasNewerAgentTurn).mockResolvedValue(false);
+    vi.mocked(commitAgentTurnNoAction).mockClear();
+    vi.mocked(commitAgentTurnOutcome).mockClear();
+    vi.mocked(persistAgentToolCheckpoint).mockClear();
+
+    const result = await commitDecisionDisposition(
+      baseInput({
+        triggerMessageId: "msg-1",
+        decision: {
+          replySegments: [],
+          replyText: "",
+          nextAction: "wait",
+          noActionReason: undefined,
+          requiresHuman: false,
+          riskLevel: "low",
+          tool: undefined,
+          knowledgeQuery: undefined,
+          handoffBriefing: undefined,
+          waitMs: 300_000,
+          nudgeText: "您先忙，有问题随时叫我",
+          closureSummary: undefined,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ action: "terminal" });
+    expect(commitAgentTurnNoAction).toHaveBeenCalledWith(db, {
+      conversationId: "conv-test",
+      turnId: "turn-test",
+      reason: "waiting_for_user",
+    });
+    expect(commitAgentTurnOutcome).not.toHaveBeenCalled();
+    expect(persistAgentToolCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("fresh end_session 决策：直接落 outcome 收尾，不建工具检查点", async () => {
+    vi.mocked(hasNewerAgentTurn).mockResolvedValue(false);
+    vi.mocked(commitAgentTurnNoAction).mockClear();
+    vi.mocked(commitAgentTurnOutcome).mockClear();
+    vi.mocked(persistAgentToolCheckpoint).mockClear();
+
+    const result = await commitDecisionDisposition(
+      baseInput({
+        triggerMessageId: "msg-1",
+        decision: {
+          replySegments: [],
+          replyText: "",
+          nextAction: "end_session",
+          noActionReason: undefined,
+          requiresHuman: false,
+          riskLevel: "low",
+          tool: undefined,
+          knowledgeQuery: undefined,
+          handoffBriefing: undefined,
+          waitMs: undefined,
+          nudgeText: undefined,
+          closureSummary: "退款问题已解答，客户确认等待到账",
+        },
+      }),
+    );
+
+    expect(result).toEqual({ action: "terminal" });
+    expect(commitAgentTurnOutcome).toHaveBeenCalledTimes(1);
+    expect(commitAgentTurnOutcome).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        variant: "direct",
+        turnId: "turn-test",
+      }),
+    );
+    expect(persistAgentToolCheckpoint).not.toHaveBeenCalled();
+  });
+});
+
+describe("commitDecisionDisposition tool step budget", () => {
+  function toolDecision(): AgentDecision {
+    return {
+      replySegments: [],
+      replyText: "",
+      nextAction: "retrieve_knowledge",
+      noActionReason: undefined,
+      requiresHuman: false,
+      riskLevel: "low",
+      tool: undefined,
+      knowledgeQuery: "二次检索：退款政策",
+      handoffBriefing: undefined,
+      waitMs: undefined,
+      nudgeText: undefined,
+      closureSummary: undefined,
+    };
+  }
+
+  it("预算未耗尽时 tool_recovery 允许再次规划工具（checkpoint 续跑）", async () => {
+    vi.mocked(commitAgentTurnFailure).mockClear();
+    vi.mocked(persistAgentToolCheckpoint).mockClear();
+
+    const result = await commitDecisionDisposition(
+      baseInput({
+        path: "tool_recovery",
+        conversationRevision: null,
+        decision: toolDecision(),
+        toolStepsUsed: 1,
+        toolStepBudget: 4,
+      }),
+    );
+
+    expect(result.action).toBe("checkpoint");
+    expect(persistAgentToolCheckpoint).toHaveBeenCalledTimes(1);
+    expect(commitAgentTurnFailure).not.toHaveBeenCalled();
+  });
+
+  it("预算耗尽时 tool_recovery 工具决策落 tool_chain_limit 失败转人工", async () => {
+    vi.mocked(commitAgentTurnFailure).mockClear();
+    vi.mocked(persistAgentToolCheckpoint).mockClear();
+
+    const result = await commitDecisionDisposition(
+      baseInput({
+        path: "tool_recovery",
+        conversationRevision: null,
+        decision: toolDecision(),
+        toolStepsUsed: 4,
+        toolStepBudget: 4,
+      }),
+    );
+
+    expect(result).toEqual({ action: "terminal" });
+    expect(commitAgentTurnFailure).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ errorCode: "tool_chain_limit" }),
+    );
+    expect(persistAgentToolCheckpoint).not.toHaveBeenCalled();
   });
 });

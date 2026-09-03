@@ -61,6 +61,16 @@ export type DecisionDispositionInput = {
   model: string;
   /** AI 员工标识；非空时写入出站消息 actor_id。 */
   aiEmployeeId: string | null;
+  /**
+   * Tool-recovery path only: how many tool steps this turn has already
+   * executed（含本次恢复前的那次）。缺省按 1 计（恢复即已执行一次）。
+   */
+  toolStepsUsed?: number | undefined;
+  /**
+   * Tool-recovery path only: max tool steps per turn. 传 1 时行为与
+   * 旧版"一轮一次工具"逐字节一致（防腐回归锚点）。缺省按 1 计。
+   */
+  toolStepBudget?: number | undefined;
 };
 
 export type DecisionDispositionResult =
@@ -163,6 +173,18 @@ async function commitFreshDisposition(
     return { action: "terminal" };
   }
 
+  // wait（Phase 2）：模型要求等待客户回复。无会话调度器阶段等价于
+  // waiting_for_user 静默落库；waitMs/nudgeText 随决策留存在 turn 事件
+  // 与响应 JSONB，Phase 3 session_wakes 上线后由调度器消费。
+  if (decision.nextAction === "wait") {
+    await commitAgentTurnNoAction(db, {
+      conversationId,
+      turnId,
+      reason: "waiting_for_user",
+    });
+    return { action: "terminal" };
+  }
+
   const invalidSegments = await commitReplyValidationFailure(
     db,
     conversationId,
@@ -198,16 +220,26 @@ async function commitFreshDisposition(
   return { action: "terminal" };
 }
 
-/** Tool-checkpoint recovery path tail: exactly one tool call per turn. */
+/**
+ * Tool-checkpoint recovery path tail: bounded tool loop.
+ *
+ * Phase 2 起"一轮一次工具"改为步数预算：恢复路径再决策出工具动作时，
+ * 已执行步数（toolStepsUsed）未达预算（toolStepBudget）则允许继续
+ * 规划下一次工具调用（checkpoint 续跑）；预算耗尽落 tool_chain_limit
+ * 失败转人工。预算缺省 1 = 与旧版行为逐字节一致（防腐回归锚点）。
+ */
 async function commitToolRecoveryDisposition(
   input: DecisionDispositionInput,
 ): Promise<DecisionDispositionResult> {
   const { db, decision, turnId, conversationId } = input;
 
-  // 防止工具链过长：一轮只允许一次工具调用
+  // 防止工具链过长：步数预算（默认 1，turn-runner 按执行历史计算传入）
+  const stepsUsed = input.toolStepsUsed ?? 1;
+  const budget = input.toolStepBudget ?? 1;
   if (
-    decision.nextAction === "call_tool" ||
-    decision.nextAction === "retrieve_knowledge"
+    (decision.nextAction === "call_tool" ||
+      decision.nextAction === "retrieve_knowledge") &&
+    stepsUsed >= budget
   ) {
     await commitAgentTurnFailure(db, {
       conversationId,
@@ -221,6 +253,41 @@ async function commitToolRecoveryDisposition(
   if (decision.nextAction === "no_action") {
     await commitNoAction(db, conversationId, turnId, decision);
     return { action: "terminal" };
+  }
+
+  // 预算未耗尽时允许再次规划工具（有界 ReAct 续跑）：构建工具计划并
+  // 落 checkpoint，turn-runner 执行后再次进入恢复路径。
+  if (
+    decision.nextAction === "retrieve_knowledge" ||
+    decision.nextAction === "call_tool"
+  ) {
+    let toolPlan: ToolPlan;
+    if (decision.nextAction === "retrieve_knowledge") {
+      toolPlan = knowledgeToolPlan(turnId, decision.knowledgeQuery ?? "");
+    } else {
+      const plan = getToolPlan(decision, turnId);
+      if (!plan) {
+        await commitAgentTurnFailure(db, {
+          conversationId,
+          turnId,
+          errorCode: "invalid_tool_plan",
+          events: [
+            {
+              eventType: "validation_failed",
+              reasonCode: "invalid_tool_plan",
+            },
+          ],
+        });
+        return { action: "terminal" };
+      }
+      toolPlan = plan;
+    }
+    await persistAgentToolCheckpoint(db, {
+      conversationId,
+      turnId,
+      toolPlan,
+    });
+    return { action: "checkpoint", toolPlan };
   }
 
   const invalidSegments = await commitReplyValidationFailure(

@@ -4,10 +4,14 @@
  * - processPlannedToolTurn：工具检查点恢复路径（执行工具 → 最终回复）
  *
  * 只做编排，不做纯决策（决策在 reply-policy / turn-utils）；
+ * 决策后处理（gate/handoff/no_action/校验/落库）统一在 decision-disposition。
  * 仅由 AgentTurnExecutor.execute() 在完成 CAS 领取后调用（ADR-0001）。
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
+
+/** 单个 Agent Turn 内允许的最大工具步数（有界 ReAct；1 = 旧版行为）。 */
+export const MAX_TOOL_STEPS_PER_TURN = 4;
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { TextModel } from "../../model/contracts/text-model.js";
@@ -17,32 +21,32 @@ import type {
 } from "../../knowledge/contracts/knowledge-search.js";
 import type { SkillRegistry } from "../contracts/agent-skill.js";
 import type { ExecutionStrategyRegistry } from "../contracts/execution-strategy.js";
-import { evaluateReplyPolicy, buildSystemPrompt, resolveExecutionStrategy, collectSkillHints, collectSkillHintsAfterKnowledge } from "./reply-policy.js";
+import {
+  buildSystemPrompt,
+  evaluateReplyPolicy,
+  resolveExecutionStrategy,
+  collectSkillHints,
+  collectSkillHintsAfterKnowledge,
+} from "./reply-policy.js";
 import { parseAgentDecision } from "./agent-decision.js";
 import { agentActionToDecision } from "./agent-action-to-decision.js";
-import { getToolPlan, knowledgeToolPlan } from "./tool-plan.js";
-import { buildHandoffBriefing } from "../../handoff/application/handoff-briefing.js";
-import { completeAgentDecision } from "./complete-agent-decision.js";
-import { AgentTurnTransitionNotApplied } from "./agent-turn-service.js";
-import { recordAgentTurnEvent } from "./agent-turn-events.js";
-import { validateDecision, validateReplySegments } from "./policy-gate.js";
-import { buildAgentContext } from "./agent-context.js";
 import { executeToolPlan } from "./execute-tool-plan.js";
 import {
-  commitAgentTurnOutcome,
+  AgentTurnTransitionNotApplied,
+} from "./agent-turn-service.js";
+import {
   commitAgentTurnFailure,
-  commitAgentTurnHandoff,
-  commitAgentTurnNoAction,
   commitAgentTurnSuppression,
-  commitAgentTurnSuperseded,
-  persistAgentToolCheckpoint,
 } from "./agent-turn-outcome-command.js";
+import { recordAgentTurnEvent } from "./agent-turn-events.js";
+import { buildAgentContext } from "./agent-context.js";
+import { commitDecisionDisposition } from "./decision-disposition.js";
 import {
   classifyError,
   detectChatType,
   getAgentTurnConversationId,
-  hasNewerAgentTurn,
 } from "./turn-utils.js";
+import { completeAgentDecision } from "./complete-agent-decision.js";
 import type { AgentTurnExecutionInput } from "./agent-turn-executor.js";
 
 type Database = NodePgDatabase<typeof schema>;
@@ -77,7 +81,7 @@ export type TurnRunnerDependencies = {
 
 /**
  * 处理一个 Agent 轮次的全新决策路径：
- * 策略评估 → 上下文构建 → LLM 决策 → 执行动作（回复/转人工/工具调用/静默）
+ * 策略评估 → 上下文构建 → LLM 决策 → 统一决策后处理（decision-disposition）
  */
 export async function processAgentTurn(
   db: Database,
@@ -123,7 +127,6 @@ export async function processAgentTurn(
     .from(schema.conversations)
     .where(eq(schema.conversations.conversationId, turn.conversationId))
     .limit(1);
-  const conversationRevision = conversation?.revision ?? 0;
 
   // 检测会话类型：conversationId 以 @chatroom 结尾表示群聊
   const chatType = detectChatType(turn.conversationId);
@@ -181,14 +184,9 @@ export async function processAgentTurn(
 
     // Skill 提示：SkillRegistry 中每个注册 Skill 的 beforeKnowledge 输出
     // 作为不透明上下文注入，平台不解释其内容。
-    const skillHints = collectSkillHints(
-      dependencies.skillRegistry,
-      context.history,
+    const skillHintSection = skillHintBlock(
+      collectSkillHints(dependencies.skillRegistry, context.history),
     );
-    const skillHintSection =
-      skillHints.length > 0
-        ? `\n\n技能提示（由已安装的 Solution Skill 提供，可参考但不得向对方复述）：\n${skillHints.join("\n")}`
-        : "";
 
     // 调用 LLM 获取决策结果
     const modelResponse = await completeAgentDecision(
@@ -217,122 +215,18 @@ export async function processAgentTurn(
       },
     });
 
-    const gate = validateDecision(decision);
-    if (gate.action === "handoff") {
-      await commitAgentTurnHandoff(db, {
-        conversationId: turn.conversationId,
-        turnId: turn.turnId,
-        reason: gate.reasonCode,
-        briefing: buildHandoffBriefing({
-          sourceConversationRevision: conversationRevision,
-          handoffReason: `policy_gate: ${gate.reasonCode}`,
-          ...(decision.handoffBriefing
-            ? { modelBriefing: decision.handoffBriefing }
-            : {}),
-        }),
-      });
-      return;
-    }
-
-    // 构建工具计划：retrieve_knowledge 或 call_tool；工具名不在平台
-    // 工具目录中时视为校验失败，直接失败（不发送、不重试循环）。
-    let toolPlan = null;
-    if (decision.nextAction === "retrieve_knowledge") {
-      toolPlan = knowledgeToolPlan(turn.turnId, decision.knowledgeQuery ?? "");
-    } else if (decision.nextAction === "call_tool" && decision.tool) {
-      try {
-        toolPlan = getToolPlan(decision, turn.turnId);
-      } catch {
-        await commitAgentTurnFailure(db, {
-          conversationId: turn.conversationId,
-          turnId: turn.turnId,
-          errorCode: "invalid_tool_plan",
-          events: [
-            {
-              eventType: "validation_failed",
-              reasonCode: "invalid_tool_plan",
-            },
-          ],
-        });
-        return;
-      }
-    }
-
-    // 检查是否有更新的轮次（防止处理已被取代的旧消息）
-    if (await hasNewerAgentTurn(db, turn)) {
-      await commitAgentTurnSuperseded(db, {
-        conversationId: turn.conversationId,
-        turnId: turn.turnId,
-        reason: "newer_turn_exists",
-      });
-      return;
-    }
-
-    // 需要转人工的情况：模型判断需要人工介入或高风险或明确要求转人工
-    if (
-      !toolPlan &&
-      (decision.requiresHuman ||
-        decision.riskLevel === "high" ||
-        decision.nextAction === "handoff")
-    ) {
-      await commitAgentTurnHandoff(db, {
-        conversationId: turn.conversationId,
-        turnId: turn.turnId,
-        reason: "agent_recommended",
-        briefing: buildHandoffBriefing({
-          sourceConversationRevision: conversationRevision,
-          handoffReason: `agent_recommended: ${decision.riskLevel}`,
-          ...(decision.handoffBriefing
-            ? { modelBriefing: decision.handoffBriefing }
-            : {}),
-        }),
-      });
-      return;
-    }
-    // no_action：模型判断当前无需任何操作，静默处理（记录原因）
-    if (decision.nextAction === "no_action") {
-      await commitAgentTurnNoAction(db, {
-        conversationId: turn.conversationId,
-        turnId: turn.turnId,
-        reason: decision.noActionReason ?? "no_action",
-      });
-      return;
-    }
-
-    if (decision.replySegments.length > 0) {
-      try {
-        validateReplySegments(decision.replySegments);
-      } catch (error) {
-        const reasonCode =
-          error instanceof Error ? error.message : "reply_validation_failed";
-        await commitAgentTurnFailure(db, {
-          conversationId: turn.conversationId,
-          turnId: turn.turnId,
-          errorCode: "reply_validation_failed",
-          events: [{ eventType: "validation_failed", reasonCode }],
-        });
-        return;
-      }
-    }
-
-    if (toolPlan) {
-      await persistAgentToolCheckpoint(db, {
-        conversationId: turn.conversationId,
-        turnId: turn.turnId,
-        toolPlan,
-      });
-      return;
-    }
-    await commitAgentTurnOutcome(db, {
-      conversationId: turn.conversationId,
+    // 决策后处理：gate → superseded → 工具计划 → no_action → 校验 → 落库
+    await commitDecisionDisposition({
+      decision,
+      db,
       turnId: turn.turnId,
+      conversationId: turn.conversationId,
       traceId: job.traceId,
-      variant: "direct",
-      responseText: decision.replyText,
-      responseSegments: decision.replySegments,
+      path: "fresh",
+      triggerMessageId: turn.triggerMessageId,
+      conversationRevision: conversation?.revision ?? 0,
       model,
-      ...(aiEmployeeId ? { aiEmployeeId } : {}),
-      memoryWatermarkMessageId: `agent-message:${turn.turnId}:${String(decision.replySegments.length)}`,
+      aiEmployeeId,
     });
   } catch (error) {
     if (error instanceof AgentTurnTransitionNotApplied) throw error;
@@ -355,39 +249,27 @@ export async function processAgentTurn(
 
 /**
  * 处理已规划工具的轮次（工具检查点的恢复路径）：
- * 执行工具 → 基于工具结果生成最终回复 → 持久化消息
+ * 执行工具 → 基于工具结果重新决策 → 统一决策后处理（decision-disposition）
  */
 export async function processPlannedToolTurn(
   db: Database,
   client: TextModel,
   model: string,
-  turnId: string,
-  traceId: string,
-  knowledgeSearch?: KnowledgeSearch,
-  skillRegistry?: SkillRegistry,
-  strategyRegistry?: ExecutionStrategyRegistry,
-  preResolveAiEmployeePrompt?: (
-    contactId: string,
-    conversationId: string,
-    triggerText?: string | undefined,
-  ) => Promise<void>,
-  resolveAiEmployeeId?: (
-    contactId: string,
-    conversationId: string,
-  ) => Promise<string | null | undefined>,
+  job: AgentTurnExecutionInput,
+  dependencies: TurnRunnerDependencies,
 ): Promise<void> {
   // 查询待执行的工具计划（planned 或已成功但后续模型调用失败需要重试的）
   const executions = await db
     .select()
     .from(schema.toolExecutions)
-    .where(eq(schema.toolExecutions.turnId, turnId))
+    .where(eq(schema.toolExecutions.turnId, job.turnId))
     .limit(1);
   const execution = executions[0];
   if (!execution) {
-    const conversationId = await getAgentTurnConversationId(db, turnId);
+    const conversationId = await getAgentTurnConversationId(db, job.turnId);
     await commitAgentTurnFailure(db, {
       conversationId,
-      turnId,
+      turnId: job.turnId,
       errorCode: "tool_checkpoint_missing",
       handoffReason:
         "tool_checkpoint_missing: persisted tool plan is unavailable",
@@ -404,7 +286,7 @@ export async function processPlannedToolTurn(
     const errorCode = execution.errorCode ?? "tool_execution_failed";
     await commitAgentTurnFailure(db, {
       conversationId: execution.conversationId,
-      turnId,
+      turnId: job.turnId,
       errorCode,
       handoffReason: `tool_failure: ${errorCode}`,
     });
@@ -412,10 +294,10 @@ export async function processPlannedToolTurn(
   }
   // 执行工具计划（幂等：重复执行同一工具不会产生副作用）
   const toolResult = await executeToolPlan(db, execution.executionId, {
-    knowledgeSearch,
+    knowledgeSearch: dependencies.knowledgeSearch,
   });
   await recordAgentTurnEvent(db, {
-    turnId,
+    turnId: job.turnId,
     conversationId: execution.conversationId,
     eventType: "tool_completed",
     reasonCode:
@@ -437,7 +319,7 @@ export async function processPlannedToolTurn(
     const errorCode = toolResult.errorCode ?? "tool_failed";
     await commitAgentTurnFailure(db, {
       conversationId: execution.conversationId,
-      turnId,
+      turnId: job.turnId,
       errorCode,
       handoffReason: `tool_failure: ${errorCode}`,
     });
@@ -455,22 +337,20 @@ export async function processPlannedToolTurn(
       ? (toolResult.result.evidence as KnowledgeEvidence[])
       : [];
   // Skill 提示：注册 Skill 的 afterKnowledge 输出作为不透明上下文注入
-  const skillHints = collectSkillHintsAfterKnowledge(
-    skillRegistry,
-    evidenceList,
-    context.history,
+  const skillHintSection = skillHintBlock(
+    collectSkillHintsAfterKnowledge(
+      dependencies.skillRegistry,
+      evidenceList,
+      context.history,
+    ),
   );
-  const skillHintSection =
-    skillHints.length > 0
-      ? `\n\n技能提示（由已安装的 Solution Skill 提供，可参考但不得向对方复述）：\n${skillHints.join("\n")}`
-      : "";
 
   const turns = await db
     .select({
       executionProfileId: schema.agentTurns.executionProfileId,
     })
     .from(schema.agentTurns)
-    .where(eq(schema.agentTurns.turnId, turnId))
+    .where(eq(schema.agentTurns.turnId, job.turnId))
     .limit(1);
   const [conversation] = await db
     .select({ contactId: schema.conversations.contactId })
@@ -480,24 +360,40 @@ export async function processPlannedToolTurn(
   const strategy = await resolveExecutionStrategy(
     db,
     { executionProfileId: turns[0]?.executionProfileId ?? null },
-    strategyRegistry,
+    dependencies.strategyRegistry,
   );
 
   // AI 员工 Prompt 预解析（工具恢复路径）；触发文本取最近一条入站消息。
-  if (preResolveAiEmployeePrompt) {
-    await preResolveAiEmployeePrompt(
+  if (dependencies.preResolveAiEmployeePrompt) {
+    await dependencies.preResolveAiEmployeePrompt(
       conversation?.contactId ?? "",
       execution.conversationId,
       lastInboundText(context.history),
     );
   }
   // AI 员工身份（工具路径）：与主路径同语义，命中写入 actor_id
-  const aiEmployeeId = resolveAiEmployeeId
-    ? ((await resolveAiEmployeeId(
+  const aiEmployeeId = dependencies.resolveAiEmployeeId
+    ? ((await dependencies.resolveAiEmployeeId(
         conversation?.contactId ?? "",
         execution.conversationId,
       )) ?? null)
     : null;
+
+  // 工具步数预算（Phase 2 有界 ReAct）：按本 turn 已完成的工具执行数计算。
+  // 步数达到上限时提示词禁止再次调工具（与 disposition 预算判定一致）；
+  // 未达上限时允许模型继续规划 retrieve_knowledge / call_tool。
+  const completedToolSteps = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(schema.toolExecutions)
+    .where(
+      and(
+        eq(schema.toolExecutions.turnId, job.turnId),
+        inArray(schema.toolExecutions.status, ["succeeded", "planned"]),
+      ),
+    );
+  const toolStepsUsed = completedToolSteps[0]?.count ?? 1;
+  const toolStepBudget = MAX_TOOL_STEPS_PER_TURN;
+  const budgetExhausted = toolStepsUsed >= toolStepBudget;
 
   const strategySystem = strategy
     ? strategy.buildModelRequest({
@@ -515,7 +411,7 @@ export async function processPlannedToolTurn(
     [
       {
         role: "system",
-        content: `${strategySystem}${context.prompt}\n工具执行结果（可信事实）：${JSON.stringify(toolResult.result ?? {})}${skillHintSection}\n请基于工具结果生成自然语言或结构化最终决策；不得依据常识补全工具结果或声称执行了尚未执行的动作。next_action 必须为 reply、ask_for_information、handoff 或 no_action，不得再次调用工具。`,
+        content: `${strategySystem}${context.prompt}\n工具执行结果（可信事实）：${JSON.stringify(toolResult.result ?? {})}${skillHintSection}\n请基于工具结果生成自然语言或结构化最终决策；不得依据常识补全工具结果或声称执行了尚未执行的动作。next_action 必须为 reply、ask_for_information、handoff、no_action、wait 或 end_session${budgetExhausted ? "，不得再次调用工具（工具步数预算已耗尽）" : "；确有必要时可再次调用 retrieve_knowledge 或 call_tool 继续查证"}。`,
       },
       ...context.history,
     ],
@@ -524,72 +420,30 @@ export async function processPlannedToolTurn(
   const decision = strategy
     ? agentActionToDecision(strategy.parseModelResponse({ text: response }))
     : parseAgentDecision(response);
-  const gate = validateDecision(decision);
-  if (gate.action === "handoff") {
-    await commitAgentTurnHandoff(db, {
-      conversationId: execution.conversationId,
-      turnId,
-      reason: `policy_gate_after_tool: ${gate.reasonCode}`,
-    });
-    return;
-  }
-  // 防止工具链过长：一轮只允许一次工具调用
-  if (
-    decision.nextAction === "call_tool" ||
-    decision.nextAction === "retrieve_knowledge"
-  ) {
-    await commitAgentTurnFailure(db, {
-      conversationId: execution.conversationId,
-      turnId,
-      errorCode: "tool_chain_limit",
-      handoffReason: "tool_chain_limit: reached maximum steps for one turn",
-    });
-    return;
-  }
-  if (
-    decision.requiresHuman ||
-    decision.riskLevel === "high" ||
-    decision.nextAction === "handoff"
-  ) {
-    await commitAgentTurnHandoff(db, {
-      conversationId: execution.conversationId,
-      turnId,
-      reason: "agent_recommended_after_tool: insufficient safe resolution",
-    });
-    return;
-  }
-  if (decision.nextAction === "no_action") {
-    await commitAgentTurnNoAction(db, {
-      conversationId: execution.conversationId,
-      turnId,
-      reason: decision.noActionReason ?? "no_action",
-    });
-    return;
-  }
-  try {
-    validateReplySegments(decision.replySegments);
-  } catch (error) {
-    const reasonCode =
-      error instanceof Error ? error.message : "reply_validation_failed";
-    await commitAgentTurnFailure(db, {
-      conversationId: execution.conversationId,
-      turnId,
-      errorCode: "reply_validation_failed",
-      events: [{ eventType: "validation_failed", reasonCode }],
-    });
-    return;
-  }
-  await commitAgentTurnOutcome(db, {
+
+  // 决策后处理：gate → 工具步数预算 → no_action → 校验 → 落库
+  await commitDecisionDisposition({
+    decision,
+    db,
+    turnId: job.turnId,
     conversationId: execution.conversationId,
-    turnId,
-    traceId,
-    variant: "tool_result",
-    responseText: decision.replyText,
-    responseSegments: decision.replySegments,
+    traceId: job.traceId,
+    path: "tool_recovery",
+    conversationRevision: null,
     model,
-    ...(aiEmployeeId ? { aiEmployeeId } : {}),
-    memoryWatermarkMessageId: `agent-message:${turnId}:tool-result:${String(decision.replySegments.length)}`,
+    aiEmployeeId,
+    toolStepsUsed,
+    toolStepBudget,
   });
+}
+
+/**
+ * 将 Skill 提示列表包装为 system prompt 注入块；空列表返回空串。
+ */
+function skillHintBlock(skillHints: string[]): string {
+  return skillHints.length > 0
+    ? `\n\n技能提示（由已安装的 Solution Skill 提供，可参考但不得向对方复述）：\n${skillHints.join("\n")}`
+    : "";
 }
 
 /**

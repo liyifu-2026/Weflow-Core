@@ -9,6 +9,11 @@
  */
 
 import { z } from "zod";
+import {
+  NEXT_ACTION_VALUES,
+  NO_ACTION_REASONS,
+  WAIT_MS_RANGE,
+} from "./decision-contract.js";
 
 /** LLM 输出的原始 JSON Schema（snake_case 字段，与提示词对齐） */
 const decisionInputSchema = z
@@ -19,25 +24,8 @@ const decisionInputSchema = z
       .min(1)
       .max(3)
       .optional(),
-    next_action: z.enum([
-      "reply",
-      "ask_for_information",
-      "retrieve_knowledge",
-      "call_tool",
-      "handoff",
-      "no_action",
-    ]),
-    no_action_reason: z
-      .enum([
-        "message_not_actionable",
-        "waiting_for_user",
-        "duplicate_event",
-        "handoff_active",
-        "agent_disabled",
-        "superseded",
-        "policy_suppressed",
-      ])
-      .optional(),
+    next_action: z.enum(NEXT_ACTION_VALUES),
+    no_action_reason: z.enum(NO_ACTION_REASONS).optional(),
     requires_human: z.boolean(),
     risk_level: z.enum(["low", "medium", "high"]),
     handoff_briefing: z
@@ -55,6 +43,9 @@ const decisionInputSchema = z
         arguments: z.record(z.string(), z.string()).default({}),
       })
       .optional(),
+    wait_ms: z.number().int().min(WAIT_MS_RANGE.min).max(WAIT_MS_RANGE.max).optional(),
+    nudge_text: z.string().trim().min(1).max(500).optional(),
+    closure_summary: z.string().trim().min(1).max(1_000).optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -63,6 +54,8 @@ const decisionInputSchema = z
       "retrieve_knowledge",
       "handoff",
       "no_action",
+      "wait",
+      "end_session",
     ].includes(value.next_action);
     if (replyRequired && !value.reply_text && !value.reply_segments) {
       context.addIssue({
@@ -92,6 +85,20 @@ const decisionInputSchema = z
         message: "no_action_reason is required when no_action",
       });
     }
+    if (value.next_action === "wait" && !value.wait_ms) {
+      context.addIssue({
+        code: "custom",
+        path: ["wait_ms"],
+        message: "wait_ms is required when next_action is wait",
+      });
+    }
+    if (value.next_action === "end_session" && !value.closure_summary) {
+      context.addIssue({
+        code: "custom",
+        path: ["closure_summary"],
+        message: "closure_summary is required when next_action is end_session",
+      });
+    }
   });
 
 /** 将 LLM 输出的 snake_case 字段转换为内部 camelCase 格式 */
@@ -104,6 +111,9 @@ const decisionSchema = decisionInputSchema.transform((value) => ({
   riskLevel: value.risk_level,
   tool: value.tool,
   knowledgeQuery: value.knowledge_query,
+  waitMs: value.wait_ms,
+  nudgeText: value.nudge_text,
+  closureSummary: value.closure_summary,
   handoffBriefing: value.handoff_briefing
     ? {
         problemSummary: value.handoff_briefing.problem_summary,

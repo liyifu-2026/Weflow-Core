@@ -445,6 +445,44 @@ export const agentTurns = agentSchema.table(
   ],
 );
 
+/**
+ * 合并窗口登记（Phase 1 回合准入改造）：一会话一行，客户连发消息
+ * upsert 重置收窗（revision+1）；dispatcher 到期 CAS 认领后合并建
+ * 一个 Agent Turn。照 memory.capture_states 家法。
+ */
+export const turnAdmissionStates = agentSchema.table(
+  "turn_admission_states",
+  {
+    conversationId: varchar("conversation_id", { length: 300 })
+      .primaryKey()
+      .references(() => conversations.conversationId),
+    contactId: varchar("contact_id", { length: 600 })
+      .notNull()
+      .references(() => contactProfiles.contactId),
+    lastMessageId: varchar("last_message_id", { length: 600 })
+      .notNull()
+      .references(() => messages.messageId),
+    messageCount: integer("message_count").default(1).notNull(),
+    revision: integer("revision").default(1).notNull(),
+    status: varchar("status", { length: 30 }).default("scheduled").notNull(),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+    attempt: integer("attempt").default(0).notNull(),
+    errorCode: varchar("error_code", { length: 100 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("agent_turn_admission_status_schedule_idx").on(
+      table.status,
+      table.scheduledAt,
+    ),
+  ],
+);
+
 /** Agent 轮次的阶段轨迹；只记录可审计业务事实，不保存模型思维链。 */
 export const agentTurnEvents = agentSchema.table(
   "turn_events",
@@ -1056,8 +1094,35 @@ export const storedFiles = fileStorageSchema.table("files", {
 });
 
 export const memorySchema = pgSchema("memory");
-
 export const mediaSchema = pgSchema("media");
+
+/** 素材空间（平台级、业务中立的素材库；见 migrations/0066_asset_space.sql） */
+export const assetsSchema = pgSchema("assets");
+
+export const assetsItems = assetsSchema.table("items", {
+  /** 素材 ID（UUID） */
+  assetId: varchar("asset_id", { length: 36 }).primaryKey(),
+  /** 底层文件（file_storage.files；素材删除仅软删元数据，文件随其生命周期治理） */
+  fileId: varchar("file_id", { length: 36 })
+    .notNull()
+    .references(() => storedFiles.fileId),
+  /** 分类：'image' | 'file'（按上传 MIME 推导，与 media 模块 MIME_KIND 约定一致） */
+  category: varchar("category", { length: 20 }).notNull(),
+  /** 显示名（可整理改名） */
+  name: varchar("name", { length: 255 }).notNull(),
+  mimeType: varchar("mime_type", { length: 200 }).notNull(),
+  size: bigint("size", { mode: "number" }).notNull(),
+  checksum: varchar("checksum", { length: 64 }).notNull(),
+  createdByUserId: varchar("created_by_user_id", { length: 36 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  /** 软删除时间：列表默认过滤；物理文件随 storedFiles 生命周期统一治理 */
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+});
 
 export const mediaAssets = mediaSchema.table(
   "assets",
@@ -1085,6 +1150,10 @@ export const mediaAssets = mediaSchema.table(
     originalImageFileId: varchar("original_image_file_id", {
       length: 36,
     }).references(() => storedFiles.fileId),
+    /** 语音派生播放文件（SILK→MP3 转码产物）；未转码时为空，前端回退原文件 */
+    derivedFileId: varchar("derived_file_id", { length: 36 }).references(
+      () => storedFiles.fileId,
+    ),
     /** Host 返回的媒体变体：thumbnail=缩略图回退（可升级原图），original/NULL=终态 */
     sourceVariant: varchar("source_variant", { length: 16 }),
     /** 缩略图→原图升级已尝试次数 */
@@ -1384,6 +1453,8 @@ export const userSessions = identitySchema.table(
       .references(() => users.userId),
     tokenDigest: varchar("token_digest", { length: 64 }).notNull().unique(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** 会话级 TTL（毫秒）；NULL = 平台默认 12h。移动端登录写入长时效值 */
+    ttlMs: bigint("ttl_ms", { mode: "number" }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()

@@ -176,6 +176,92 @@ describe("agent decision contract", () => {
     ).toThrow("invalid agent decision");
   });
 
+  it("parses a wait decision with bounded wait_ms and optional nudge", () => {
+    const decision = parseAgentDecision(
+      JSON.stringify({
+        next_action: "wait",
+        wait_ms: 300_000,
+        nudge_text: "您先忙，有问题随时叫我",
+        requires_human: false,
+        risk_level: "low",
+      }),
+    );
+    expect(decision.nextAction).toBe("wait");
+    expect(decision.waitMs).toBe(300_000);
+    expect(decision.nudgeText).toBe("您先忙，有问题随时叫我");
+  });
+
+  it("rejects wait without wait_ms or with out-of-range wait_ms", () => {
+    expect(() =>
+      parseAgentDecision(
+        JSON.stringify({
+          next_action: "wait",
+          requires_human: false,
+          risk_level: "low",
+        }),
+      ),
+    ).toThrow("invalid agent decision");
+    expect(() =>
+      parseAgentDecision(
+        JSON.stringify({
+          next_action: "wait",
+          wait_ms: 0,
+          requires_human: false,
+          risk_level: "low",
+        }),
+      ),
+    ).toThrow("invalid agent decision");
+    expect(() =>
+      parseAgentDecision(
+        JSON.stringify({
+          next_action: "wait",
+          wait_ms: 10_000_000,
+          requires_human: false,
+          risk_level: "low",
+        }),
+      ),
+    ).toThrow("invalid agent decision");
+  });
+
+  it("parses an end_session decision with closure summary", () => {
+    const decision = parseAgentDecision(
+      JSON.stringify({
+        next_action: "end_session",
+        closure_summary: "退款问题已解答，客户确认等待到账",
+        requires_human: false,
+        risk_level: "low",
+      }),
+    );
+    expect(decision.nextAction).toBe("end_session");
+    expect(decision.closureSummary).toBe("退款问题已解答，客户确认等待到账");
+  });
+
+  it("requires closure_summary when end_session", () => {
+    expect(() =>
+      parseAgentDecision(
+        JSON.stringify({
+          next_action: "end_session",
+          requires_human: false,
+          risk_level: "low",
+        }),
+      ),
+    ).toThrow("invalid agent decision");
+  });
+
+  it("accepts noise/listening as no_action reasons", () => {
+    for (const reason of ["noise", "listening"]) {
+      const decision = parseAgentDecision(
+        JSON.stringify({
+          next_action: "no_action",
+          no_action_reason: reason,
+          requires_human: false,
+          risk_level: "low",
+        }),
+      );
+      expect(decision.noActionReason).toBe(reason);
+    }
+  });
+
   it("rejects unknown output fields with the strict schema", () => {
     expect(() =>
       parseAgentDecision(

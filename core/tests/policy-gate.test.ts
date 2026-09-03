@@ -17,6 +17,9 @@ function decision(overrides: Partial<AgentDecision> = {}): AgentDecision {
     handoffBriefing: undefined,
     knowledgeQuery: undefined,
     tool: undefined,
+    waitMs: undefined,
+    nudgeText: undefined,
+    closureSummary: undefined,
     ...overrides,
   };
 }

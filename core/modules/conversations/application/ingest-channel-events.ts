@@ -5,7 +5,7 @@
  * Agent Turn 触发和人工接管通知等逻辑。
  */
 
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, ne, sql, asc } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
@@ -14,6 +14,7 @@ import { createLogger } from "../../../infrastructure/observability/logger.js";
 import type { ChannelEvent } from "../../channel/contracts/channel-event-source.js";
 import { contactIdForChannel } from "../../contacts/application/contact-profile-service.js";
 import { scheduleMemoryCaptureInTransaction } from "../../memory/application/schedule-memory-capture.js";
+import { scheduleTurnAdmissionInTransaction } from "./turn-admission.js";
 import { enqueueAssigneeInboundNotification } from "../../notifications/application/notification-outbox.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
 import { createHandoff } from "../../handoff/application/handoff-service.js";
@@ -22,11 +23,36 @@ import { resolveExecutionProfileForAdmission } from "../../agent/application/exe
 import {
   DEFAULT_GROUP_CHAT_POLICY,
   shouldRespondToGroupMessage,
+  type ResolvedGroupChatPolicy,
 } from "../../agent/application/group-chat-policy.js";
+import { gt } from "drizzle-orm";
 
 const CHANNEL_SOURCE = "channel-host";
 /** 平台通道标识：用于会话/联系人/消息 ID 前缀与 channel 列（通道无关） */
 const CHANNEL_KIND = "channel";
+
+/**
+ * 出站自回声融合（echo fusion）窗口：本地 manual reply 先落库（occurredAt
+ * 为业务时间），微信 GUI 发送成功后微信 DB 才出现自消息行，Host 捕获为
+ * isSelf 回声事件回流。GUI 发送耗时通常 < 30s，放宽到 10 分钟容忍
+ * 微信 DB 异步落库与 Host 轮询周期；超窗或找不到候选则按既有行为插入
+ * 独立回声行（永不丢消息）。
+ */
+const OUTBOUND_ECHO_FUSION_WINDOW_MS = 10 * 60_000;
+
+/** 群聊策略依赖：由组合根注入（扩展设置读取器），未注入 = 平台默认策略 */
+export type GroupChatDeps = {
+  resolvePolicy: (
+    conversationRef: string,
+  ) => Promise<ResolvedGroupChatPolicy>;
+};
+
+/** 平台默认群聊策略（仅@；无冷却）——未配置/读取失败时的统一回落 */
+const DEFAULT_GROUP_CHAT_POLICY_RESOLVED: ResolvedGroupChatPolicy = {
+  policy: DEFAULT_GROUP_CHAT_POLICY,
+  cooldown: { minutes: 0, maxReplies: 2 },
+  off: false,
+};
 
 const DEFAULT_LOGGER = createLogger(
   { logLevel: "silent" },
@@ -57,6 +83,7 @@ export async function ingestChannelEvents(
   events: ChannelEvent[],
   nextCursor: string,
   logger: Logger = DEFAULT_LOGGER,
+  groupChatDeps?: GroupChatDeps,
 ): Promise<void> {
   const numericCursor = Number(nextCursor);
   if (!Number.isSafeInteger(numericCursor) || numericCursor < 0) {
@@ -68,6 +95,7 @@ export async function ingestChannelEvents(
     numericCursor,
     CHANNEL_SOURCE,
     logger,
+    groupChatDeps,
   );
 }
 
@@ -99,6 +127,7 @@ async function ingestNormalizedEvents(
   nextCursor: number,
   source: string,
   logger: Logger,
+  groupChatDeps?: GroupChatDeps,
 ): Promise<void> {
   const deferredGlobalPause: { conversationId: string; messageId: string }[] =
     [];
@@ -186,6 +215,34 @@ async function ingestNormalizedEvents(
           : event.isSelf === false
             ? "inbound"
             : "unknown";
+
+      // 出站自回声融合：manual reply 媒体消息（ct=media）发送成功后，微信
+      // DB 的自消息行会被 Host 捕获为 isSelf image/file 事件回流。若本次
+      // 事件能唯一匹配到同会话内仍待确认的 media 行（kind 相同、时间窗内、
+      // 尚无 channelMessageId），则不插入重复回声行——改为把该行升级为
+      // confirmed 并回填 channelMessageId（前端单气泡、可渲染媒体）。
+      // 仅回声行没有 mediaAssets（媒体文件在本机），因此融合是展示层唯一
+      // 正确解；匹配不到时按既有行为插入独立行（永不丢消息）。
+      if (direction === "outbound") {
+        const fused = await fuseOutboundSelfEcho(
+          transaction,
+          conversationId,
+          event,
+          new Date(event.occurredAt * 1000),
+        );
+        if (fused) {
+          // 融合成功：manual 行升级 confirmed，通知前端刷新（SSE 订阅按
+          // conversationId 过滤；web/mobile 收到 agent_message 后重拉转录）。
+          conversationEvents.publish({
+            type: "agent_message",
+            conversationId,
+            messageId: event.eventId,
+            occurredAt: new Date().toISOString(),
+          });
+          continue;
+        }
+      }
+
       const insertedMessages = await transaction
         .insert(schema.messages)
         .values({
@@ -287,6 +344,27 @@ async function ingestNormalizedEvents(
             })
             .onConflictDoNothing();
         }
+        // 出站自回声融合失败时的独立回声行（保底可见）：同样建 mediaAssets，
+        // 前端才能按图片/文件卡片渲染（sync-channel-media 经 mediaRef 下载
+        // 缩略图/文件）；file 事件的 fileName/mimeType 由 Host 上报、
+        // sync-channel-media 落 stored_files.original_name。
+        else if (
+          direction === "outbound" &&
+          (event.kind === "image" || event.kind === "file" || event.kind === "video")
+        ) {
+          await transaction
+            .insert(schema.mediaAssets)
+            .values({
+              mediaId: mediaIdForEvent(event.eventId),
+              messageId: insertedMessageId,
+              conversationId,
+              sourceConversationId: event.conversationId,
+              sourceLocalId: event.sourceLocalId,
+              sourceMediaRef: event.sourceMediaRef,
+              kind: event.kind,
+            })
+            .onConflictDoNothing();
+        }
         // 记忆捕获属于 AI 服务（提取调用模型）：非白名单（agentEnabled=false）
         // 客户只入库展示，不触发任何 AI 动作（无回复、无记忆提取、无昵称查询）。
         if (agentEnabled) {
@@ -308,32 +386,74 @@ async function ingestNormalizedEvents(
         !event.historical &&
         !agentPaused &&
         agentEnabled &&
-        settings.agentEnabled &&
-        // 群聊响应策略（ADR-0006）：默认仅被 @ 时回复，避免群内刷屏
-        shouldAcceptForAgentTurn(event)
+        settings.agentEnabled
       ) {
-        const messageId = insertedMessageId;
-        if (!messageId) {
-          throw new Error("inserted inbound message did not return an id");
+        // 群聊响应策略（ADR-0006）：由 Solution 扩展设置解析（群 override >
+        // 全局 > 默认仅@）；未配置/读取失败时与既有行为逐字节一致。私聊恒通过。
+        const groupPolicy = groupChatDeps
+          ? await groupChatDeps.resolvePolicy(event.conversationId).catch(
+              () => DEFAULT_GROUP_CHAT_POLICY_RESOLVED,
+            )
+          : DEFAULT_GROUP_CHAT_POLICY_RESOLVED;
+        if (shouldAcceptForAgentTurn(event, groupPolicy)) {
+          const messageId = insertedMessageId;
+          if (!messageId) {
+            throw new Error("inserted inbound message did not return an id");
+          }
+          // 群聊冷却护栏：窗口内该群最多 N 条 AI 回复（DB 计数，跨实例准确）
+          if (
+            await groupChatCooldownBlocks(transaction, conversationId, groupPolicy)
+          ) {
+            continue;
+          }
+          const admission =
+            await resolveExecutionProfileForAdmission(transaction);
+          if (!admission.allowed) {
+            // Phase 7: no active Execution Profile -> no new Agent Turn.
+            // The refusal is intentionally not persisted as a Turn.
+            continue;
+          }
+          // 合并窗口（Phase 1）：ON 时消息先进窗（同会话 upsert 重置收窗、
+          // revision+1），由 processTurnAdmissions 到期合并建 Turn；
+          // OFF 时走原路径逐条建 Turn（v1 行为逐字节一致）。两条路径共享
+          // 上面全部既有护栏（Handoff 暂停/白名单/群策略/冷却/Profile）。
+          if (settings.mergeWindowEnabled) {
+            const [existingAdmission] = await transaction
+              .select({
+                revision: schema.turnAdmissionStates.revision,
+                messageCount: schema.turnAdmissionStates.messageCount,
+              })
+              .from(schema.turnAdmissionStates)
+              .where(
+                eq(schema.turnAdmissionStates.conversationId, conversationId),
+              )
+              .limit(1);
+            await scheduleTurnAdmissionInTransaction(
+              transaction as never,
+              {
+                conversationId,
+                contactId,
+                messageId,
+                text: event.content,
+                now: new Date(),
+                existingRevision: existingAdmission?.revision,
+                existingCount: existingAdmission?.messageCount,
+              },
+            );
+            continue;
+          }
+          await transaction
+            .insert(schema.agentTurns)
+            .values({
+              turnId: `turn:${messageId}`,
+              triggerMessageId: messageId,
+              conversationId,
+              status: "queued",
+              executionProfileId: admission.profile.profileId,
+              traceId: `${source}-event:${event.eventId}`,
+            })
+            .onConflictDoNothing();
         }
-        const admission =
-          await resolveExecutionProfileForAdmission(transaction);
-        if (!admission.allowed) {
-          // Phase 7: no active Execution Profile -> no new Agent Turn.
-          // The refusal is intentionally not persisted as a Turn.
-          continue;
-        }
-        await transaction
-          .insert(schema.agentTurns)
-          .values({
-            turnId: `turn:${messageId}`,
-            triggerMessageId: messageId,
-            conversationId,
-            status: "queued",
-            executionProfileId: admission.profile.profileId,
-            traceId: `${source}-event:${event.eventId}`,
-          })
-          .onConflictDoNothing();
       }
       // 全局 Agent 关闭：消息照常入库，但任何客户消息不得无人处理——
       // 事务提交后幂等进入人工路径（事务内调 createHandoff 会因
@@ -457,6 +577,94 @@ export function normalizeAccount(account: string | null | undefined): string {
   return trimmed && trimmed.length > 0 ? trimmed : "default";
 }
 
+/**
+ * 出站自回声融合（见 OUTBOUND_ECHO_FUSION_WINDOW_MS 注释）。
+ *
+ * 匹配条件（全部满足才融合）：
+ * 1. 同会话 + contentType="media" + actorType="user"（manual reply 媒体行）
+ * 2. 尚未回填 channelMessageId（未与任何回声绑定过）
+ * 3. 事件 kind 与 mediaAssets.kind 同类（image↔image / file↔file）
+ * 4. manual 行 occurredAt 在事件时间回望窗口内（先进先出取最早）
+ *
+ * 更新为原子 compare-and-set（WHERE 带全部守卫条件），并发事件流下
+ * 两个同类回声不会绑定同一行；抢锁失败的回声按既有行为插入独立行。
+ * 与文本发送的去重机制对齐：文本回声靠 channel_message 唯一约束被
+ * onConflictDoNothing 静默跳过；媒体行此前 channelMessageId 为空而漏防。
+ */
+async function fuseOutboundSelfEcho(
+  transaction: Parameters<
+    NodePgDatabase<typeof schema>["transaction"]
+  >[0] extends (tx: infer T) => Promise<unknown>
+    ? T
+    : never,
+  conversationId: string,
+  event: NormalizedChannelEvent,
+  occurredAt: Date,
+): Promise<boolean> {
+  // 微信自回声只有 image/file/voice/video 才有独立 kind；文本回声已被
+  // channel_message 唯一约束去重，不进入本函数（direction=outbound 且
+  // kind=text 时直接放行走既有插入路径——唯一约束保证幂等）。
+  if (
+    (event.kind !== "image" &&
+      event.kind !== "file" &&
+      event.kind !== "voice" &&
+      event.kind !== "video") ||
+    !event.channelMessageId
+  ) {
+    return false;
+  }
+  const windowStart = new Date(
+    occurredAt.getTime() - OUTBOUND_ECHO_FUSION_WINDOW_MS,
+  );
+  const candidates = await transaction
+    .select({ messageId: schema.messages.messageId })
+    .from(schema.messages)
+    .innerJoin(
+      schema.mediaAssets,
+      eq(schema.mediaAssets.messageId, schema.messages.messageId),
+    )
+    .where(
+      and(
+        eq(schema.messages.conversationId, conversationId),
+        eq(schema.messages.contentType, "media"),
+        eq(schema.messages.actorType, "user"),
+        isNull(schema.messages.channelMessageId),
+        eq(schema.mediaAssets.kind, event.kind),
+        gte(schema.messages.occurredAt, windowStart),
+        lte(schema.messages.occurredAt, occurredAt),
+        // sendState 非 failed：failed 是终态，不应被迟到的回声"复活"
+        ne(schema.messages.sendState, "failed"),
+        inArray(schema.messages.sendState, [
+          "pending",
+          "submitting",
+          "unknown",
+          "confirmed",
+        ]),
+      ),
+    )
+    .orderBy(asc(schema.messages.occurredAt), asc(schema.messages.messageId))
+    .limit(1);
+  const candidate = candidates[0];
+  if (!candidate) return false;
+  const updated = await transaction
+    .update(schema.messages)
+    .set({
+      channelMessageId: event.channelMessageId,
+      sendState: "confirmed",
+      sendError: null,
+      sendUpdatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(schema.messages.messageId, candidate.messageId),
+        // 原子守卫：并发流中仅第一个回声能绑定
+        isNull(schema.messages.channelMessageId),
+      ),
+    )
+    .returning({ messageId: schema.messages.messageId });
+  return updated.length > 0;
+}
+
 /** 基于事件ID生成确定性媒体资源ID */
 function mediaIdForEvent(eventId: string): string {
   return `media:${createHash("sha256").update(eventId).digest("hex")}`;
@@ -465,13 +673,56 @@ function mediaIdForEvent(eventId: string): string {
 /**
  * 群聊消息是否进入 Agent Turn（ADR-0006）。
  * 群会话（conversationRef 以 @chatroom 结尾）应用群聊响应策略；
- * 私聊始终接受。策略默认仅被 @ 时回复，可经 Solution 配置覆盖。
+ * 私聊始终接受。策略由 Solution 扩展设置解析（群 override > 全局 >
+ * 默认仅@）；未提供 deps 时使用平台默认策略，与既有行为一致。
  */
-function shouldAcceptForAgentTurn(event: NormalizedChannelEvent): boolean {
+function shouldAcceptForAgentTurn(
+  event: NormalizedChannelEvent,
+  resolved: ResolvedGroupChatPolicy,
+): boolean {
   const isGroup = event.conversationId.endsWith("@chatroom");
   if (!isGroup) return true;
-  return shouldRespondToGroupMessage(DEFAULT_GROUP_CHAT_POLICY, {
+  // off 模式：该群完全静默
+  if (resolved.off) return false;
+  return shouldRespondToGroupMessage(resolved.policy, {
     text: event.content,
     mentioned: event.mentioned === true,
   });
+}
+
+/**
+ * 群聊冷却护栏：冷却窗口内该群的 AI 回复数达到上限时跳过本轮 Turn。
+ * 按 agent 出站消息计数（DB 查询，跨重启/多实例准确）；仅群聊且
+ * cooldown.minutes > 0 时生效，私聊恒放行。查询失败 fail-open 放行
+ * （宁可多发不漏发）。
+ */
+async function groupChatCooldownBlocks(
+  transaction: Parameters<
+    NodePgDatabase<typeof schema>["transaction"]
+  >[0] extends (tx: infer T) => Promise<unknown>
+    ? T
+    : never,
+  conversationId: string,
+  resolved: ResolvedGroupChatPolicy,
+): Promise<boolean> {
+  if (!conversationId.endsWith("@chatroom")) return false;
+  const { minutes, maxReplies } = resolved.cooldown;
+  if (minutes <= 0) return false;
+  try {
+    const since = new Date(Date.now() - minutes * 60_000);
+    const rows = await transaction
+      .select({ value: sql<number>`count(*)` })
+      .from(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.conversationId, conversationId),
+          eq(schema.messages.actorType, "agent"),
+          gt(schema.messages.occurredAt, since),
+        ),
+      );
+    return Number(rows[0]?.value ?? 0) >= maxReplies;
+  } catch {
+    // 查询失败 fail-open：放行本轮（宁可多发不漏发）
+    return false;
+  }
 }

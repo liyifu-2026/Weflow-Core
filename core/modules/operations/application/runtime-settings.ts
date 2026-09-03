@@ -34,6 +34,8 @@ export type RuntimeSettings = {
   knowledgeEnabled: boolean;
   memoryEnabled: boolean;
   visionEnabled: boolean;
+  /** 合并窗口：ON 时入站消息先进窗合并、到期才建 Agent Turn（Phase 1） */
+  mergeWindowEnabled: boolean;
   textModel: (typeof TEXT_MODEL_ALLOWLIST)[number];
   visionModel: (typeof VISION_MODEL_ALLOWLIST)[number];
 };
@@ -45,6 +47,7 @@ export const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   knowledgeEnabled: true,
   memoryEnabled: true,
   visionEnabled: true,
+  mergeWindowEnabled: false,
   textModel: "deepseek-v4-flash",
   visionModel: "mimo-v2.5",
 };
@@ -56,6 +59,7 @@ const FIELD_TO_KEY: Record<keyof RuntimeSettings, string> = {
   knowledgeEnabled: "knowledge_enabled",
   memoryEnabled: "memory_enabled",
   visionEnabled: "vision_enabled",
+  mergeWindowEnabled: "merge_window_enabled",
   textModel: "text_model",
   visionModel: "vision_model",
 };
@@ -73,6 +77,7 @@ const BOOLEAN_FIELDS = new Set<keyof RuntimeSettings>([
   "knowledgeEnabled",
   "memoryEnabled",
   "visionEnabled",
+  "mergeWindowEnabled",
 ]);
 
 /** 普通配置缓存（安全关键路径一律 fresh 读，不经过此缓存） */
