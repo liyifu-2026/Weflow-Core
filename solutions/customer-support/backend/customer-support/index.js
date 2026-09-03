@@ -454,4 +454,110 @@ export async function registerRoutes(server, ctx) {
       return { ok: true };
     },
   );
+
+  // ── 会话模式可视化（Phase 3/4 只读投影）──────────────────────────
+  // 会话状态（session episode）：接待中/等待/已收尾 + 预算计数
+  server.get(
+    "/api/v1/agent/session-state/:conversationId",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      const conversationId = String(request.params?.conversationId ?? "");
+      const [session] = await db
+        .select({
+          sessionId: schema.agentSessions.sessionId,
+          state: schema.agentSessions.state,
+          roundsUsed: schema.agentSessions.roundsUsed,
+          roundBudget: schema.agentSessions.roundBudget,
+          startedAt: schema.agentSessions.startedAt,
+          closedAt: schema.agentSessions.closedAt,
+          closureSummary: schema.agentSessions.closureSummary,
+        })
+        .from(schema.agentSessions)
+        .where(eq(schema.agentSessions.conversationId, conversationId))
+        .orderBy(desc(schema.agentSessions.startedAt))
+        .limit(1);
+      return { session: session ?? null };
+    },
+  );
+
+  // 决策轨迹：turn_events 的可读投影（不含模型思维链）
+  server.get(
+    "/api/v1/agent/decision-trace/:turnId",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      const turnId = String(request.params?.turnId ?? "");
+      const events = await db
+        .select({
+          eventType: schema.agentTurnEvents.eventType,
+          reasonCode: schema.agentTurnEvents.reasonCode,
+          payload: schema.agentTurnEvents.payload,
+          createdAt: schema.agentTurnEvents.createdAt,
+        })
+        .from(schema.agentTurnEvents)
+        .where(eq(schema.agentTurnEvents.turnId, turnId))
+        .orderBy(schema.agentTurnEvents.createdAt);
+      const [turn] = await db
+        .select({
+          turnId: schema.agentTurns.turnId,
+          status: schema.agentTurns.status,
+          model: schema.agentTurns.model,
+          responseSegments: schema.agentTurns.responseSegments,
+          traceId: schema.agentTurns.traceId,
+          startedAt: schema.agentTurns.startedAt,
+          completedAt: schema.agentTurns.completedAt,
+        })
+        .from(schema.agentTurns)
+        .where(eq(schema.agentTurns.turnId, turnId))
+        .limit(1);
+      return { turn: turn ?? null, events };
+    },
+  );
+
+  // 会话级唤醒计划（wait 时间线节点的数据源）
+  server.get(
+    "/api/v1/agent/session-wakes/:conversationId",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      const conversationId = String(request.params?.conversationId ?? "");
+      const wakes = await db
+        .select({
+          wakeId: schema.sessionWakes.wakeId,
+          turnId: schema.sessionWakes.turnId,
+          kind: schema.sessionWakes.kind,
+          status: schema.sessionWakes.status,
+          wakeAt: schema.sessionWakes.wakeAt,
+          nudgeText: schema.sessionWakes.nudgeText,
+        })
+        .from(schema.sessionWakes)
+        .where(eq(schema.sessionWakes.conversationId, conversationId))
+        .orderBy(desc(schema.sessionWakes.wakeAt))
+        .limit(20);
+      return { wakes };
+    },
+  );
+
+  // 媒体备注（AI 看图结论，运营可读；修正 API 后续再加）
+  server.get(
+    "/api/v1/agent/media-note/:messageId",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      const messageId = String(request.params?.messageId ?? "");
+      const [asset] = await db
+        .select({
+          mediaId: schema.mediaAssets.mediaId,
+          description: schema.mediaAssets.description,
+          descriptionModel: schema.mediaAssets.descriptionModel,
+          status: schema.mediaAssets.status,
+          kind: schema.mediaAssets.kind,
+        })
+        .from(schema.mediaAssets)
+        .where(eq(schema.mediaAssets.messageId, messageId))
+        .limit(1);
+      return { media: asset ?? null };
+    },
+  );
 }

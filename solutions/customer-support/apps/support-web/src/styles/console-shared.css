@@ -1347,10 +1347,17 @@ button {
 .wf-bubble-row.me.unknown .wf-bubble {
   border-color: color-mix(in srgb, var(--wf-danger) 70%, transparent);
 }
-/* 图片气泡：贴边，不套大 padding */
+/* 图片消息：裸渲染（无气泡底/边框/padding），贴近微信图片形态 */
 .wf-bubble.media {
-  padding: 3px;
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
   max-width: 300px;
+  overflow: visible;
+}
+.wf-bubble-row.me .wf-bubble.media {
+  background: transparent;
+  border-color: transparent;
 }
 .wf-bubble.media :deep(.wf-media-message) {
   display: block;
@@ -1360,6 +1367,20 @@ button {
   border-radius: 10px;
   max-width: 300px;
   max-height: 300px;
+}
+/* 文件消息：裸渲染，MediaFile 卡片自带边框（微信文件卡片形态） */
+.wf-bubble.file {
+  padding: 0;
+  background: transparent;
+  border-color: transparent;
+  max-width: 260px;
+}
+.wf-bubble-row.me .wf-bubble.file {
+  background: transparent;
+  border-color: transparent;
+}
+.wf-bubble.file :deep(.wf-file-card) {
+  border-color: var(--wf-border);
 }
 /* 语音消息：外层气泡透明化，由 VoiceMessage 自带微信式气泡 */
 .wf-bubble.voice {

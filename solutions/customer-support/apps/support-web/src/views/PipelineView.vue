@@ -39,10 +39,33 @@ type EmployeeRoute = {
   employeeKey: string;
 };
 
+type GroupChatMode =
+  | "mention_only"
+  | "mention_or_keyword"
+  | "accept_all"
+  | "off";
+
+type GroupOverride = {
+  conversationRef: string;
+  mode: GroupChatMode;
+  keywords: string[];
+};
+
+type GroupChatConfig = {
+  mode: GroupChatMode;
+  keywords: string[];
+  cooldownMinutes: number;
+  maxRepliesPerCooldown: number;
+  probability: number;
+  extraInstruction: string;
+  groupOverrides: GroupOverride[];
+};
+
 type PipelinePlan = {
   triage: TriageConfig;
   defaultEmployeeKey: string | null;
   employeeRoutes: EmployeeRoute[];
+  groupChat: GroupChatConfig;
 };
 
 const DEFAULT_TRIAGE: TriageConfig = {
@@ -53,11 +76,33 @@ const DEFAULT_TRIAGE: TriageConfig = {
   allowDirectReply: false,
 };
 
+const DEFAULT_GROUP_CHAT: GroupChatConfig = {
+  mode: "mention_only",
+  keywords: [],
+  cooldownMinutes: 0,
+  maxRepliesPerCooldown: 2,
+  probability: 0,
+  extraInstruction: "",
+  groupOverrides: [],
+};
+
+const GROUP_MODE_OPTIONS: Array<{
+  value: GroupChatMode;
+  label: string;
+  hint: string;
+}> = [
+  { value: "mention_only", label: "仅被 @ 时回复", hint: "最保守，免打扰友好" },
+  { value: "mention_or_keyword", label: "@ 或关键词", hint: "可控，推荐" },
+  { value: "accept_all", label: "全部响应", hint: "易刷屏，需配合概率/冷却" },
+  { value: "off", label: "关闭（全群静默）", hint: "所有群不响应" },
+];
+
 const SETTINGS_URL =
   "/api/v1/admin/solutions/weflow.customer-support/extensions/support-pipeline/settings";
 
 type PlanNode =
   | "triage"
+  | "group"
   | "human"
   | "fast"
   | "standard"
@@ -78,6 +123,26 @@ const employees = ref<AiEmployee[]>([]);
 const workspaceDefaultId = ref<string | null>(null);
 const openNode = ref<PlanNode | null>(null);
 const keywordsText = ref("");
+/** 可选的群列表（来自联系人接口，@chatroom 行）——用于群覆盖选择器 */
+const chatGroups = ref<
+  Array<{
+    contactId: string;
+    channelDisplayName: string | null;
+    channelNickname: string | null;
+    channelRemark: string | null;
+    sharedAlias: string | null;
+  }>
+>([]);
+/** 群聊触发模式中文标签 */
+const GROUP_MODE_LABELS: Record<GroupChatMode, string> = {
+  mention_only: "仅被 @ 时回复",
+  mention_or_keyword: "@ 或关键词",
+  accept_all: "全部响应",
+  off: "全群静默",
+};
+const groupModeLabel = computed(
+  () => GROUP_MODE_LABELS[plan.value.groupChat.mode] ?? "仅被 @ 时回复",
+);
 
 const router = useRouter();
 
@@ -86,6 +151,7 @@ function cloneDefaults(): PipelinePlan {
     triage: { ...DEFAULT_TRIAGE, riskKeywords: [] },
     defaultEmployeeKey: null,
     employeeRoutes: [],
+    groupChat: JSON.parse(JSON.stringify(DEFAULT_GROUP_CHAT)) as GroupChatConfig,
   };
 }
 
@@ -120,7 +186,7 @@ async function loadAll() {
   loading.value = true;
   error.value = "";
   try {
-    const [settings, models, employeeResult, workspaceDefault] =
+    const [settings, models, employeeResult, workspaceDefault, contactRows] =
       await Promise.all([
         api<{ settings: unknown }>(SETTINGS_URL),
         api<{
@@ -132,7 +198,16 @@ async function loadAll() {
         }>("/api/v1/admin/model-settings").catch(() => undefined),
         listAiEmployees().catch(() => undefined),
         getWorkspaceAgentDefault().catch(() => undefined),
+        // 群列表（群聊覆盖选择器）：contact 行 @chatroom 即群
+        api<{ contacts: Array<{ contactId: string; channelDisplayName: string | null; channelNickname: string | null; channelRemark: string | null; sharedAlias: string | null }> }>(
+          "/api/v1/contacts?limit=100",
+        ).catch(() => undefined),
       ]);
+    if (contactRows) {
+      chatGroups.value = (contactRows.contacts ?? []).filter(
+        (row) => row.contactId.includes("@chatroom") || row.contactId.endsWith("@chatroom"),
+      );
+    }
     rawSettings.value =
       typeof settings.settings === "object" && settings.settings !== null
         ? { ...(settings.settings as Record<string, unknown>) }
@@ -168,6 +243,21 @@ function applyPipeline(raw: unknown) {
       : {};
   const routes = Array.isArray(source.employeeRoutes)
     ? source.employeeRoutes
+    : [];
+  const groupSource =
+    typeof source.groupChat === "object" && source.groupChat !== null
+      ? (source.groupChat as Record<string, unknown>)
+      : {};
+  const groupMode = groupSource.mode;
+  const groupModeValue: GroupChatMode =
+    groupMode === "mention_only" ||
+    groupMode === "mention_or_keyword" ||
+    groupMode === "accept_all" ||
+    groupMode === "off"
+      ? groupMode
+      : DEFAULT_GROUP_CHAT.mode;
+  const overridesRaw = Array.isArray(groupSource.groupOverrides)
+    ? groupSource.groupOverrides
     : [];
   plan.value = {
     triage: {
@@ -217,6 +307,64 @@ function applyPipeline(raw: unknown) {
         },
       ];
     }),
+    groupChat: {
+      mode: groupModeValue,
+      keywords: Array.isArray(groupSource.keywords)
+        ? groupSource.keywords.filter(
+            (word): word is string => typeof word === "string" && word.trim() !== "",
+          )
+        : [],
+      cooldownMinutes:
+        typeof groupSource.cooldownMinutes === "number" &&
+        Number.isFinite(groupSource.cooldownMinutes) &&
+        groupSource.cooldownMinutes >= 0 &&
+        groupSource.cooldownMinutes <= 240
+          ? Math.round(groupSource.cooldownMinutes)
+          : DEFAULT_GROUP_CHAT.cooldownMinutes,
+      maxRepliesPerCooldown:
+        typeof groupSource.maxRepliesPerCooldown === "number" &&
+        Number.isFinite(groupSource.maxRepliesPerCooldown) &&
+        groupSource.maxRepliesPerCooldown >= 1 &&
+        groupSource.maxRepliesPerCooldown <= 100
+          ? Math.round(groupSource.maxRepliesPerCooldown)
+          : DEFAULT_GROUP_CHAT.maxRepliesPerCooldown,
+      probability:
+        typeof groupSource.probability === "number" &&
+        Number.isFinite(groupSource.probability) &&
+        groupSource.probability >= 0 &&
+        groupSource.probability <= 1
+          ? groupSource.probability
+          : DEFAULT_GROUP_CHAT.probability,
+      extraInstruction:
+        typeof groupSource.extraInstruction === "string"
+          ? groupSource.extraInstruction
+          : DEFAULT_GROUP_CHAT.extraInstruction,
+      groupOverrides: overridesRaw.flatMap((item) => {
+        if (typeof item !== "object" || item === null) return [];
+        const o = item as Record<string, unknown>;
+        const ref = typeof o.conversationRef === "string" ? o.conversationRef.trim() : "";
+        const mode = o.mode;
+        const modeValue: GroupChatMode | null =
+          mode === "mention_only" ||
+          mode === "mention_or_keyword" ||
+          mode === "accept_all" ||
+          mode === "off"
+            ? mode
+            : null;
+        if (ref === "" || modeValue === null) return [];
+        return [
+          {
+            conversationRef: ref,
+            mode: modeValue,
+            keywords: Array.isArray(o.keywords)
+              ? o.keywords.filter(
+                  (word): word is string => typeof word === "string" && word.trim() !== "",
+                )
+              : [],
+          },
+        ];
+      }),
+    },
   };
   keywordsText.value = plan.value.triage.riskKeywords.join("，");
 }
@@ -230,6 +378,18 @@ function addRoute() {
     id: `route-${crypto.randomUUID()}`,
     keywords: [],
     employeeKey: "",
+  });
+}
+
+/** 添加群覆盖：默认取第一个未配置的群，避免重复 */
+function addGroupOverride() {
+  const used = new Set(plan.value.groupChat.groupOverrides.map((o) => o.conversationRef));
+  const next = chatGroups.value.find((group) => !used.has(group.contactId));
+  if (!next) return;
+  plan.value.groupChat.groupOverrides.push({
+    conversationRef: next.contactId,
+    mode: "mention_or_keyword",
+    keywords: [],
   });
 }
 
@@ -266,6 +426,8 @@ async function save() {
             defaultEmployeeKey: plan.value.defaultEmployeeKey,
             employeeRoutes,
           },
+          // 群聊策略与 pipeline 并列存储；Core/插件按需读取
+          groupChat: plan.value.groupChat,
         },
       }),
     });
@@ -319,6 +481,23 @@ onMounted(loadAll);
             <div class="pl-node pl-fixed">微信消息</div>
             <span class="pl-edge">→</span>
             <div class="pl-node pl-fixed">消息入库</div>
+            <span class="pl-edge">→</span>
+            <div
+              class="pl-node pl-group"
+              :class="{ dim: plan.groupChat.mode === 'off', editing: openNode === 'group' }"
+              role="button"
+              tabindex="0"
+              @click="toggleNode('group')"
+              @keydown.enter="toggleNode('group')"
+            >
+              <strong>群聊策略</strong>
+              <small>{{ groupModeLabel }}</small>
+              <em>{{
+                plan.groupChat.groupOverrides.length
+                  ? `${plan.groupChat.groupOverrides.length} 个群单独配置`
+                  : "所有群走全局策略"
+              }}</em>
+            </div>
             <span class="pl-edge">→</span>
             <div
               class="pl-node"
@@ -441,6 +620,133 @@ onMounted(loadAll);
               高危关键词（逗号分隔，命中即转人工）
               <textarea v-model="keywordsText" rows="3" placeholder="退款，投诉，报警…" />
             </label>
+          </template>
+
+          <template v-else-if="openNode === 'group'">
+            <h2>群聊策略</h2>
+            <div class="pl-hard">
+              <b>固定说明</b>
+              <p>
+                群聊回复自动简洁（2-3 句）、不含私人信息、隐私问题引导私聊——这些是系统强制的。
+                群聊判定发生在建 Turn 之前：未命中触发条件的群消息不会消耗任何模型调用。
+              </p>
+            </div>
+            <label class="pl-field">
+              触发模式（何时在群里开口）
+              <select v-model="plan.groupChat.mode" class="pl-select">
+                <option v-for="option in GROUP_MODE_OPTIONS" :key="option.value" :value="option.value">
+                  {{ option.label }}（{{ option.hint }}）
+                </option>
+              </select>
+            </label>
+            <label
+              v-if="plan.groupChat.mode === 'mention_or_keyword'"
+              class="pl-field"
+            >
+              响应关键词（逗号分隔，命中即回复；请控制数量）
+              <textarea
+                :value="plan.groupChat.keywords.join('，')"
+                rows="2"
+                placeholder="报价，售后…"
+                @input="plan.groupChat.keywords = (($event.target as HTMLInputElement).value ?? '').split(/[，,]/).map((w) => w.trim()).filter(Boolean)"
+              />
+            </label>
+            <template v-if="plan.groupChat.mode === 'accept_all'">
+              <label class="pl-field">
+                响应概率：{{ Math.round(plan.groupChat.probability * 100) }}%（每条群消息有此概率回复）
+                <input
+                  v-model.number="plan.groupChat.probability"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  style="width: 100%"
+                />
+              </label>
+            </template>
+            <template v-if="plan.groupChat.mode !== 'off'">
+              <div class="pl-routes-head">
+                <span>冷却护栏（防止刷屏）</span>
+              </div>
+              <div class="pl-cooldown-row">
+                <label class="pl-field-inline">
+                  窗口
+                  <input
+                    v-model.number="plan.groupChat.cooldownMinutes"
+                    type="number"
+                    min="0"
+                    max="240"
+                    step="1"
+                    class="pl-input pl-input-narrow"
+                  />
+                  分钟内
+                </label>
+                <label class="pl-field-inline">
+                  最多回复
+                  <input
+                    v-model.number="plan.groupChat.maxRepliesPerCooldown"
+                    type="number"
+                    min="1"
+                    max="100"
+                    step="1"
+                    class="pl-input pl-input-narrow"
+                  />
+                  条
+                </label>
+              </div>
+              <p class="pl-note">窗口设为 0 = 关闭冷却。群聊判定异常时自动回落默认仅@。</p>
+            </template>
+
+            <label class="pl-field">
+              群聊附加指令（追加到群聊提示词，可留空）
+              <textarea
+                v-model="plan.groupChat.extraInstruction"
+                rows="2"
+                placeholder="例：本群是售后群，报价问题一律转人工"
+              />
+            </label>
+
+            <div class="pl-routes-head">
+              <span>群单独配置（覆盖全局策略）</span>
+              <button class="pl-linkbtn" @click="addGroupOverride" :disabled="!chatGroups.length">
+                + 添加群
+              </button>
+            </div>
+            <p v-if="!chatGroups.length" class="pl-note">暂无可选群（联系人同步后显示）。</p>
+            <p v-else-if="!plan.groupChat.groupOverrides.length" class="pl-note">
+              所有群走上面的全局策略。
+            </p>
+            <div
+              v-for="(override, index) in plan.groupChat.groupOverrides"
+              :key="override.conversationRef + String(index)"
+              class="pl-override-row"
+            >
+              <select
+                :value="override.conversationRef"
+                class="pl-select"
+                @change="override.conversationRef = ($event.target as HTMLSelectElement).value"
+              >
+                <option v-for="group in chatGroups" :key="group.contactId" :value="group.contactId">
+                  {{ group.sharedAlias || group.channelDisplayName || group.channelNickname || group.contactId.slice(0, 18) }}
+                </option>
+              </select>
+              <select v-model="override.mode" class="pl-select">
+                <option v-for="option in GROUP_MODE_OPTIONS" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+              <button
+                class="pl-linkbtn danger"
+                @click="plan.groupChat.groupOverrides.splice(index, 1)"
+              >删除</button>
+              <input
+                v-if="override.mode === 'mention_or_keyword'"
+                class="pl-input pl-override-keywords"
+                placeholder="该群关键词，逗号分隔"
+                :value="override.keywords.join('，')"
+                @input="override.keywords = (($event.target as HTMLInputElement).value ?? '').split(/[，,]/).map((w) => w.trim()).filter(Boolean)"
+              />
+            </div>
           </template>
 
           <template v-else-if="openNode === 'human'">
@@ -630,6 +936,21 @@ onMounted(loadAll);
 
 .pl-node.active { border-color: var(--wf-primary, #16a34a); background: var(--wf-primary-soft, #f0fdf4); }
 .pl-node.dim { opacity: 0.55; border-style: dashed; }
+.pl-node.pl-group { border-style: double; border-width: 2.5px; }
+
+/* 群聊冷却行 */
+.pl-cooldown-row { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+.pl-field-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.pl-input-narrow { width: 84px; margin-top: 0; }
+/* 群覆盖行：群选择 + 模式 + 删除（关键词独占一行） */
+.pl-override-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.pl-override-keywords { grid-column: 1 / -1; }
 
 .pl-flow { display: flex; align-items: stretch; gap: 14px; }
 .pl-branches { flex: 1; display: flex; flex-direction: column; gap: 10px; }

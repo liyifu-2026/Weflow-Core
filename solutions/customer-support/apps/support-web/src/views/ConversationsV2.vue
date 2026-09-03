@@ -6,10 +6,13 @@ import { api } from "../api";
 import { useWeflowAuthStore } from "../auth-store";
 import WfIcon from "../components/WfIcon.vue";
 import MediaImage from "../components/MediaImage.vue";
+import MediaFile from "../components/MediaFile.vue";
 import AvatarImage from "../components/AvatarImage.vue";
 import StaffAvatar from "../components/StaffAvatar.vue";
 import VoiceMessage from "../components/VoiceMessage.vue";
 import WfInspector from "../components/WfInspector.vue";
+import AssetPicker, { type AssetPickResult } from "../components/AssetPicker.vue";
+import type { AssetItem } from "../assets/api";
 import { statusTone } from "../components/status-tone";
 import { useEscClose } from "../composables/use-esc-close";
 import { agentDisplayName, contactDisplayName, factLabel, reasonLabel } from "../labels";
@@ -21,6 +24,8 @@ type Conversation = {
   latestMessageAt?: string;
   latestMessage?: { text?: string };
   matchedMessage?: { text?: string; occurredAt?: string };
+  /** 会话类型：group = 群聊（Core 由 channel ref @chatroom 派生） */
+  chatType?: "private" | "group";
   contact?: Record<string, any>;
   handoff?: {
     status?: string;
@@ -49,11 +54,17 @@ type Message = {
   text?: string;
   contentType?: string;
   mediaId?: string;
+  /** 媒体细分类型（Core mediaAssets.kind）：图片/文件卡片据此渲染 */
+  mediaKind?: string | null;
+  /** 文件名（出站=暂存原名；入站=Host 上报原名） */
+  mediaFileName?: string | null;
   sendState?: string;
   occurredAt: string;
   actorId?: string;
   /** AI 员工头像（平台 DiceBear 代理 URL）；人工/客户消息为 null */
   actorAvatarUrl?: string | null;
+  /** 群聊消息的发送者昵称（Core 由联系人资料解析；私聊恒为 null） */
+  senderName?: string | null;
   replyToChannelMessageId?: string;
   mentionContactRefs?: string[];
 };
@@ -102,6 +113,25 @@ const conversationRevision = ref(0);
 const nextCursor = ref<string | null>(null);
 const loadingOlder = ref(false);
 const handoff = ref<any>(null);
+// 会话模式可视化（Phase 3/4）：session episode 状态 + 唤醒计划 + 决策轨迹
+const agentSession = ref<{
+  state: string;
+  roundsUsed: number;
+  roundBudget: number;
+  startedAt?: string;
+  closedAt?: string | null;
+  closureSummary?: string | null;
+} | null>(null);
+const sessionWakes = ref<
+  { wakeId: number; turnId: string; kind: string; status: string; wakeAt: string; nudgeText?: string | null }[]
+>([]);
+const sessionTraceTurnId = ref<string | null>(null);
+const sessionTrace = ref<{
+  turn: { turnId: string; status: string; model?: string; traceId?: string; startedAt?: string; completedAt?: string } | null;
+  events: { eventType: string; reasonCode?: string | null; payload?: Record<string, any>; createdAt: string }[];
+} | null>(null);
+const sessionTraceOpen = ref(false);
+const sessionTraceLoading = ref(false);
 const profile = ref<any>(null);
 const evidence = ref<Evidence[]>([]);
 const assignees = ref<any[]>([]);
@@ -303,6 +333,11 @@ const company = computed(
         "",
     ) || "",
 );
+/** 会话是否为群聊：Core 由 channel ref（@chatroom）派生并投影 chatType */
+function isGroup(item: Conversation | undefined | null): boolean {
+  return item?.chatType === "group";
+}
+const selectedIsGroup = computed(() => isGroup(selected.value));
 const briefingLine = computed(
   () =>
     handoff.value?.briefing?.problemSummary ||
@@ -345,6 +380,74 @@ function handoffLabel(status?: string) {
       : status === "resolved"
         ? "已完成"
         : "Agent 处理中";
+}
+// 会话模式状态徽章：closed > handoff（既有）> waiting > active（第 3 期 session）
+function sessionEpisodeLabel(): string | null {
+  if (!agentSession.value) return null;
+  if (agentSession.value.state === "closed") return "已收尾";
+  if (handoff.value?.state?.status === "in_progress") return null; // 人工接管走既有徽章
+  if (agentSession.value.state === "waiting") {
+    return `等待客户 · 第 ${agentSession.value.roundsUsed} 轮`;
+  }
+  if (agentSession.value.state === "active") {
+    return `AI 接待中 · 第 ${agentSession.value.roundsUsed} 轮`;
+  }
+  return null;
+}
+const pendingWake = computed(() => {
+  const row = sessionWakes.value.find((w) => w.status === "scheduled");
+  return row ?? null;
+});
+const doneWakes = computed(() =>
+  sessionWakes.value.filter((w) => w.status === "done").slice(0, 2),
+);
+const wakeCountdown = computed(() => {
+  if (!pendingWake.value) return "";
+  const remain = Math.max(
+    0,
+    new Date(pendingWake.value.wakeAt).getTime() - Date.now(),
+  );
+  const minutes = Math.floor(remain / 60_000);
+  const seconds = Math.floor((remain % 60_000) / 1000);
+  return minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
+});
+// 决策轨迹入口：取最近一次已回复的 turn（回复消息 id 里带 turnId）
+const lastReplyTurnId = computed(() => {
+  const last = [...messages.value]
+    .reverse()
+    .find((m) => m.actorType === "agent" && m.messageId.startsWith("agent-message:turn:"));
+  if (!last) return null;
+  const match = last.messageId.match(/^agent-message:(turn:[^:]+.*?):\d+$/);
+  return match?.[1] ?? null;
+});
+async function openSessionTrace(turnId: string | null) {
+  if (!turnId) return;
+  sessionTraceOpen.value = true;
+  sessionTraceLoading.value = true;
+  sessionTraceTurnId.value = turnId;
+  try {
+    sessionTrace.value = await api<any>(
+      `/api/v1/agent/decision-trace/${encodeURIComponent(turnId)}`,
+    );
+  } catch {
+    sessionTrace.value = { turn: null, events: [] };
+  } finally {
+    sessionTraceLoading.value = false;
+  }
+}
+const TRACE_EVENT_LABELS: Record<string, string> = {
+  ownership_checked: "领取轮次",
+  triaged: "分流",
+  policy_decided: "决策",
+  reply_persisted: "回复落库",
+  context_built: "上下文装配",
+  tool_planned: "工具规划",
+  tool_completed: "工具完成",
+  validation_failed: "校验失败",
+  suppressed: "策略抑制",
+};
+function traceEventLabel(eventType: string): string {
+  return TRACE_EVENT_LABELS[eventType] ?? eventType;
 }
 function riskLabel(risk?: string | null) {
   return risk === "high" ? "高风险" : risk === "medium" ? "需关注" : "常规";
@@ -394,6 +497,26 @@ function isPatMessage(message: Message): boolean {
 function bubbleText(message: Message): string {
   if (isEmotionMessage(message)) return emotionLabel(message);
   return message.text || "〔非文本消息〕";
+}
+
+// ---------- 媒体消息渲染辅助（微信式单气泡：图片/文件卡片） ----------
+/** 消息是否渲染为图片：contentType=image（回声行）或 mediaKind=image */
+function isImageMessage(message: Message): boolean {
+  return (
+    message.contentType === "image" ||
+    message.mediaKind === "image" ||
+    // ct=media 的 manual 行：mediaKind 缺失时按上传 kind 判断不可行，
+    // 由 mediaId + 非 image kind 分支兜底（见 mediaFileMessage）
+    false
+  );
+}
+/** 消息是否渲染为文件卡片：mediaKind=file（含融合后的 ct=media 行） */
+function isFileMessage(message: Message): boolean {
+  return message.mediaKind === "file" || message.contentType === "file";
+}
+/** 消息是否渲染为语音：mediaKind=voice 或 contentType=voice */
+function isVoiceMsg(message: Message): boolean {
+  return message.mediaKind === "voice" || message.contentType === "voice";
 }
 
 // ---------- 引用回复 & @提及渲染 ----------
@@ -584,6 +707,42 @@ const fileInputRef = ref<HTMLInputElement | null>(null);
 function triggerFilePick() {
   fileInputRef.value?.click();
 }
+// --- 素材选择器（本机文件 / 图片空间 / 文件空间） ---
+const assetPickerOpen = ref(false);
+async function sendAsset(asset: AssetItem, text = "") {
+  if (!selectedId.value) return;
+  mediaUploading.value = true;
+  try {
+    await postMessage(text, crypto.randomUUID(), { assetId: asset.assetId });
+    await Promise.all([select(selectedId.value), loadList()]);
+  } catch (reason) {
+    showToolHint(reason instanceof Error ? reason.message : "素材发送失败");
+  } finally {
+    mediaUploading.value = false;
+  }
+}
+async function onAssetPicked(result: AssetPickResult) {
+  assetPickerOpen.value = false;
+  if (!selectedId.value) return;
+  try {
+    if (result.type === "asset") {
+      await sendAsset(result.asset);
+    } else {
+      // 降级路径：入空间失败时直接按原有上传发送链路发送
+      const uploaded = await uploadMedia(result.file, result.category);
+      if (!uploaded) return;
+      await postMessage("", crypto.randomUUID(), {
+        mediaId: uploaded.mediaId,
+        media: { fileId: uploaded.fileId, kind: result.category },
+      });
+      await Promise.all([select(selectedId.value), loadList()]);
+    }
+  } catch (reason) {
+    showToolHint(reason instanceof Error ? reason.message : "发送失败");
+  }
+}
+// 管理员可在选择器中整理（重命名/删除）
+const canManageAssets = computed(() => auth.isAdmin);
 async function onFilePicked(event: Event) {
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
@@ -945,7 +1104,7 @@ async function select(id: string, syncRoute = true) {
   loadingConversation.value = true;
   detailError.value = "";
   try {
-    const [transcript, handoffResult, profileResult, evidenceResult] =
+    const [transcript, handoffResult, profileResult, evidenceResult, sessionStateResult, sessionWakesResult] =
       await Promise.all([
         api<any>(
           `/api/v1/conversations/${encodeURIComponent(id)}/messages?limit=100`,
@@ -961,6 +1120,12 @@ async function select(id: string, syncRoute = true) {
         api<any>(
           `/api/v1/conversations/${encodeURIComponent(id)}/knowledge/evidence-tray`,
         ).catch(() => ({ evidence: [] })),
+        api<any>(
+          `/api/v1/agent/session-state/${encodeURIComponent(id)}`,
+        ).catch(() => ({ session: null })),
+        api<any>(`/api/v1/agent/session-wakes/${encodeURIComponent(id)}`).catch(
+          () => ({ wakes: [] }),
+        ),
       ]);
     // 代际检查：期间已切换到其他会话则丢弃本批数据。
     if (generation !== selectionGeneration) return;
@@ -974,6 +1139,10 @@ async function select(id: string, syncRoute = true) {
         normalizeHandoffStatus(handoff.value.state.status) ??
         handoff.value.state.status;
     }
+    agentSession.value = sessionStateResult?.session ?? null;
+    sessionWakes.value = sessionWakesResult?.wakes ?? [];
+    sessionTraceOpen.value = false;
+    sessionTrace.value = null;
     profile.value = profileResult.profile;
     evidence.value = evidenceResult.evidence ?? [];
     note.value = profile.value.note ?? "";
@@ -1151,6 +1320,7 @@ function sendStateLabel(state?: string) {
 async function postMessage(text: string, clientRequestId: string, extra?: {
   mediaId?: string;
   media?: { fileId: string; kind: string };
+  assetId?: string;
   replyToChannelMessageId?: string;
   mentionContactRefs?: string[];
 }) {
@@ -1158,6 +1328,7 @@ async function postMessage(text: string, clientRequestId: string, extra?: {
   const body: Record<string, any> = { text, clientRequestId };
   if (extra?.mediaId) body.mediaId = extra.mediaId;
   if (extra?.media) body.media = extra.media;
+  if (extra?.assetId) body.assetId = extra.assetId;
   if (extra?.replyToChannelMessageId) body.replyToChannelMessageId = extra.replyToChannelMessageId;
   if (extra?.mentionContactRefs?.length) body.mentionContactRefs = extra.mentionContactRefs;
   await api(
@@ -1728,6 +1899,7 @@ onUnmounted(() => {
                   <span class="wx-row-name">{{
                     contactDisplayName(item)
                   }}</span>
+                  <span v-if="isGroup(item)" class="wx-row-group-tag">群</span>
                   <span class="wx-row-time">{{
                     rowTimeLabel(
                       item.latestMessageAt ||
@@ -1779,6 +1951,7 @@ onUnmounted(() => {
                     <span class="wx-row-name">{{
                       contactDisplayName(item)
                     }}</span>
+                    <span v-if="isGroup(item)" class="wx-row-group-tag">群</span>
                     <span
                       v-if="item.handoff?.status === 'pending' || item.riskLevel === 'high'"
                       class="wx-row-flag"
@@ -1848,6 +2021,7 @@ onUnmounted(() => {
                   <span class="wx-row-name">{{
                     contactDisplayName(item)
                   }}</span>
+                  <span v-if="isGroup(item)" class="wx-row-group-tag">群</span>
                   <span class="wx-row-time">{{
                     rowTimeLabel(
                       item.latestMessageAt ||
@@ -1981,7 +2155,8 @@ onUnmounted(() => {
                   @click="openInspector('customer')"
                 >
                   <strong>{{ contactDisplayName(selected) }}</strong>
-                  <span v-if="company" class="wf-thread-company"
+                  <span v-if="selectedIsGroup" class="wf-thread-company">· 群聊</span>
+                  <span v-else-if="company" class="wf-thread-company"
                     >· {{ company }}</span
                   >
                 </button>
@@ -2082,9 +2257,8 @@ onUnmounted(() => {
               </div></template
             >
             <template v-else>
+              <template v-for="message in messages" :key="message.messageId">
               <div
-                v-for="message in messages"
-                :key="message.messageId"
                 :id="`message-${message.messageId}`"
                 class="wf-message-row"
                 :class="{
@@ -2135,29 +2309,30 @@ onUnmounted(() => {
                     <AvatarImage
                       v-if="message.direction === 'inbound' && selected?.contact?.contactId"
                       :contact-id="selected.contact.contactId"
-                      :fallback-text="contactDisplayName(selected)"
+                      :fallback-text="message.senderName || contactDisplayName(selected)"
                       :size="28"
                       class="wf-msg-avatar"
                     />
                     <div class="wf-bubble-wrap">
+                      <!-- 群聊入站消息显示发送者昵称 -->
+                      <div
+                        v-if="selectedIsGroup && message.direction === 'inbound' && message.senderName"
+                        class="wf-msg-sender"
+                      >{{ message.senderName }}</div>
                       <div
                         class="wf-bubble"
                         :class="{
-                          media:
-                            message.contentType === 'image' && message.mediaId,
+                          media: isImageMessage(message) && message.mediaId,
+                          file: isFileMessage(message) && message.mediaId,
                           // 表情包有媒体时按贴纸渲染（无气泡底、小尺寸）
                           emotion: isEmotionSticker(message),
                           // 语音自带气泡（微信式），外层气泡透明化
-                          voice:
-                            message.contentType === 'voice' &&
-                            !!message.mediaId,
+                          voice: isVoiceMsg(message) && !!message.mediaId,
                           long: (message.text || '').length > 144,
                         }"
                       >
                         <MediaImage
-                          v-if="
-                            message.contentType === 'image' && message.mediaId
-                          "
+                          v-if="isImageMessage(message) && message.mediaId"
                           :media-id="message.mediaId"
                           :alt="`${actorLabel(message)} 发送的图片`"
                         />
@@ -2167,8 +2342,14 @@ onUnmounted(() => {
                           :alt="`${actorLabel(message)} 发送的表情包`"
                           class="wf-emotion-sticker"
                         />
+                        <MediaFile
+                          v-else-if="isFileMessage(message) && message.mediaId"
+                          :media-id="message.mediaId"
+                          :file-name="message.mediaFileName"
+                          :alt="`${actorLabel(message)} 发送的文件`"
+                        />
                         <VoiceMessage
-                          v-else-if="message.contentType === 'voice' && message.mediaId"
+                          v-else-if="isVoiceMsg(message) && message.mediaId"
                           :media-id="message.mediaId"
                           :alt="`${actorLabel(message)} 发送的语音`"
                         />
@@ -2268,6 +2449,48 @@ onUnmounted(() => {
                   </div>
                 </template>
               </div>
+              </template>
+              <!-- wait 时间线节点（Phase 3）：scheduled=待发提醒；done=已发提醒/已唤醒 -->
+              <div
+                v-if="pendingWake && agentSession?.state === 'waiting'"
+                class="wf-message-row session-wait-row"
+              >
+                <div class="session-wait-node">
+                  <span class="session-wait-dot"></span>
+                  <span class="session-wait-text"
+                    >等待客户回复 · 超时（{{ wakeCountdown }}）后{{
+                      pendingWake.nudgeText ? "自动发送提醒" : "自动唤醒跟进"
+                    }}</span
+                  >
+                  <button
+                    class="session-trace-link"
+                    type="button"
+                    @click="openSessionTrace(pendingWake.turnId)"
+                  >
+                    决策轨迹 →
+                  </button>
+                </div>
+              </div>
+              <div
+                v-for="wake in doneWakes"
+                :key="`wake-${wake.wakeId}`"
+                class="wf-message-row session-wait-row"
+              >
+                <div class="session-wait-node session-wait-done">
+                  <span class="session-wait-dot done"></span>
+                  <span class="session-wait-text"
+                    >{{ wake.nudgeText ? "已自动发送提醒" : "已唤醒跟进" }} ·
+                    {{ messageTime(wake.wakeAt) }}</span
+                  >
+                  <button
+                    class="session-trace-link"
+                    type="button"
+                    @click="openSessionTrace(wake.turnId)"
+                  >
+                    决策轨迹 →
+                  </button>
+                </div>
+              </div>
             </template>
           </div>
           <button
@@ -2359,6 +2582,15 @@ onUnmounted(() => {
               >
                 <WfIcon name="audit" :size="17" />
               </button>
+              <button
+                type="button"
+                class="wx-tool-button"
+                title="素材空间"
+                :disabled="mediaUploading"
+                @click="assetPickerOpen = true"
+              >
+                <WfIcon name="knowledge" :size="17" />
+              </button>
               <span v-if="mediaUploading" class="wx-upload-progress">上传中…</span>
             </div>
             <!-- 引用回复预览条 -->
@@ -2427,6 +2659,42 @@ onUnmounted(() => {
           >
             Agent 已暂停自动回复
           </p>
+        </section>
+        <section
+          v-if="agentSession && agentSession.state !== 'closed'"
+          class="wf-inspector-section"
+        >
+          <span class="wf-brief-label">会话状态</span>
+          <p class="wf-brief-text">
+            <span
+              class="session-badge"
+              :class="`session-badge--${agentSession.state}`"
+              >{{ sessionEpisodeLabel() }}</span
+            >
+          </p>
+          <p v-if="pendingWake" class="wf-muted session-wake-note">
+            ⏳ 等待客户回复，超时（{{
+              wakeCountdown
+            }}）后{{
+              pendingWake.nudgeText ? "自动发送提醒" : "自动唤醒跟进"
+            }}
+          </p>
+          <p
+            v-for="done in doneWakes.slice(0, 2)"
+            :key="done.wakeId"
+            class="wf-muted session-wake-note session-wake-done"
+          >
+            ✓ 已于 {{ messageTime(done.wakeAt) }}
+            {{ done.nudgeText ? "发送提醒" : "唤醒跟进" }}
+          </p>
+          <button
+            v-if="lastReplyTurnId"
+            class="session-trace-link"
+            type="button"
+            @click="openSessionTrace(lastReplyTurnId)"
+          >
+            查看最近决策轨迹 →
+          </button>
         </section>
         <section
           v-if="handoff"
@@ -2671,13 +2939,19 @@ onUnmounted(() => {
                     ? "人工客服"
                     : "客户"
               }}</span>
-              <template v-if="message.contentType === 'image' && message.mediaId">
+              <template v-if="isImageMessage(message) && message.mediaId">
                 <MediaImage
                   :media-id="message.mediaId"
                   :alt="`${message.actorType === 'agent' ? 'Agent' : '客户'} 发送的图片`"
                 />
               </template>
-              <template v-else-if="message.contentType === 'voice' && message.mediaId">
+              <template v-else-if="isFileMessage(message) && message.mediaId">
+                <MediaFile
+                  :media-id="message.mediaId"
+                  :file-name="message.mediaFileName"
+                />
+              </template>
+              <template v-else-if="isVoiceMsg(message) && message.mediaId">
                 <VoiceMessage
                   :media-id="message.mediaId"
                   :alt="`${message.actorType === 'agent' ? 'Agent' : '客户'} 发送的语音`"
@@ -2866,7 +3140,69 @@ onUnmounted(() => {
       </div>
     </Teleport>
     <!-- 点击其他地方关闭右键菜单 -->
+    <div
+      v-if="sessionTraceOpen"
+      class="session-trace-backdrop"
+      @click="sessionTraceOpen = false"
+    >
+      <div class="session-trace-drawer" @click.stop>
+        <header class="session-trace-header">
+          <strong>决策轨迹</strong>
+          <span v-if="sessionTraceLoading" class="wf-muted">加载中…</span>
+          <button
+            class="session-trace-close"
+            type="button"
+            @click="sessionTraceOpen = false"
+          >
+            ×
+          </button>
+        </header>
+        <p v-if="sessionTrace?.turn" class="session-trace-meta">
+          {{ sessionTrace.turn.turnId }}<br />
+          模型 {{ sessionTrace.turn.model || "-" }} · 状态
+          {{ sessionTrace.turn.status }} · traceId
+          {{ sessionTrace.turn.traceId || "-" }}
+        </p>
+        <ol v-if="sessionTrace?.events?.length" class="session-trace-list">
+          <li
+            v-for="(event, index) in sessionTrace.events"
+            :key="index"
+            class="session-trace-item"
+          >
+            <span class="session-trace-time">{{
+              messageTime(event.createdAt)
+            }}</span>
+            <span class="session-trace-event">{{
+              traceEventLabel(event.eventType)
+            }}</span>
+            <span
+              v-if="event.payload?.action"
+              class="session-trace-action"
+              >{{ event.payload.action }}</span
+            >
+            <span v-if="event.reasonCode" class="session-trace-reason">{{
+              event.reasonCode
+            }}</span>
+          </li>
+        </ol>
+        <p
+          v-else-if="!sessionTraceLoading"
+          class="session-trace-meta"
+        >
+          暂无可展示的决策事件。
+        </p>
+      </div>
+    </div>
     <div v-if="messageMenu" class="wf-msg-context-backdrop" @click="closeMessageMenu" @contextmenu.prevent="closeMessageMenu"></div>
+    <!-- 素材选择器（本机文件 / 图片空间 / 文件空间） -->
+    <Teleport to="body">
+      <AssetPicker
+        v-if="assetPickerOpen"
+        :can-manage="canManageAssets"
+        @close="assetPickerOpen = false"
+        @pick="onAssetPicked"
+      />
+    </Teleport>
   </div>
 </template>
 
@@ -2917,6 +3253,17 @@ onUnmounted(() => {
 .wx-row-flag {
   color: var(--wf-risk-high, #d93025);
   font-weight: 700;
+}
+/* 群聊标识徽标：跟随会话名后 */
+.wx-row-group-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--wf-primary, #16775b);
+  background: var(--wf-primary-soft, rgba(22, 119, 91, 0.08));
+  border-radius: 4px;
+  padding: 1px 5px;
+  line-height: 1.4;
 }
 .wx-row-preview {
   flex: 1;
@@ -3149,6 +3496,12 @@ onUnmounted(() => {
   align-self: flex-start;
   margin-top: 2px;
 }
+/* 群聊消息发送者昵称（气泡上方小字） */
+.wf-msg-sender {
+  font-size: 11px;
+  color: var(--wf-text-tertiary, #9aa0a6);
+  margin: 0 0 2px 4px;
+}
 .wf-msg-agent-icon {
   width: 28px;
   height: 28px;
@@ -3291,6 +3644,149 @@ onUnmounted(() => {
 .wf-mention {
   color: #1a73e8;
   font-weight: 600;
+}
+
+/* ---------- 会话模式可视化（Phase 3/4） ---------- */
+.session-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.session-badge--active {
+  background: rgba(26, 115, 232, 0.12);
+  color: #1a73e8;
+}
+.session-badge--waiting {
+  background: rgba(249, 171, 0, 0.15);
+  color: #b06000;
+}
+.session-badge--closed {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--wf-text-secondary, #5f6368);
+}
+.session-wake-note {
+  font-size: 12px;
+  margin-top: 4px;
+}
+.session-wake-done {
+  opacity: 0.75;
+}
+.session-wait-row {
+  justify-content: center;
+}
+.session-wait-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(249, 171, 0, 0.08);
+  border: 1px dashed rgba(249, 171, 0, 0.45);
+  font-size: 12px;
+  color: var(--wf-text-secondary, #5f6368);
+}
+.session-wait-node.session-wait-done {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+.session-wait-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f9ab00;
+  animation: session-wait-pulse 1.6s ease-in-out infinite;
+}
+.session-wait-dot.done {
+  background: #34a853;
+  animation: none;
+}
+@keyframes session-wait-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.session-trace-link {
+  border: none;
+  background: none;
+  color: #1a73e8;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+.session-trace-link:hover {
+  text-decoration: underline;
+}
+.session-trace-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  justify-content: flex-end;
+}
+.session-trace-drawer {
+  width: min(420px, 90vw);
+  height: 100%;
+  background: var(--wf-surface, #fff);
+  padding: 20px;
+  overflow-y: auto;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+}
+.session-trace-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.session-trace-close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: var(--wf-text-secondary, #5f6368);
+}
+.session-trace-meta {
+  font-size: 12px;
+  color: var(--wf-text-secondary, #5f6368);
+  line-height: 1.7;
+  margin-bottom: 14px;
+  word-break: break-all;
+}
+.session-trace-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.session-trace-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  font-size: 13px;
+}
+.session-trace-time {
+  color: var(--wf-text-secondary, #5f6368);
+  font-variant-numeric: tabular-nums;
+}
+.session-trace-event {
+  font-weight: 600;
+}
+.session-trace-action {
+  color: #1a73e8;
+}
+.session-trace-reason {
+  color: #b06000;
+  font-size: 12px;
 }
 </style>
 

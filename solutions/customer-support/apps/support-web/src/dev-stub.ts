@@ -33,6 +33,13 @@ const STUB_CONTACTS = [
     channelRemark: null,
     sharedAlias: null,
   },
+  {
+    contactId: "123456789@chatroom",
+    channelDisplayName: "技术支持一群",
+    channelNickname: "技术支持一群",
+    channelRemark: null,
+    sharedAlias: null,
+  },
 ];
 
 function json(payload: unknown, status = 200): Response {
@@ -63,9 +70,17 @@ const STUB_PIPELINE_SETTINGS: { settings: Record<string, unknown> } = {
         timeoutMs: 3000,
         allowDirectReply: false,
       },
-      notes: { triage: "", human: "", fast: "", standard: "", gate: "" },
       defaultEmployeeKey: null,
       employeeRoutes: [],
+    },
+    groupChat: {
+      mode: "mention_only",
+      keywords: [],
+      cooldownMinutes: 0,
+      maxRepliesPerCooldown: 2,
+      probability: 0,
+      extraInstruction: "",
+      groupOverrides: [],
     },
   },
 };

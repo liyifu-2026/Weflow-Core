@@ -12,6 +12,7 @@ import AiEmployeesView from "./views/AiEmployeesView.vue";
 import WhitelistView from "./views/WhitelistView.vue";
 import PipelineView from "./views/PipelineView.vue";
 import ProfileView from "./views/ProfileView.vue";
+import AssetsView from "./views/AssetsView.vue";
 
 export type SupportRouter = Router;
 
@@ -39,6 +40,11 @@ export function createSupportRouter(pinia?: Pinia): Router {
         path: "/support/knowledge",
         name: "supportKnowledge",
         component: KnowledgeV2,
+      },
+      {
+        path: "/support/assets",
+        name: "supportAssets",
+        component: AssetsView,
       },
       {
         path: "/support/knowledge/validate",
