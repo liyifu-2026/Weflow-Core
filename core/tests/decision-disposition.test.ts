@@ -36,7 +36,17 @@ import {
 import { hasNewerAgentTurn } from "../modules/agent/application/turn-utils.js";
 import type { AgentDecision } from "../modules/agent/application/agent-decision.js";
 
-const db = {} as never;
+const dbMock = {
+  insert: vi.fn().mockReturnThis(),
+  values: vi.fn().mockReturnThis(),
+  onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+};
+// 既有测试以 db 传参并断言调用；Phase 3 wait 分支需要 db 支持 insert
+const db = dbMock as unknown as never;
+const dbAsRecord = dbMock as unknown as {
+  insert: ReturnType<typeof vi.fn>;
+  values: ReturnType<typeof vi.fn>;
+};
 
 function baseInput(overrides?: {
   path?: "fresh" | "tool_recovery";
@@ -202,6 +212,18 @@ describe("commitDecisionDisposition Phase 2 branches", () => {
       turnId: "turn-test",
       reason: "waiting_for_user",
     });
+    // Phase 3：wait 决策必须落会话唤醒计划（wakeAt=now+waitMs，带 nudge）
+    expect(dbAsRecord.insert).toHaveBeenCalledWith(expect.anything());
+    expect(dbAsRecord.values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationId: "conv-test",
+        turnId: "turn-test",
+        kind: "wait_timeout",
+        status: "scheduled",
+        nudgeText: "您先忙，有问题随时叫我",
+        wakeAt: expect.any(Date),
+      }),
+    );
     expect(commitAgentTurnOutcome).not.toHaveBeenCalled();
     expect(persistAgentToolCheckpoint).not.toHaveBeenCalled();
   });

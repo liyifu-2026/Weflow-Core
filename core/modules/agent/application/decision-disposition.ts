@@ -35,6 +35,7 @@ import {
   persistAgentToolCheckpoint,
 } from "./agent-turn-outcome-command.js";
 import { hasNewerAgentTurn } from "./turn-utils.js";
+import { scheduleSessionWake } from "./session-wake.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
@@ -173,14 +174,22 @@ async function commitFreshDisposition(
     return { action: "terminal" };
   }
 
-  // wait（Phase 2）：模型要求等待客户回复。无会话调度器阶段等价于
-  // waiting_for_user 静默落库；waitMs/nudgeText 随决策留存在 turn 事件
-  // 与响应 JSONB，Phase 3 session_wakes 上线后由调度器消费。
+  // wait（Phase 3）：模型要求等待客户回复 → 落会话唤醒计划。
+  // wakeAt 到点由 wake dispatcher 续轮；带 nudge_text 的唤醒由代码
+  // 经 createAgentReply 直发预承诺话术（不开模型）。静默落库语义
+  // 保留（waiting_for_user），唤醒失败不阻断回合收尾。
   if (decision.nextAction === "wait") {
     await commitAgentTurnNoAction(db, {
       conversationId,
       turnId,
       reason: "waiting_for_user",
+    });
+    await scheduleSessionWake(db, {
+      conversationId,
+      turnId,
+      waitMs: decision.waitMs ?? 300_000,
+      ...(decision.nudgeText ? { nudgeText: decision.nudgeText } : {}),
+      now: new Date(),
     });
     return { action: "terminal" };
   }

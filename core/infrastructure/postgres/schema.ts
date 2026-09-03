@@ -14,16 +14,20 @@
  * - notificationSchema: 推送通知设备和发件箱
  * - auditSchema: 审计事件
  */
-import { jsonb, pgSchema, timestamp, varchar } from "drizzle-orm/pg-core";
 import {
   bigint,
   boolean,
   index,
   integer,
+  jsonb,
+  pgSchema,
   primaryKey,
+  serial,
   text,
+  timestamp,
   unique,
   uniqueIndex,
+  varchar,
 } from "drizzle-orm/pg-core";
 
 /** 系统运行时元数据 Schema */
@@ -479,6 +483,38 @@ export const turnAdmissionStates = agentSchema.table(
     index("agent_turn_admission_status_schedule_idx").on(
       table.status,
       table.scheduledAt,
+    ),
+  ],
+);
+
+/**
+ * 会话唤醒计划（Phase 3）：wait 决策的持久化形态。wakeAt 到点由
+ * dispatcher 触发续轮；带 nudge_text 的唤醒由代码直发预承诺话术
+ * （不开模型）。幂等键 turnId——同轮重复决策覆盖旧计划。
+ */
+export const sessionWakes = agentSchema.table(
+  "session_wakes",
+  {
+    wakeId: serial("wake_id").primaryKey(),
+    conversationId: varchar("conversation_id", { length: 300 })
+      .notNull()
+      .references(() => conversations.conversationId),
+    turnId: varchar("turn_id", { length: 700 })
+      .notNull()
+      .references(() => agentTurns.turnId, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 40 }).notNull(),
+    status: varchar("status", { length: 30 }).default("scheduled").notNull(),
+    wakeAt: timestamp("wake_at", { withTimezone: true }).notNull(),
+    nudgeText: text("nudge_text"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique("agent_session_wakes_turn_unique").on(table.turnId),
+    index("agent_session_wakes_status_wake_idx").on(
+      table.status,
+      table.wakeAt,
     ),
   ],
 );
