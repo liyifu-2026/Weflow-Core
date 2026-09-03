@@ -34,14 +34,20 @@ integration("merge window（合并窗口开关行为）", () => {
 
   afterAll(async () => {
     for (const { conversationId, contactId } of created) {
-      await postgres.db
-        .delete(schema.agentTurns)
-        .where(eq(schema.agentTurns.conversationId, conversationId));
+      // FK 依赖顺序：登记/记忆窗口 → turns → messages → conversations → contacts
       await postgres.db
         .delete(schema.turnAdmissionStates)
         .where(
           eq(schema.turnAdmissionStates.conversationId, conversationId),
         );
+      await postgres.db
+        .delete(schema.memoryCaptureStates)
+        .where(
+          eq(schema.memoryCaptureStates.conversationId, conversationId),
+        );
+      await postgres.db
+        .delete(schema.agentTurns)
+        .where(eq(schema.agentTurns.conversationId, conversationId));
       await postgres.db
         .delete(schema.messages)
         .where(eq(schema.messages.conversationId, conversationId));
@@ -59,6 +65,23 @@ integration("merge window（合并窗口开关行为）", () => {
     });
     await postgres.close();
   });
+
+  /**
+   * 白名单模式（migration 0060）：ingest 只为 agentEnabled=true 的
+   * 联系人建 Turn/登记窗口；此 helper 幂等预建联系人与会话不存在时
+   * 由 ingest 自动创建的事实保持一致。
+   */
+  async function ensureWhitelistedContact(contactId: string, ref: string) {
+    await postgres.db
+      .insert(schema.contactProfiles)
+      .values({
+        contactId,
+        channel: "channel",
+        channelContactId: ref,
+        agentEnabled: true,
+      })
+      .onConflictDoNothing();
+  }
 
   function admissionEvent(tag: string, seq: number, text: string) {
     const eventId = `${eventBase}-${tag}-e${seq}`;
@@ -82,6 +105,10 @@ integration("merge window（合并窗口开关行为）", () => {
     text: string,
   ): Promise<{ conversationId: string }> {
     const conversationId = `channel:${eventBase}-${tag}`;
+    await ensureWhitelistedContact(
+      `contact:channel:${eventBase}-${tag}`,
+      `${eventBase}-${tag}`,
+    );
     await ingestChannelEvents(
       postgres.db,
       [admissionEvent(tag, seq, text)],

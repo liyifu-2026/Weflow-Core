@@ -5,7 +5,9 @@
  * 久且最后一条不似半句）才由 dispatcher 合并建 Turn。运行时优先级与
  * 兜底原则：窗口参数缺失/类型不符一律回落默认值，绝不阻断消息处理。
  */
-import type { PgTable } from "drizzle-orm/pg-core";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { and, eq, lte, sql } from "drizzle-orm";
+import * as schema from "../../../infrastructure/postgres/schema.js";
 
 /** 常见"话说一半/没说完"的结尾特征。 */
 const UNFINISHED_TAIL_RE =
@@ -71,46 +73,12 @@ export type TurnAdmissionInput = {
   existingCount?: number | undefined;
 };
 
-type AdmissionInsert = {
-  conversationId: string;
-  contactId: string;
-  lastMessageId: string;
-  messageCount: number;
-  revision: number;
-  status: string;
-  scheduledAt: Date;
-};
-
-type AdmissionUpdate = {
-  contactId: string;
-  lastMessageId: string;
-  messageCount: number;
-  revision: string;
-  status: string;
-  scheduledAt: Date;
-  attempt: number;
-  errorCode: null;
-  updatedAt: Date;
-};
-
 /**
  * 登记一条消息进合并窗口（照 memoryCaptureStates 家法：一会话一行，
  * 新消息 upsert 重置窗口、revision+1、清错误）。调用方负责事务内执行。
- *
- * DB 参数用最小结构类型（与 Drizzle insert/upsert 形状兼容），便于
- * 单元测试以同形状 mock 验证 upsert 语义；集成测试覆盖真实 SQL。
  */
 export async function scheduleTurnAdmission(
-  db: {
-    insert: (table: PgTable) => {
-      values: (row: AdmissionInsert) => {
-        onConflictDoUpdate: (conflict: {
-          target: unknown;
-          set: AdmissionUpdate;
-        }) => Promise<unknown>;
-      };
-    };
-  },
+  db: NodePgDatabase<typeof schema>,
   input: TurnAdmissionInput,
 ): Promise<void> {
   const scheduledAt = nextAdmissionAt({
@@ -128,7 +96,7 @@ export async function scheduleTurnAdmission(
       ? input.existingCount
       : 0;
   await db
-    .insert("turn_admission_states" as never)
+    .insert(schema.turnAdmissionStates)
     .values({
       conversationId: input.conversationId,
       contactId: input.contactId,
@@ -139,18 +107,18 @@ export async function scheduleTurnAdmission(
       scheduledAt,
     })
     .onConflictDoUpdate({
-      target: "conversation_id" as never,
+      target: schema.turnAdmissionStates.conversationId,
       set: {
         contactId: input.contactId,
         lastMessageId: input.messageId,
         messageCount: existingCount + 1,
-        revision: "revision + 1",
+        revision: sql`${schema.turnAdmissionStates.revision} + 1`,
         status: "scheduled",
         scheduledAt,
         attempt: 0,
         errorCode: null,
         updatedAt: input.now,
-      } as never,
+      },
     });
 }
 
@@ -171,22 +139,21 @@ export type ClaimedAdmission = {
  * 调用方据此合并窗内消息建 turn；失败时回写 scheduled/attempt+1 重试。
  */
 export async function claimDueTurnAdmission(
-  db: {
-    update: (table: PgTable) => {
-      set: (values: Record<string, unknown>) => {
-        where: (condition: unknown) => {
-          returning: () => Promise<Record<string, unknown>[]>;
-        };
-      };
-    };
-  },
+  db: NodePgDatabase<typeof schema>,
   input: { conversationId: string; revision: number; now: Date },
 ): Promise<ClaimedAdmission | null> {
-  const claimed = (await db
-    .update("turn_admission_states" as never)
+  const claimed = await db
+    .update(schema.turnAdmissionStates)
     .set({ status: "dispatching", errorCode: null, updatedAt: input.now })
-    .where({ conversationId: input.conversationId, revision: input.revision })
-    .returning()) as Record<string, unknown>[];
+    .where(
+      and(
+        eq(schema.turnAdmissionStates.conversationId, input.conversationId),
+        eq(schema.turnAdmissionStates.revision, input.revision),
+        eq(schema.turnAdmissionStates.status, "scheduled"),
+        lte(schema.turnAdmissionStates.scheduledAt, input.now),
+      ),
+    )
+    .returning();
   const row = claimed[0];
   if (!row) return null;
   return {

@@ -14,6 +14,8 @@ import { startAgentTurnDispatcher } from "../../infrastructure/redis/agent-turn-
 import { loadInstalledBackendPlugins } from "../../infrastructure/solutions/backend-plugin-loader.js";
 import { startMemoryCaptureDispatcher } from "../../infrastructure/redis/memory-capture-dispatcher.js";
 import { startMediaProcessingDispatcher } from "../../infrastructure/redis/media-processing-dispatcher.js";
+import { startTurnAdmissionDispatcher } from "../../modules/conversations/application/start-turn-admission-dispatcher.js";
+import { processTurnAdmissions } from "../../modules/conversations/application/process-turn-admissions.js";
 import {
   HttpChannelProvider,
   httpChannelPlugin,
@@ -280,6 +282,11 @@ await runProcess({
       redisUrl: config.redisUrl,
       logger,
     });
+    // 合并窗口调度器（Phase 1）：到期登记合并建 Turn；CAS 认领多实例安全
+    const stopTurnAdmissionDispatcher = startTurnAdmissionDispatcher({
+      process: () => processTurnAdmissions(postgres.db, logger),
+      logger,
+    });
     const stopMemoryMaintenance = startMemoryMaintenance(postgres.db, logger);
     // 启动媒体处理调度器，处理入站媒体文件的转码和存储。
     // 业务依赖由组合根绑定：infrastructure 的 dispatcher/poller 不反向依赖 modules。
@@ -410,6 +417,7 @@ await runProcess({
         stopSolutionAutoUpdate();
         stopAgentTurnDispatcher();
         stopMemoryCaptureDispatcher();
+        stopTurnAdmissionDispatcher();
         stopMemoryMaintenance();
         stopMediaProcessingDispatcher();
         stopPushDispatcher();
@@ -427,6 +435,7 @@ await runProcess({
       stopSolutionAutoUpdate();
       stopAgentTurnDispatcher();
       stopMemoryCaptureDispatcher();
+      stopTurnAdmissionDispatcher();
       stopMemoryMaintenance();
       stopMediaProcessingDispatcher();
       stopPushDispatcher();
