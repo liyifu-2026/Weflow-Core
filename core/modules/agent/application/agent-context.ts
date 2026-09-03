@@ -18,6 +18,7 @@ import * as schema from "../../../infrastructure/postgres/schema.js";
 import { recallMemories } from "../../memory/application/recall-memories.js";
 import { latestHumanCycleAgentContext } from "../../handoff/application/mobile-handoff-service.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
+import { mediaAwareMessageText } from "./media-context.js";
 
 /**
  * 构建 Agent 上下文
@@ -35,10 +36,12 @@ export async function buildAgentContext(
   // 查询最近 20 条消息（按时间倒序获取后反转为正序）
   const history = await db
     .select({
+      messageId: schema.messages.messageId,
       direction: schema.messages.direction,
       text: schema.messages.text,
       contentType: schema.messages.contentType,
       mediaDescription: schema.mediaAssets.description,
+      originalImageFileId: schema.mediaAssets.originalImageFileId,
       actorId: schema.messages.actorId,
     })
     .from(schema.messages)
@@ -81,28 +84,23 @@ export async function buildAgentContext(
       : null;
   type HistoryRow = (typeof history)[number];
   /**
-   * 多模态消息统一渲染为文本：
-   * - 图片有视觉描述 → "图片观察：{描述}"；无描述 → 诚实占位（禁止编造）
-   * - 语音优先媒体转写、其次消息内文本；都没有 → 诚实占位
-   * - 纯文本原样返回
+   * 多模态消息统一渲染为文本（Phase 4 视觉直读装配规则）：
+   * - 图片有描述（caption 或模型自写 media_notes）→ 图片观察
+   * - 图片无描述但原图已下载 → 注入可看图信号（fetch_url 拉原图直读）
+   * - 两者皆无 → 诚实占位（禁止编造）
+   * - 语音转写语义与纯文本透传保持既有行为
    */
-  const messageText = (message: HistoryRow): string => {
-    switch (message.contentType) {
-      case "image":
-        return message.mediaDescription
-          ? `图片观察：${message.mediaDescription}`
-          : "[对方发送了一张图片，当前无法查看内容]";
-      case "voice":
-        if (message.mediaDescription) {
-          return `语音转写：${message.mediaDescription}`;
-        }
-        return message.text
-          ? `语音转写：${message.text}`
-          : "[对方发来一条语音，转写不可用]";
-      default:
-        return message.text;
-    }
-  };
+  const messageText = (message: HistoryRow): string =>
+    mediaAwareMessageText({
+      contentType: message.contentType,
+      text: message.text,
+      mediaDescription: message.mediaDescription,
+      // 原图已下载（originalImageFileId 非空）才注入可看图信号
+      originalImageUrl: message.originalImageFileId
+        ? "file-available"
+        : null,
+      messageId: message.messageId,
+    });
   // 召回最近 12 条已确认的长期记忆（memory_enabled OFF 时不 recall）
   const runtime = await readRuntimeSettings(db);
   const memories = !runtime.memoryEnabled

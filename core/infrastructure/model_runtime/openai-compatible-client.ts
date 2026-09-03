@@ -30,10 +30,15 @@ const responseSchema = z.object({
     .optional(),
 });
 
-/** 聊天消息类型 */
+/** 聊天消息段（Phase 4 视觉直读：与 TextContentPart 同形） */
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+/** 聊天消息类型：content 支持 string 或分段数组（图文混合） */
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ChatContentPart[];
 };
 
 /** 补全选项 */
