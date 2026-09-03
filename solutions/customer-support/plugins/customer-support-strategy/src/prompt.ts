@@ -31,6 +31,8 @@ export function aiEmployeeSystemPrompt(
   employeePrompt: string,
   knowledgeAvailable: boolean,
   chatType: "private" | "group" = "private",
+  /** 群聊附加指令（接待编排配置）；仅群聊拼接，空值不变 */
+  groupInstruction?: string | undefined,
 ): string {
   const chatTypeRules =
     chatType === "group"
@@ -39,5 +41,9 @@ export function aiEmployeeSystemPrompt(
   const knowledgeHint = knowledgeAvailable
     ? "\n知识库检索当前可用，证据不足时先向客户询问必要信息，不要编造答案。"
     : "\n知识库检索当前不可用，不得选择 retrieve_knowledge。";
-  return `${employeePrompt}${chatTypeRules}${knowledgeHint}`;
+  const extraGroupInstruction =
+    chatType === "group" && groupInstruction && groupInstruction.trim() !== ""
+      ? `\n\n【群聊附加指令】${groupInstruction.trim()}`
+      : "";
+  return `${employeePrompt}${chatTypeRules}${knowledgeHint}${extraGroupInstruction}`;
 }

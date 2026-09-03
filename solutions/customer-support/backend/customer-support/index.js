@@ -539,6 +539,59 @@ export async function registerRoutes(server, ctx) {
     },
   );
 
+  // 进行中的 Agent Turn（轮询源：产生「AI 正在思考」的体感）
+  server.get(
+    "/api/v1/agent/live-turn/:conversationId",
+    async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return;
+      const conversationId = String(request.params?.conversationId ?? "");
+      const [turn] = await db
+        .select({
+          turnId: schema.agentTurns.turnId,
+          status: schema.agentTurns.status,
+          startedAt: schema.agentTurns.startedAt,
+          createdAt: schema.agentTurns.createdAt,
+        })
+        .from(schema.agentTurns)
+        .where(eq(schema.agentTurns.conversationId, conversationId))
+        .orderBy(desc(schema.agentTurns.createdAt))
+        .limit(1);
+      if (!turn || turn.status === "completed" || turn.status === "superseded") {
+        return { live: null };
+      }
+      const events = await db
+        .select({
+          eventType: schema.agentTurnEvents.eventType,
+          reasonCode: schema.agentTurnEvents.reasonCode,
+          payload: schema.agentTurnEvents.payload,
+          createdAt: schema.agentTurnEvents.createdAt,
+        })
+        .from(schema.agentTurnEvents)
+        .where(eq(schema.agentTurnEvents.turnId, turn.turnId))
+        .orderBy(schema.agentTurnEvents.createdAt);
+      const lastEvent = events.at(-1) ?? null;
+      const reasoning =
+        [...events].reverse().find((e) => e.eventType === "model_reasoning")
+          ?.payload?.reasoning ?? null;
+      return {
+        live: {
+          turnId: turn.turnId,
+          status: turn.status,
+          startedAt: turn.startedAt ?? turn.createdAt,
+          lastEvent: lastEvent
+            ? {
+                eventType: lastEvent.eventType,
+                reasonCode: lastEvent.reasonCode,
+                createdAt: lastEvent.createdAt,
+              }
+            : null,
+          reasoning,
+        },
+      };
+    },
+  );
+
   // 媒体备注（AI 看图结论，运营可读；修正 API 后续再加）
   server.get(
     "/api/v1/agent/media-note/:messageId",

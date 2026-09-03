@@ -76,6 +76,8 @@ import {
 import { getMe } from "@/auth/api";
 import { saveSession } from "@/auth/session";
 import { TransferSheet } from "@/handoffs/transfer-sheet";
+import { AssetPickerSheet } from "@/media/asset-picker-sheet";
+import type { AssetItem } from "@/media/asset-api";
 import { FinishHandoffSheet } from "@/handoffs/finish-sheet";
 import {
   deleteDraft,
@@ -114,6 +116,7 @@ import {
 } from "@/handoffs/brief-view";
 import { ContactSheet } from "@/handoffs/contact-sheet";
 import { MediaImage } from "@/media/media-image";
+import { MediaFileBubble } from "@/media/media-file-bubble";
 import { formatTime } from "@/ui/format";
 import { MediaViewerModal } from "@/media/media-viewer";
 import { uploadMedia } from "@/media/api";
@@ -224,6 +227,7 @@ export default function ConversationScreen() {
   } | null>(null);
   // 媒体发送中状态
   const [mediaSending, setMediaSending] = useState(false);
+  const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   // 初始加载重试触发器（错误态「重新加载」时递增）
   const [reloadKey, setReloadKey] = useState(0);
   const [offline, setOffline] = useState(false);
@@ -1013,8 +1017,10 @@ export default function ConversationScreen() {
   // 发送回复：先乐观插入本地消息，再提交到服务端，失败时回滚状态
   async function send(
     mediaOptions?: {
-      mediaId: string;
-      media: { fileId: string; kind: "image" | "file" | "voice" };
+      mediaId?: string;
+      media?: { fileId: string; kind: "image" | "file" | "voice" };
+      /** 素材空间引用：服务端派生 mediaId，无需重新上传文件字节 */
+      assetId?: string;
       contentType?: string;
       text?: string;
     },
@@ -1067,8 +1073,9 @@ export default function ConversationScreen() {
   async function submitManualReply(
     message: DisplayMessage,
     mediaOptions?: {
-      mediaId: string;
-      media: { fileId: string; kind: "image" | "file" | "voice" };
+      mediaId?: string;
+      media?: { fileId: string; kind: "image" | "file" | "voice" };
+      assetId?: string;
     },
   ) {
     if (!session || !id || !message.clientRequestId) return;
@@ -1083,6 +1090,7 @@ export default function ConversationScreen() {
         {
           mediaId: mediaOptions?.mediaId ?? message.mediaId ?? undefined,
           media: mediaOptions?.media,
+          assetId: mediaOptions?.assetId,
           replyToChannelMessageId: message.replyToChannelMessageId ?? undefined,
         },
       );
@@ -1270,6 +1278,23 @@ export default function ConversationScreen() {
       await pokeConversation(session, id);
     } catch {
       Alert.alert("操作失败", "拍一拍发送失败");
+    }
+  }
+
+  // 素材空间：选中素材 → 服务端转发发送给客户（无需重新上传文件字节）
+  async function pickAndSendAsset(asset: AssetItem) {
+    if (!session || !id) return;
+    setMediaSending(true);
+    try {
+      await send({
+        assetId: asset.assetId,
+        contentType: asset.category === "image" ? "image" : "file",
+        text: asset.category === "image" ? "" : asset.name,
+      });
+    } catch {
+      Alert.alert("发送失败", "素材发送失败，请重试");
+    } finally {
+      setMediaSending(false);
     }
   }
 
@@ -1757,6 +1782,7 @@ export default function ConversationScreen() {
               onClearReply={() => setReplyTarget(null)}
               onPickImage={() => void pickAndSendImage()}
               onPickFile={() => void pickAndSendFile()}
+              onPickAsset={() => setAssetPickerOpen(true)}
             />
           </Animated.View>
         ) : uiState.mode === "takeover" ? (
@@ -1824,6 +1850,12 @@ export default function ConversationScreen() {
           capabilities={capabilities}
           onClose={() => setTransferOpen(false)}
           onTransferred={(state) => void handleTransferred(state)}
+        />
+        <AssetPickerSheet
+          visible={assetPickerOpen}
+          session={session}
+          onClose={() => setAssetPickerOpen(false)}
+          onPicked={(asset) => void pickAndSendAsset(asset)}
         />
         <FinishHandoffSheet
           visible={finishOpen}
@@ -2435,6 +2467,9 @@ function TranscriptMessage({
   const label =
     kind === "agent" ? "Agent" : kind === "manual" ? "人工客服" : "客户";
   const isImageMessage = message.contentType === "image";
+  // 文件消息：contentType=file（回声行）或 mediaKind=file（融合后的 manual 行）
+  const isFileMessage =
+    message.contentType === "file" || message.mediaKind === "file";
   // 表情包消息：纯文本 [表情包]<含义>，不渲染图片
   const stickerText = emotionDisplayText(message);
   // 引用回复：在当前聊天记录中查找被引用的原消息
@@ -2454,14 +2489,14 @@ function TranscriptMessage({
       : "〔非文本消息〕")
     : "";
   // @提及分段渲染
-  const displayText = stickerText ?? (isImageMessage ? "图片需联网查看" : message.text || "[非文本消息]");
-  const segments = stickerText === null && !isImageMessage ? mentionSegments(displayText) : [];
+  const displayText = stickerText ?? (isImageMessage ? "图片需联网查看" : isFileMessage ? message.mediaFileName || "文件" : message.text || "[非文本消息]");
+  const segments = stickerText === null && !isImageMessage && !isFileMessage ? mentionSegments(displayText) : [];
   const hasMentions = segments.some((s) => s.mention);
   return (
     <>
       <View
-        accessible={!isImageMessage}
-        accessibilityLabel={`${label}，${isImageMessage ? "图片消息" : message.text || "非文本消息"}${showTime ? `，${formatTime(message.occurredAt)}` : ""}`}
+        accessible={!isImageMessage && !isFileMessage}
+        accessibilityLabel={`${label}，${isImageMessage ? "图片消息" : isFileMessage ? `文件消息 ${message.mediaFileName ?? ""}` : message.text || "非文本消息"}${showTime ? `，${formatTime(message.occurredAt)}` : ""}`}
         style={[styles.messageRow, right ? styles.right : styles.left]}
       >
         {kind === "customer" ? (
@@ -2484,6 +2519,12 @@ function TranscriptMessage({
               : kind === "manual"
                 ? styles.me
                 : styles.agent,
+            // 图片/文件/表情裸渲染：去掉聊天气泡底（微信式）
+            ((isImageMessage && message.mediaId && session) ||
+              (isFileMessage && message.mediaId && session) ||
+              (stickerText !== null && Boolean(message.mediaId))
+              ? styles.bubbleBare
+              : null),
           ]}
         >
           {quotedMsg ? (
@@ -2500,6 +2541,13 @@ function TranscriptMessage({
               mediaId={message.mediaId}
               offline={Boolean(offline)}
               onOpen={() => setImageOpen(true)}
+            />
+          ) : isFileMessage && message.mediaId && session ? (
+            <MediaFileBubble
+              session={session}
+              mediaId={message.mediaId}
+              fileName={message.mediaFileName}
+              align={right ? "right" : "left"}
             />
           ) : message.contentType === "voice" && message.mediaId && session ? (
             <VoiceBubble
@@ -2533,12 +2581,20 @@ function TranscriptMessage({
             >
               {isImageMessage
                 ? "图片需联网查看"
-                : message.text || "[非文本消息]"}
+                : isFileMessage
+                  ? message.mediaFileName || "文件"
+                  : message.text || "[非文本消息]"}
             </Text>
           )}
           {kind === "manual" && message.sendState && (
             <Pressable onPress={onRetry} disabled={!onRetry}>
-              <Text style={styles.pending}>
+              <Text
+                style={[
+                  styles.pending,
+                  // 媒体裸渲染后无深色底：状态文字改用可读的次级色
+                  (isImageMessage || isFileMessage) && styles.pendingOnBare,
+                ]}
+              >
                 {message.sendState === "failed"
                   ? failureCopy(message.sendErrorCode)
                   : sendStateCopy(message.sendState)}
@@ -2894,6 +2950,7 @@ function Composer({
   onClearReply,
   onPickImage,
   onPickFile,
+  onPickAsset,
 }: {
   draft: string;
   onChange: (value: string) => void;
@@ -2911,6 +2968,7 @@ function Composer({
   onClearReply?: () => void;
   onPickImage?: () => void;
   onPickFile?: () => void;
+  onPickAsset?: () => void;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
@@ -3065,6 +3123,14 @@ function Composer({
           >
             <File size={20} color={colors.ink} />
             <Text style={styles.moreActionTitle}>文件</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => runTool(onPickAsset ?? (() => {}))}
+            disabled={disabled}
+            style={styles.moreActionButton}
+          >
+            <DotsThree size={20} color={colors.ink} />
+            <Text style={styles.moreActionTitle}>素材空间</Text>
           </Pressable>
         </Animated.View>
       )}
@@ -3672,6 +3738,15 @@ const createStyles = (colors: ThemeColors) =>
       paddingVertical: 10,
       maxWidth: "76%",
     },
+    // 媒体裸渲染（微信式）：图片/文件/表情不带聊天气泡底
+    bubbleBare: {
+      paddingHorizontal: 0,
+      paddingVertical: 0,
+      backgroundColor: "transparent",
+      borderWidth: 0,
+      borderRadius: 10,
+      overflow: "visible" as const,
+    },
     customer: {
       backgroundColor: colors.paper,
       borderWidth: StyleSheet.hairlineWidth,
@@ -3786,6 +3861,7 @@ const createStyles = (colors: ThemeColors) =>
     loadErrorActionPressed: { opacity: 0.8 },
     loadErrorActionText: { color: colors.blue, fontSize: 13, fontWeight: "700" },
     pending: { color: "rgba(255,255,255,0.78)", fontSize: 10, marginTop: 7 },
+    pendingOnBare: { color: colors.muted },
     composer: {
       paddingHorizontal: 14,
       paddingTop: 10,

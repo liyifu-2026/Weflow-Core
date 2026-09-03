@@ -63,13 +63,44 @@ const RECEPTION_SETTINGS = {
   extensionId: "support-pipeline",
 } as const;
 
-const PLAN_CACHE_TTL_MS = 30_000;
-let planCache: ReceptionPlan | null = null;
-let planCacheFetchedAt = 0;
+/** 编排设置 TTL：plan 与群聊附加指令同源（同一 extension_settings 行） */
+const SETTINGS_CACHE_TTL_MS = 30_000;
+/** AI 员工解析 TTL：prompt 与 employeeId 同 key 同生命周期 */
+const RESOLUTION_CACHE_TTL_MS = 5 * 60 * 1000;
 
-async function readReceptionPlan(db: RawDb): Promise<ReceptionPlan> {
-  if (planCache && Date.now() - planCacheFetchedAt < PLAN_CACHE_TTL_MS) {
-    return planCache;
+/**
+ * 编排设置缓存（模块级单值）。
+ * plan 与群聊附加指令读的是同一行 extension_settings，合并为一次读取
+ * 与一条缓存，消除两套 TTL/空值标记的漂移空间。
+ */
+type CachedSettings = {
+  plan: ReceptionPlan;
+  groupInstruction: string | null;
+  fetchedAt: number;
+};
+let settingsCache: CachedSettings | null = null;
+
+/** 从扩展设置容错提取群聊附加指令（groupChat.extraInstruction） */
+function extractGroupInstruction(raw: unknown): string | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const groupChat = (raw as Record<string, unknown>).groupChat;
+  if (typeof groupChat !== "object" || groupChat === null) return null;
+  const instruction = (groupChat as Record<string, unknown>).extraInstruction;
+  return typeof instruction === "string" && instruction.trim() !== ""
+    ? instruction.trim()
+    : null;
+}
+
+/**
+ * 读取编排设置（TTL 缓存）。
+ * 读失败 fail-open：返回"无编排配置"且不缓存失败结果，下次重读。
+ */
+async function readReceptionSettings(db: RawDb): Promise<CachedSettings> {
+  if (
+    settingsCache &&
+    Date.now() - settingsCache.fetchedAt < SETTINGS_CACHE_TTL_MS
+  ) {
+    return settingsCache;
   }
   try {
     const result = await db.execute({
@@ -79,12 +110,18 @@ async function readReceptionPlan(db: RawDb): Promise<ReceptionPlan> {
       args: [RECEPTION_SETTINGS.solutionId, RECEPTION_SETTINGS.extensionId],
     });
     const settingsJson = result.rows?.[0]?.settings_json;
-    planCache = extractReceptionPlan(settingsJson);
-    planCacheFetchedAt = Date.now();
-    return planCache;
+    settingsCache = {
+      plan: extractReceptionPlan(settingsJson),
+      groupInstruction: extractGroupInstruction(settingsJson),
+      fetchedAt: Date.now(),
+    };
+    return settingsCache;
   } catch {
-    // 读失败 fail-open：当作没有编排配置。
-    return extractReceptionPlan(undefined);
+    return {
+      plan: extractReceptionPlan(undefined),
+      groupInstruction: null,
+      fetchedAt: 0,
+    };
   }
 }
 
@@ -94,7 +131,7 @@ async function resolvePlanEmployeeId(
   triggerText: string | undefined,
 ): Promise<string | null> {
   if (!triggerText || triggerText.trim() === "") return null;
-  const plan = await readReceptionPlan(db);
+  const { plan } = await readReceptionSettings(db);
   const employeeKey = matchEmployeeRoute(triggerText, plan.employeeRoutes);
   if (!employeeKey) return null;
   try {
@@ -191,8 +228,37 @@ async function fetchPublishedPrompt(
   return (result.rows?.[0]?.prompt as string) ?? null;
 }
 
-/** 缓存命中员工对应的 definition_id（与 prompt 缓存同生命周期） */
-const aiEmployeeIdCache = new Map<string, string>();
+/**
+ * AI 员工运行时解析缓存，keyed by `${contactId}:${conversationId}`。
+ * prompt 与 employeeId 在一次预解析中成对写入、同时过期，
+ * 不会出现"prompt 来自员工 A 而 actor_id 来自员工 B"的窗口。
+ */
+type CachedEmployee = {
+  prompt: string | null;
+  employeeId: string | null;
+  fetchedAt: number;
+};
+const aiEmployeeCache = new Map<string, CachedEmployee>();
+
+function cachedEmployee(key: string): CachedEmployee | undefined {
+  const entry = aiEmployeeCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() - entry.fetchedAt >= RESOLUTION_CACHE_TTL_MS) {
+    aiEmployeeCache.delete(key);
+    return undefined;
+  }
+  return entry;
+}
+
+/** 群聊附加指令拼接：空指令原样返回（prompt 与未配置时逐字节一致） */
+function appendGroupInstruction(
+  system: string,
+  instruction: string | null | undefined,
+): string {
+  return instruction && instruction.trim() !== ""
+    ? `${system}\n\n【群聊附加指令】${instruction.trim()}`
+    : system;
+}
 
 function resolveSystemPrompt(
   input: AgentStrategyContext,
@@ -253,24 +319,31 @@ export function createStrategy(_ctx?: { db?: unknown }): AgentExecutionStrategy 
       const knowledgeAvailable =
         input.availableTools.includes("retrieve_knowledge");
       const chatType = input.chatType ?? "private";
+      // 群聊附加指令（接待编排配置）：preResolve 时随编排设置一并预取
+      const groupInstruction =
+        chatType === "group" ? (settingsCache?.groupInstruction ?? null) : null;
 
-      // Check cached AI employee prompt (populated by the async pre-resolver)
-      const cachedPrompt = aiEmployeePromptCache.get(
+      // Cached AI employee resolution (populated by the async pre-resolver)
+      const cached = cachedEmployee(
         `${input.contactId}:${input.conversationId}`,
       );
-      if (cachedPrompt) {
+      if (cached?.prompt) {
         return {
           system: aiEmployeeSystemPrompt(
-            cachedPrompt,
+            cached.prompt,
             knowledgeAvailable,
             chatType,
+            groupInstruction ?? undefined,
           ),
           messages: input.messages,
         };
       }
 
       return {
-        system: resolveSystemPrompt(input),
+        system: appendGroupInstruction(
+          resolveSystemPrompt(input),
+          groupInstruction,
+        ),
         messages: input.messages,
       };
     },
@@ -278,14 +351,6 @@ export function createStrategy(_ctx?: { db?: unknown }): AgentExecutionStrategy 
     validateAction: () => ({ ok: true }),
   };
 }
-
-/**
- * In-memory cache for AI employee prompts, keyed by contactId:conversationId.
- * Entries expire after 5 minutes to pick up prompt changes without restart.
- */
-const aiEmployeePromptCache = new Map<string, string>();
-const cacheTimestamps = new Map<string, number>();
-const CACHE_TTL_MS = 5 * 60 * 1000;
 
 /**
  * Pre-resolve AI employee prompt for a given contact/conversation pair.
@@ -304,23 +369,31 @@ export async function preResolveAiEmployeePrompt(
   triggerText?: string | undefined,
 ): Promise<void> {
   const cacheKey = `${contactId}:${conversationId}`;
-  const cachedAt = cacheTimestamps.get(cacheKey);
-  if (cachedAt && Date.now() - cachedAt < CACHE_TTL_MS) return;
+  if (cachedEmployee(cacheKey)) return;
 
-  // 与 prompt 解析同一优先级顺序，把命中的员工 definition_id 一并缓存，
-  // 供 Turn 落库时写入 messages.actor_id（前端据此渲染该员工的头像）。
+  // 编排设置（含群聊附加指令）随每次预解析刷新（TTL 缓存），
+  // 供 buildModelRequest 同步使用；与员工解析同一 DB 句柄。
+  await readReceptionSettings(db).catch(() => ({
+    plan: extractReceptionPlan(undefined),
+    groupInstruction: null,
+    fetchedAt: 0,
+  }));
+
+  // prompt 与 definition_id 同优先级（联系人绑定 → 关键词路由 → 工作区
+  // 默认）成对解析并写入同一条缓存：prompt 供 buildModelRequest 使用，
+  // definition_id 供 Turn 落库时写入 messages.actor_id（前端渲染头像）。
   const employeeId = await resolveAiEmployeeId(db, contactId, triggerText);
-  if (employeeId) {
-    aiEmployeeIdCache.set(cacheKey, employeeId);
-  } else {
-    aiEmployeeIdCache.delete(cacheKey);
-  }
+  const prompt = employeeId
+    ? await fetchPublishedPrompt(db, employeeId)
+    : await resolveAiEmployeePrompt(db, contactId, triggerText);
 
-  const prompt = await resolveAiEmployeePrompt(db, contactId, triggerText);
-  if (prompt) {
-    aiEmployeePromptCache.set(cacheKey, prompt);
-    cacheTimestamps.set(cacheKey, Date.now());
-  }
+  // 命中即缓存（含 employeeId 为 null 的否定结果，避免反复查库）；
+  // prompt 为 null 时下次 buildModelRequest 回落静态/内置提示词。
+  aiEmployeeCache.set(cacheKey, {
+    prompt,
+    employeeId,
+    fetchedAt: Date.now(),
+  });
 }
 
 /**
@@ -368,5 +441,7 @@ export function getCachedAiEmployeeId(
   contactId: string,
   conversationId: string,
 ): string | null {
-  return aiEmployeeIdCache.get(`${contactId}:${conversationId}`) ?? null;
+  return (
+    cachedEmployee(`${contactId}:${conversationId}`)?.employeeId ?? null
+  );
 }

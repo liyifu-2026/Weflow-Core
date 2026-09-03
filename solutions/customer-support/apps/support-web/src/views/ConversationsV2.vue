@@ -131,6 +131,60 @@ const sessionTrace = ref<{
   events: { eventType: string; reasonCode?: string | null; payload?: Record<string, any>; createdAt: string }[];
 } | null>(null);
 const sessionTraceOpen = ref(false);
+// 「AI 正在思考」实时感（Phase 4）：轮询进行中的 turn 事件 + 思维链
+const liveThinking = ref<{
+  turnId: string;
+  status: string;
+  startedAt?: string;
+  lastEventLabel?: string;
+  reasoning?: string | null;
+} | null>(null);
+let livePollTimer: ReturnType<typeof setInterval> | null = null;
+const LIVE_POLL_MS = 2_000;
+const STAGE_LABELS: Record<string, string> = {
+  triaged: "正在判断消息类型…",
+  context_built: "正在装配上下文…",
+  tool_checkpoint_persisted: "正在规划工具调用…",
+  knowledge_retrieved: "知识库检索完成",
+  tool_completed: "工具执行完成",
+  policy_decided: "正在整理回复…",
+  draft_generated: "正在生成回复…",
+  model_reasoning: "正在深入思考…",
+};
+function liveStageLabel(eventType?: string): string {
+  if (!eventType) return "正在处理…";
+  return STAGE_LABELS[eventType] ?? "正在处理…";
+}
+async function pollLiveTurn(conversationId: string) {
+  try {
+    const result = await api<any>(
+      `/api/v1/agent/live-turn/${encodeURIComponent(conversationId)}`,
+    );
+    liveThinking.value = result?.live
+      ? {
+          turnId: result.live.turnId,
+          status: result.live.status,
+          startedAt: result.live.startedAt,
+          lastEventLabel: liveStageLabel(result.live.lastEvent?.eventType),
+          reasoning: result.live.reasoning ?? null,
+        }
+      : null;
+  } catch {
+    /* 轮询失败静默：下个周期重试 */
+  }
+}
+function startLivePolling(conversationId: string) {
+  stopLivePolling();
+  void pollLiveTurn(conversationId);
+  livePollTimer = setInterval(() => void pollLiveTurn(conversationId), LIVE_POLL_MS);
+}
+function stopLivePolling() {
+  if (livePollTimer) {
+    clearInterval(livePollTimer);
+    livePollTimer = null;
+  }
+  liveThinking.value = null;
+}
 const sessionTraceLoading = ref(false);
 const profile = ref<any>(null);
 const evidence = ref<Evidence[]>([]);
@@ -1139,6 +1193,7 @@ async function select(id: string, syncRoute = true) {
         normalizeHandoffStatus(handoff.value.state.status) ??
         handoff.value.state.status;
     }
+    startLivePolling(id);
     agentSession.value = sessionStateResult?.session ?? null;
     sessionWakes.value = sessionWakesResult?.wakes ?? [];
     sessionTraceOpen.value = false;
@@ -1675,6 +1730,9 @@ function onTakeoverShortcut(event: KeyboardEvent) {
   void transition("take-over");
 }
 
+onUnmounted(() => {
+  stopLivePolling();
+});
 onMounted(async () => {
   await Promise.all([
     loadList(true),
@@ -2450,6 +2508,24 @@ onUnmounted(() => {
                 </template>
               </div>
               </template>
+              <!-- 「AI 正在思考」气泡（Phase 4）：进行中 turn 的阶段 + 思维链 -->
+              <div
+                v-if="liveThinking"
+                class="wf-message-row session-wait-row"
+              >
+                <div class="thinking-bubble">
+                  <div class="thinking-head">
+                    <span class="thinking-dots"><i></i><i></i><i></i></span>
+                    <span class="thinking-stage">{{
+                      liveThinking.lastEventLabel
+                    }}</span>
+                  </div>
+                  <details v-if="liveThinking.reasoning" class="thinking-body">
+                    <summary>思考过程</summary>
+                    <pre class="thinking-text">{{ liveThinking.reasoning }}</pre>
+                  </details>
+                </div>
+              </div>
               <!-- wait 时间线节点（Phase 3）：scheduled=待发提醒；done=已发提醒/已唤醒 -->
               <div
                 v-if="pendingWake && agentSession?.state === 'waiting'"
@@ -3644,6 +3720,74 @@ onUnmounted(() => {
 .wf-mention {
   color: #1a73e8;
   font-weight: 600;
+}
+
+/* ---------- 思维链气泡（Phase 4） ---------- */
+.thinking-bubble {
+  max-width: 78%;
+  padding: 10px 14px;
+  border-radius: 14px 14px 14px 4px;
+  background: var(--wf-surface, #fff);
+  border: 1px solid rgba(26, 115, 232, 0.25);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+.thinking-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.thinking-stage {
+  font-size: 13px;
+  color: #1a73e8;
+  font-weight: 500;
+}
+.thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+.thinking-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #1a73e8;
+  animation: thinking-bounce 1.2s ease-in-out infinite;
+}
+.thinking-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.thinking-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes thinking-bounce {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+.thinking-body {
+  margin-top: 8px;
+  border-top: 1px dashed rgba(26, 115, 232, 0.25);
+  padding-top: 6px;
+}
+.thinking-body summary {
+  font-size: 12px;
+  color: var(--wf-text-secondary, #5f6368);
+  cursor: pointer;
+  user-select: none;
+}
+.thinking-text {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--wf-text-secondary, #5f6368);
+  max-height: 260px;
+  overflow-y: auto;
 }
 
 /* ---------- 会话模式可视化（Phase 3/4） ---------- */

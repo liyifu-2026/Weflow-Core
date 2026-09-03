@@ -34,6 +34,7 @@ import {
 } from "@/conversations/api";
 import { contactDisplayName } from "@/conversations/contact-profile";
 import { MediaImage } from "@/media/media-image";
+import { MediaFileBubble } from "@/media/media-file-bubble";
 import { MediaViewerModal } from "@/media/media-viewer";
 import { VoiceBubble } from "@/media/voice-bubble";
 import { formatDay, formatTime } from "@/ui/format";
@@ -616,6 +617,13 @@ function ReadOnlyConversation({
                       offline={false}
                       style={styles.historyImage}
                       onOpen={() => setLightboxMediaId(message.mediaId ?? null)}
+                    />
+                  ) : (message.contentType === "file" || message.mediaKind === "file") && message.mediaId ? (
+                    <MediaFileBubble
+                      session={session}
+                      mediaId={message.mediaId}
+                      fileName={message.mediaFileName}
+                      align={message.direction === "outbound" ? "right" : "left"}
                     />
                   ) : message.contentType === "voice" && message.mediaId ? (
                     <VoiceBubble

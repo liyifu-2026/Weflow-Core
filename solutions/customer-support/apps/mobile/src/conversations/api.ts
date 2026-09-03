@@ -42,6 +42,8 @@ export type {
 type ServerConversation = {
   conversationId: string;
   channel?: string;
+  /** 会话类型：group = 群聊（channel ref 以 @chatroom 结尾），private = 私聊 */
+  chatType?: "private" | "group";
   latestMessageAt?: string;
   contact?: {
     contactId?: string;
@@ -88,9 +90,15 @@ export type ServerMessage = {
   actorId?: string | null;
   /** AI 员工头像（平台 DiceBear 代理 URL）；人工/客户消息为 null */
   actorAvatarUrl?: string | null;
+  /** 群聊消息的发送者昵称（Core 由联系人资料解析；私聊恒为 null） */
+  senderName?: string | null;
   direction: string;
   contentType: string;
   mediaId?: string | null;
+  /** 媒体细分类型（Core mediaAssets.kind）：图片/文件卡片据此渲染 */
+  mediaKind?: string | null;
+  /** 文件名（出站=暂存原名；入站=Host 上报原名） */
+  mediaFileName?: string | null;
   text: string;
   sendState?: string | null;
   sendErrorCode?: string | null;
@@ -110,6 +118,8 @@ export type TranscriptPage = {
   messages: ServerMessage[];
   nextCursor: string | null;
   conversationRevision?: number;
+  /** 会话类型：群聊 / 私聊（Core 由 channel ref 派生） */
+  chatType?: "private" | "group";
   /** Present only when restored from the encrypted offline cache. */
   cachedHandoff?: HandoffDetail;
 };
@@ -180,6 +190,8 @@ export async function listMobileHandoffInbox(
 /** GET /api/v1/conversations 列表项（mobile 可接管列表复用，Bearer 认证） */
 type TakeoverableConversationWire = {
   conversationId: string;
+  /** 会话类型：group = 群聊（channel ref 以 @chatroom 结尾） */
+  chatType?: "private" | "group";
   latestMessageAt?: string;
   latestMessage?: { text?: string };
   contact?: {
@@ -233,6 +245,7 @@ function normalizeTakeoverableConversation(
     time: relativeTime(item.latestMessageAt),
     latestMessageAt: item.latestMessageAt,
     state: "agent",
+    chatType: item.chatType,
     contactId: item.contact?.contactId ?? null,
     unread:
       typeof item.unreadCustomerCount === "number"
@@ -554,7 +567,7 @@ export async function getHandoffOperationOutcome(
   };
 }
 
-/** 发送手动回复消息给客户，支持可选的媒体文件和引用回复 */
+/** 发送手动回复消息给客户，支持可选的媒体文件、素材空间引用和引用回复 */
 export async function sendManualReply(
   session: MobileSession,
   conversationId: string,
@@ -564,6 +577,8 @@ export async function sendManualReply(
   options?: {
     mediaId?: string;
     media?: { fileId: string; kind: "image" | "file" | "voice" };
+    /** 素材空间引用（服务端派生 mediaId，无需重新上传文件字节） */
+    assetId?: string;
     replyToChannelMessageId?: string;
   },
 ): Promise<ServerMessage> {
@@ -574,6 +589,7 @@ export async function sendManualReply(
   };
   if (options?.mediaId) body.mediaId = options.mediaId;
   if (options?.media) body.media = options.media;
+  if (options?.assetId) body.assetId = options.assetId;
   if (options?.replyToChannelMessageId)
     body.replyToChannelMessageId = options.replyToChannelMessageId;
   const result = await request<{ message: ServerMessage }>(

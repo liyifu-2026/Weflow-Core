@@ -15,6 +15,8 @@ export type ConversationPreview = {
   time: string;
   latestMessageAt?: string;
   state: WorkState;
+  /** 会话类型：group = 群聊（Core 由 channel ref 派生）；缺省 private */
+  chatType?: "private" | "group";
   /** 客户 contactId（contact:wechat:xxx），用于头像代理端点 */
   contactId?: string | null;
   avatarUrl?: string | null;

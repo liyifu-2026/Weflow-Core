@@ -7,6 +7,7 @@ import { router } from "expo-router";
 import { CaretDown } from "phosphor-react-native/src/icons/CaretDown";
 import { CaretUp } from "phosphor-react-native/src/icons/CaretUp";
 import { MagnifyingGlass } from "phosphor-react-native/src/icons/MagnifyingGlass";
+import { Users } from "phosphor-react-native/src/icons/Users";
 import { X } from "phosphor-react-native/src/icons/X";
 import * as Crypto from "expo-crypto";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -364,9 +365,10 @@ function ConversationsPage(props: {
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
+  // 折叠状态只隐藏成员行；折叠条计数始终显示完整数量（修 bug：折叠后计数变 0）
   const sections = props.groups.map((group) => ({
     ...group,
-    data: props.collapsed.has(group.key) ? [] : group.data,
+    visible: !props.collapsed.has(group.key),
   }));
   return (
     <FlatList
@@ -408,21 +410,23 @@ function ConversationsPage(props: {
               <CaretUp size={14} color={colors.muted} />
             )}
           </Pressable>
-          {group.data.map((item, index) => (
-            <InboxRow
-              key={item.id}
-              item={item}
-              tone={group.tone}
-              last={index === group.data.length - 1}
-              busy={props.busyId === item.id}
-              sessionToken={props.sessionToken}
-              onPress={() => props.onOpen(item)}
-              onClaim={() => props.onClaim(item)}
-              onTakeover={() => props.onTakeover(item)}
-              onHide={() => props.onHide(item)}
-              onHandback={() => props.onHandback(item)}
-            />
-          ))}
+          {group.visible
+            ? group.data.map((item, index) => (
+                <InboxRow
+                  key={item.id}
+                  item={item}
+                  tone={group.tone}
+                  last={index === group.data.length - 1}
+                  busy={props.busyId === item.id}
+                  sessionToken={props.sessionToken}
+                  onPress={() => props.onOpen(item)}
+                  onClaim={() => props.onClaim(item)}
+                  onTakeover={() => props.onTakeover(item)}
+                  onHide={() => props.onHide(item)}
+                  onHandback={() => props.onHandback(item)}
+                />
+              ))
+            : null}
         </View>
       )}
       ListEmptyComponent={
@@ -558,6 +562,7 @@ function InboxRow({
   onHandback: () => void;
 }) {
   const styles = useThemedStyles(createStyles);
+  const { colors } = useTheme();
   const needClaim = item.state === "pending" || item.state === "transfer_target";
   const isMine = item.state === "mine";
   const canTakeover = item.state === "agent";
@@ -651,6 +656,10 @@ function InboxRow({
             <Text numberOfLines={1} style={styles.name}>
               {item.name}
             </Text>
+            {/* 群聊标识：Users 图标跟在名称后，与私聊区分 */}
+            {item.chatType === "group" ? (
+              <Users size={13} color={colors.muted} weight="fill" />
+            ) : null}
             <Text style={styles.time}>{item.time}</Text>
           </View>
           <Text numberOfLines={1} style={styles.problem}>

@@ -4,7 +4,7 @@
   "metadata": {
     "id": "weflow.customer-support",
     "name": "Customer Support Solution",
-    "version": "1.3.0",
+    "version": "1.5.0",
     "publisher": "weflow"
   },
   "compatibility": {
@@ -128,6 +128,14 @@
       "path": "/support/knowledge",
       "entry": "apps/support-web/dist/support-console.js",
       "icon": "knowledge",
+      "group": "客服业务"
+    },
+    {
+      "id": "support-assets",
+      "title": "素材",
+      "path": "/support/assets",
+      "entry": "apps/support-web/dist/support-console.js",
+      "icon": "image",
       "group": "客服业务"
     },
     {

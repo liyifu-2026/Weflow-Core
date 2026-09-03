@@ -57,13 +57,15 @@ export function AvatarPickerSheet({
     onSessionUpdate,
   );
 
-  /** 弹层打开时拉取预设清单（关闭时重置） */
+  /** 弹层打开时拉取预设清单（异步回调内 setState，避免 effect 体内同步触发级联渲染） */
   useEffect(() => {
     if (!visible || !session) return;
-    setLoadFailed(false);
+    const reset = () => setLoadFailed(false);
+    const timer = setTimeout(reset, 0);
     fetchAvatarPresets(session)
       .then(setPresets)
       .catch(() => setLoadFailed(true));
+    return () => clearTimeout(timer);
   }, [visible, session]);
 
   async function applyUserUpdate(user: MobileSession["user"]) {

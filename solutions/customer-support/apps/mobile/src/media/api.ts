@@ -57,7 +57,7 @@ export async function uploadMedia(
   fileUri: string,
   fileName: string,
   mimeType: string,
-): Promise<{ mediaId: string; kind: "image" | "file" | "voice" }> {
+): Promise<{ mediaId: string; kind: "image" | "file" }> {
   const formData = new FormData();
   formData.append("file", {
     uri: fileUri,
@@ -83,7 +83,7 @@ export async function uploadMedia(
   }
   const result = (await response.json()) as {
     mediaId: string;
-    kind: "image" | "file" | "voice";
+    kind: "image" | "file";
   };
   return result;
 }
