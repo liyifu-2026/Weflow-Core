@@ -40,6 +40,20 @@ const dbMock = {
   insert: vi.fn().mockReturnThis(),
   values: vi.fn().mockReturnThis(),
   onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
+  onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+  select: vi.fn().mockReturnThis(),
+  from: vi.fn().mockReturnThis(),
+  where: vi.fn().mockImplementation(() => {
+    const p = Promise.resolve([]);
+    return Object.assign(p, {
+      orderBy: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue([]),
+    });
+  }),
+  orderBy: vi.fn().mockReturnThis(),
+  limit: vi.fn().mockResolvedValue([]),
+  update: vi.fn().mockReturnThis(),
+  set: vi.fn().mockResolvedValue(undefined),
 };
 // 既有测试以 db 传参并断言调用；Phase 3 wait 分支需要 db 支持 insert
 const db = dbMock as unknown as never;

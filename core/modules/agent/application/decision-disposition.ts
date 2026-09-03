@@ -35,7 +35,10 @@ import {
   persistAgentToolCheckpoint,
 } from "./agent-turn-outcome-command.js";
 import { hasNewerAgentTurn } from "./turn-utils.js";
-import { scheduleSessionWake } from "./session-wake.js";
+import {
+  ensureSessionOnWait,
+  scheduleSessionWake,
+} from "./session-wake.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
@@ -184,12 +187,18 @@ async function commitFreshDisposition(
       turnId,
       reason: "waiting_for_user",
     });
+    const now = new Date();
     await scheduleSessionWake(db, {
       conversationId,
       turnId,
       waitMs: decision.waitMs ?? 300_000,
       ...(decision.nudgeText ? { nudgeText: decision.nudgeText } : {}),
-      now: new Date(),
+      now,
+    });
+    await ensureSessionOnWait(db, {
+      conversationId,
+      turnId,
+      now,
     });
     return { action: "terminal" };
   }

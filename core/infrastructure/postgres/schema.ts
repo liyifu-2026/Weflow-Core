@@ -488,6 +488,43 @@ export const turnAdmissionStates = agentSchema.table(
 );
 
 /**
+ * 会话片段（Phase 3）：一会话一行的状态实体（active/waiting/closed）。
+ * 预算计数（roundsUsed/roundBudget）与收件箱水位支撑前端可视化。
+ */
+export const agentSessions = agentSchema.table(
+  "sessions",
+  {
+    sessionId: varchar("session_id", { length: 700 }).primaryKey(),
+    conversationId: varchar("conversation_id", { length: 300 })
+      .notNull()
+      .references(() => conversations.conversationId),
+    state: varchar("state", { length: 30 }).default("active").notNull(),
+    roundsUsed: integer("rounds_used").default(0).notNull(),
+    roundBudget: integer("round_budget").default(24).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    closureSummary: text("closure_summary"),
+    inboxWatermarkMessageId: varchar("inbox_watermark_message_id", {
+      length: 600,
+    }).references(() => messages.messageId),
+    revision: integer("revision").default(1).notNull(),
+    errorCode: varchar("error_code", { length: 100 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("agent_sessions_conversation_state_idx").on(
+      table.conversationId,
+      table.state,
+    ),
+  ],
+);
+
+/**
  * 会话唤醒计划（Phase 3）：wait 决策的持久化形态。wakeAt 到点由
  * dispatcher 触发续轮；带 nudge_text 的唤醒由代码直发预承诺话术
  * （不开模型）。幂等键 turnId——同轮重复决策覆盖旧计划。

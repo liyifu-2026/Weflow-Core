@@ -5,9 +5,13 @@
  * 续轮（或按预承诺 nudge 直接代发，不开模型——省掉 qq-bridge 式
  * 沉默唤醒的空转轮）。照 turn_admission/memory_capture 家法。
  */
-import { and, eq, lte } from "drizzle-orm";
+import { and, desc, eq, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
+import {
+  DEFAULT_SESSION_TTL_MS,
+  MAX_ROUNDS_PER_SESSION,
+} from "./agent-session.js";
 
 export type SessionWakeInput = {
   conversationId: string;
@@ -46,6 +50,57 @@ export async function scheduleSessionWake(
         nudgeText: input.nudgeText ?? null,
       },
     });
+}
+
+/**
+ * wait 决策时同步维护会话行：active/waiting 状态 + 轮数累计。
+ * 已 closed 的会话不复活（终态由收尾路径或策略闸门管理）。
+ */
+export async function ensureSessionOnWait(
+  db: NodePgDatabase<typeof schema>,
+  input: {
+    conversationId: string;
+    turnId: string;
+    now: Date;
+    ttlMs?: number | undefined;
+    roundBudget?: number | undefined;
+  },
+): Promise<void> {
+  const [existing] = await db
+    .select({
+      sessionId: schema.agentSessions.sessionId,
+      state: schema.agentSessions.state,
+      roundsUsed: schema.agentSessions.roundsUsed,
+    })
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.conversationId, input.conversationId))
+    .orderBy(desc(schema.agentSessions.startedAt))
+    .limit(1);
+  if (existing) {
+    if (existing.state === "closed") return;
+    await db
+      .update(schema.agentSessions)
+      .set({
+        state: "waiting",
+        roundsUsed: existing.roundsUsed + 1,
+        updatedAt: input.now,
+      })
+      .where(eq(schema.agentSessions.sessionId, existing.sessionId));
+    return;
+  }
+  const ttlMs = input.ttlMs ?? DEFAULT_SESSION_TTL_MS;
+  const roundBudget = input.roundBudget ?? MAX_ROUNDS_PER_SESSION;
+  await db
+    .insert(schema.agentSessions)
+    .values({
+      sessionId: `session:${input.turnId}`,
+      conversationId: input.conversationId,
+      state: "waiting",
+      roundsUsed: 1,
+      roundBudget,
+      startedAt: new Date(input.now.getTime() - ttlMs + 60_000),
+    })
+    .onConflictDoNothing();
 }
 
 /** dispatcher 扫描到期唤醒行。 */
