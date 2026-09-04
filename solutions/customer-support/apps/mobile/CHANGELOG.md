@@ -11,6 +11,8 @@
 
 ### Changed
 
+- 工作首页会话列表迁移 FlashList：分组头 + 会话行扁平化为逐行虚拟化，大会话量不再整组渲染（原「分组 FlatList 嵌套整组 map」）；折叠/搜索/左滑行为不变（新增 @shopify/flash-list，指纹变化）。
+
 - 图片隐私与性能批次：所有来自 Core 的图片（消息图、头像、素材缩略图、全屏查看）显式 `cachePolicy: "memory"`，修复此前磁盘缓存导致登出后客户图片仍留本机的隐私缺口（`clearMemoryCache` 现在完整生效）；上传前长边超 2048px 的图片自动等比压缩并归一化 JPEG（新增 `expo-image-manipulator`，指纹变化）。
 - API 客户端新增默认 20 秒请求超时（弱网下 loading 不再无限挂起；媒体上传单独 60 秒），超时提示「请求超时，网络不给力，请重试」。
 - 工程卫生批次：`app.json` 版本号对齐 package.json（0.8.0，修复「安全与关于」页显示旧版本）；移除 5 个零引用依赖（@ronradtke/react-native-markdown-display、expo-font、expo-web-browser、expo-device、expo-linking）；会话详情页日期分组与首字母头像的时间/字符工具收敛到 `src/ui/format.ts` 与 `initialFor()`，消除三处重复实现。

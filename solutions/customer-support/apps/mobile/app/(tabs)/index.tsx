@@ -26,6 +26,7 @@ import {
   View,
 } from "react-native";
 import ReanimatedSwipeable from "react-native-gesture-handler/ReanimatedSwipeable";
+import { FlashList } from "@shopify/flash-list";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { actionErrorCopy } from "@/api/action-error-copy";
@@ -343,6 +344,23 @@ export default function HandoffInboxScreen() {
   );
 }
 
+/** 会话列表扁平行：分组头或会话行（FlashList 虚拟化单元） */
+type InboxListRow =
+  | {
+      kind: "header";
+      key: string;
+      groupKey: string;
+      tone: GroupTone;
+      count: number;
+    }
+  | {
+      kind: "session";
+      key: string;
+      tone: GroupTone;
+      item: ConversationPreview;
+      last: boolean;
+    };
+
 /** 会话页：分组折叠 + 分色卡片 + 左滑动作 */
 function ConversationsPage(props: {
   groups: { key: string; tone: GroupTone; data: ConversationPreview[] }[];
@@ -365,14 +383,36 @@ function ConversationsPage(props: {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
   // 折叠状态只隐藏成员行；折叠条计数始终显示完整数量（修 bug：折叠后计数变 0）
-  const sections = props.groups.map((group) => ({
-    ...group,
-    visible: !props.collapsed.has(group.key),
-  }));
+  // 扁平化为「分组头 + 会话行」逐行交给 FlashList 虚拟化，大会话量不再整组渲染
+  const rows = useMemo<InboxListRow[]>(() => {
+    const out: InboxListRow[] = [];
+    for (const group of props.groups) {
+      const visible = !props.collapsed.has(group.key);
+      out.push({
+        kind: "header",
+        key: `header:${group.key}`,
+        groupKey: group.key,
+        tone: group.tone,
+        count: group.data.length,
+      });
+      if (visible) {
+        group.data.forEach((item, index) => {
+          out.push({
+            kind: "session",
+            key: `session:${group.key}:${item.id}`,
+            tone: group.tone,
+            item,
+            last: index === group.data.length - 1,
+          });
+        });
+      }
+    }
+    return out;
+  }, [props.groups, props.collapsed]);
   return (
-    <FlatList
-      data={sections}
-      keyExtractor={(section) => section.key}
+    <FlashList
+      data={rows}
+      keyExtractor={(row) => row.key}
       contentContainerStyle={styles.list}
       refreshControl={
         <RefreshControl
@@ -381,12 +421,12 @@ function ConversationsPage(props: {
           tintColor={colors.primary}
         />
       }
-      renderItem={({ item: group }) => (
-        <View>
+      renderItem={({ item: row }) =>
+        row.kind === "header" ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`${groupTitle(group.key)} ${group.data.length} 个会话`}
-            onPress={() => props.onToggleGroup(group.key)}
+            accessibilityLabel={`${groupTitle(row.groupKey)} ${row.count} 个会话`}
+            onPress={() => props.onToggleGroup(row.groupKey)}
             style={({ pressed }) => [
               styles.groupBar,
               pressed && styles.groupBarPressed,
@@ -395,39 +435,35 @@ function ConversationsPage(props: {
             <View
               style={[
                 styles.groupDot,
-                group.tone === "orange" && styles.groupDotOrange,
-                group.tone === "blue" && styles.groupDotBlue,
-                group.tone === "gray" && styles.groupDotGray,
-                group.tone === "none" && styles.groupDotNone,
+                row.tone === "orange" && styles.groupDotOrange,
+                row.tone === "blue" && styles.groupDotBlue,
+                row.tone === "gray" && styles.groupDotGray,
+                row.tone === "none" && styles.groupDotNone,
               ]}
             />
-            <Text style={styles.groupTitle}>{groupTitle(group.key)}</Text>
-            <Text style={styles.groupCount}>{group.data.length}</Text>
-            {props.collapsed.has(group.key) ? (
+            <Text style={styles.groupTitle}>{groupTitle(row.groupKey)}</Text>
+            <Text style={styles.groupCount}>{row.count}</Text>
+            {props.collapsed.has(row.groupKey) ? (
               <CaretDown size={14} color={colors.muted} />
             ) : (
               <CaretUp size={14} color={colors.muted} />
             )}
           </Pressable>
-          {group.visible
-            ? group.data.map((item, index) => (
-                <InboxRow
-                  key={item.id}
-                  item={item}
-                  tone={group.tone}
-                  last={index === group.data.length - 1}
-                  busy={props.busyId === item.id}
-                  sessionToken={props.sessionToken}
-                  onPress={() => props.onOpen(item)}
-                  onClaim={() => props.onClaim(item)}
-                  onTakeover={() => props.onTakeover(item)}
-                  onHide={() => props.onHide(item)}
-                  onHandback={() => props.onHandback(item)}
-                />
-              ))
-            : null}
-        </View>
-      )}
+        ) : (
+          <InboxRow
+            item={row.item}
+            tone={row.tone}
+            last={row.last}
+            busy={props.busyId === row.item.id}
+            sessionToken={props.sessionToken}
+            onPress={() => props.onOpen(row.item)}
+            onClaim={() => props.onClaim(row.item)}
+            onTakeover={() => props.onTakeover(row.item)}
+            onHide={() => props.onHide(row.item)}
+            onHandback={() => props.onHandback(row.item)}
+          />
+        )
+      }
       ListEmptyComponent={
         props.loading ? (
           <LoadState kind="loading" title="正在读取" />
