@@ -42,8 +42,14 @@ export async function registerWebStatic(
   await server.register(fastifyStatic, {
     root: webDistDir,
     prefix: "/",
-    wildcard: false,
-    index: false,
+    // 必须用动态查盘（true）：dist 会在 API 运行期间被重新构建，Vite 产物
+    // 是 hash 文件名——wildcard:false 在启动时按当时文件注册路由，重建后新
+    // hash 文件一律 404 → 落进 SPA fallback → JS 以 text/html 返回被浏览器
+    // 严格 MIME 检查拒绝执行（症状：整站白屏，只有重建后重启 API 才恢复）。
+    wildcard: true,
+    // 目录请求（GET /）直接返回 index.html；index:false 时 wildcard 模式
+    // 对目录请求会 403（静态插件默认行为，不走 SPA fallback）
+    index: "index.html",
     // send 库默认会输出 `Cache-Control: public, max-age=0` 并覆盖 setHeaders
     // 的结果，必须关闭后由 setHeaders 全权控制缓存策略
     cacheControl: false,

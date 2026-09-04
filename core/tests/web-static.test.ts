@@ -106,4 +106,23 @@ describe("registerWebStatic", () => {
 
     await server.close();
   });
+
+  it("serves files created after registration (dist rebuilt while API runs)", async () => {
+    // 回归：dist 在 API 运行期间重建，Vite 产物 hash 文件名全换。
+    // wildcard:false 按启动时文件注册路由，新文件 404 → SPA fallback →
+    // JS 以 text/html 返回被浏览器 MIME 检查拒绝 → 白屏。
+    buildWebRoot();
+    const server = Fastify({ logger: false });
+    expect(await registerWebStatic(server, webRoot)).toBe(true);
+
+    writeFileSync(join(assetsDir, "new-hash.js"), "console.log(2)");
+    const file = await server.inject({ method: "GET", url: "/assets/new-hash.js" });
+    expect(file.statusCode).toBe(200);
+    expect(file.body).toBe("console.log(2)");
+    // 合法 JS MIME 即可通过 module script 严格校验（text/javascript 或
+    // application/javascript 均可），绝不能是 SPA fallback 的 text/html
+    expect(String(file.headers["content-type"])).toContain("javascript");
+
+    await server.close();
+  });
 });
