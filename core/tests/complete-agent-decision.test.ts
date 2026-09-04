@@ -23,6 +23,7 @@ function truncatedError(): TextModelError {
 function okResult(text: string): TextGenerationResult {
   return {
     text,
+    modelId: "test",
     finishReason: "completed",
     latencyMs: 120,
     usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 },
@@ -30,14 +31,19 @@ function okResult(text: string): TextGenerationResult {
 }
 
 function fakeModel(
-  responses: Array<Promise<TextGenerationResult> | TextModelError>,
+  responses: Array<
+    TextGenerationResult | Promise<TextGenerationResult> | TextModelError
+  >,
 ) {
   const queue = [...responses];
-  const generate = vi.fn(async (_request: TextGenerationRequest) => {
+  const generate = vi.fn(async (request: TextGenerationRequest) => {
+    if (request.messages.length === 0) {
+      throw new Error("empty messages");
+    }
     const next = queue.shift();
-    if (!next) throw new Error("no queued response");
+    if (next === undefined) throw new Error("no queued response");
     if (next instanceof TextModelError) throw next;
-    return next;
+    return await next;
   });
   return {
     model: { generate } as unknown as TextModel,

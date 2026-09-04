@@ -73,13 +73,14 @@ export type DecisionDispositionInput = {
   /** AI 员工标识；非空时写入出站消息 actor_id。 */
   aiEmployeeId: string | null;
   /**
-   * Tool-recovery path only: how many tool steps this turn has already
-   * executed（含本次恢复前的那次）。缺省按 1 计（恢复即已执行一次）。
+   * Tool-recovery path only: 本 turn 已发生的工具尝试数（含失败尝试，
+   * turn-runner 按工具执行记录计算传入）。缺省按 1 计（恢复即已尝试一次）。
    */
   toolStepsUsed?: number | undefined;
   /**
    * Tool-recovery path only: max tool steps per turn. 传 1 时行为与
-   * 旧版"一轮一次工具"逐字节一致（防腐回归锚点）。缺省按 1 计。
+   * 旧版"一轮一次工具"逐字节一致（防腐回归锚点）。缺省按 1 计
+   * （生产路径由 turn-runner 传 DEFAULT_BEHAVIOR_SETTINGS.toolStepBudget）。
    */
   toolStepBudget?: number | undefined;
   /**
@@ -299,16 +300,18 @@ async function commitFreshDisposition(
  * Tool-checkpoint recovery path tail: bounded tool loop.
  *
  * Phase 2 起"一轮一次工具"改为步数预算：恢复路径再决策出工具动作时，
- * 已执行步数（toolStepsUsed）未达预算（toolStepBudget）则允许继续
- * 规划下一次工具调用（checkpoint 续跑）；预算耗尽落 tool_chain_limit
- * 失败转人工。预算缺省 1 = 与旧版行为逐字节一致（防腐回归锚点）。
+ * 已发生尝试数（toolStepsUsed，含失败尝试）未达预算（toolStepBudget）
+ * 则允许继续规划下一次工具调用（checkpoint 续跑）；预算耗尽落
+ * tool_chain_limit 失败转人工。预算出厂默认 4
+ * （DEFAULT_BEHAVIOR_SETTINGS.toolStepBudget）；缺省 1 仅为未传参时的
+ * 防腐回落。
  */
 async function commitToolRecoveryDisposition(
   input: DecisionDispositionInput,
 ): Promise<DecisionDispositionResult> {
   const { db, decision, turnId, conversationId } = input;
 
-  // 防止工具链过长：步数预算（默认 1，turn-runner 按执行历史计算传入）
+  // 防止工具链过长：步数预算（出厂默认 4；含失败尝试，turn-runner 传入）
   const stepsUsed = input.toolStepsUsed ?? 1;
   const budget = input.toolStepBudget ?? 1;
   if (

@@ -350,60 +350,66 @@ export async function processPlannedToolTurn(
     });
     return;
   }
+  // 工具失败不再直接转人工：以「失败回执」进入恢复提示词，由模型决定
+  // 无证据作答、换查询方式重试（计入步数预算），或确需人工时自行输出
+  // handoff。持续性故障被步数预算封顶，不会无限循环。
+  let toolFailure: { toolName: string; errorCode: string } | null = null;
+  let toolResultPayload: Record<string, unknown> | undefined;
+  let evidenceList: KnowledgeEvidence[] = [];
   if (execution.status === "failed") {
-    const errorCode = execution.errorCode ?? "tool_execution_failed";
-    await commitAgentTurnFailure(db, {
-      conversationId: execution.conversationId,
-      turnId: job.turnId,
-      errorCode,
-      handoffReason: `tool_failure: ${errorCode}`,
+    // 上次执行已持久化为失败（如恢复模型调用前 worker 崩溃重投）：
+    // 不再重复执行，直接以持久化的失败原因进入恢复路径。
+    toolFailure = {
+      toolName: execution.toolName,
+      errorCode: execution.errorCode ?? "tool_execution_failed",
+    };
+  } else {
+    // 执行工具计划（幂等：重复执行同一工具不会产生副作用）
+    const toolResult = await executeToolPlan(db, execution.executionId, {
+      knowledgeSearch: dependencies.knowledgeSearch,
     });
-    return;
-  }
-  // 执行工具计划（幂等：重复执行同一工具不会产生副作用）
-  const toolResult = await executeToolPlan(db, execution.executionId, {
-    knowledgeSearch: dependencies.knowledgeSearch,
-  });
-  await recordAgentTurnEvent(db, {
-    turnId: job.turnId,
-    conversationId: execution.conversationId,
-    eventType: "tool_completed",
-    reasonCode:
-      toolResult.status === "succeeded" ||
-      toolResult.status === "already_completed"
-        ? undefined
-        : (toolResult.errorCode ?? "tool_failed"),
-    payload: { toolName: execution.toolName, status: toolResult.status },
-  });
-  // Another worker owns the current lease (or reclaimed it after this worker
-  // became stale). The late worker must not create a duplicate Handoff or
-  // overwrite the AgentTurn owned by the newer execution.
-  if (toolResult.status === "not_claimable") return;
-  // 工具执行失败时触发转人工
-  if (
-    toolResult.status !== "succeeded" &&
-    toolResult.status !== "already_completed"
-  ) {
-    const errorCode = toolResult.errorCode ?? "tool_failed";
-    await commitAgentTurnFailure(db, {
-      conversationId: execution.conversationId,
+    await recordAgentTurnEvent(db, {
       turnId: job.turnId,
-      errorCode,
-      handoffReason: `tool_failure: ${errorCode}`,
+      conversationId: execution.conversationId,
+      eventType: "tool_completed",
+      reasonCode:
+        toolResult.status === "succeeded" ||
+        toolResult.status === "already_completed"
+          ? undefined
+          : (toolResult.errorCode ?? "tool_failed"),
+      payload: { toolName: execution.toolName, status: toolResult.status },
     });
-    return;
+    // Another worker owns the current lease (or reclaimed it after this worker
+    // became stale). The late worker must not create a duplicate Handoff or
+    // overwrite the AgentTurn owned by the newer execution.
+    if (toolResult.status === "not_claimable") return;
+    if (
+      toolResult.status !== "succeeded" &&
+      toolResult.status !== "already_completed"
+    ) {
+      toolFailure = {
+        toolName: execution.toolName,
+        errorCode: toolResult.errorCode ?? "tool_failed",
+      };
+    } else {
+      toolResultPayload = toolResult.result ?? {};
+      if (
+        execution.toolName === "retrieve_knowledge" &&
+        Array.isArray(toolResult.result?.evidence)
+      ) {
+        evidenceList = toolResult.result.evidence as KnowledgeEvidence[];
+      }
+    }
   }
+  const toolFacts = toolFailure
+    ? toolFailureFacts(toolFailure.toolName, toolFailure.errorCode)
+    : `\n工具执行结果（可信事实）：${JSON.stringify(toolResultPayload ?? {})}`;
 
   // 检测会话类型：conversationId 以 @chatroom 结尾表示群聊
   const chatType = detectChatType(execution.conversationId);
 
   // 基于工具结果重新构建上下文，再次调用 LLM 生成最终回复
   const context = await buildAgentContext(db, execution.conversationId, chatType);
-  const evidenceList =
-    execution.toolName === "retrieve_knowledge" &&
-    Array.isArray(toolResult.result?.evidence)
-      ? (toolResult.result.evidence as KnowledgeEvidence[])
-      : [];
   // Skill 提示：注册 Skill 的 afterKnowledge 输出作为不透明上下文注入
   const skillHintSection = skillHintBlock(
     collectSkillHintsAfterKnowledge(
@@ -447,19 +453,24 @@ export async function processPlannedToolTurn(
       )) ?? null)
     : null;
 
-  // 工具步数预算（Phase 2 有界 ReAct）：按本 turn 已完成的工具执行数计算。
+  // 工具步数预算（有界 ReAct）：按本 turn 的工具执行记录数计算，失败的
+  // 尝试同样计步——否则对持续性故障（如知识服务不可用）会无上限重试。
   // 步数达到上限时提示词禁止再次调工具（与 disposition 预算判定一致）；
   // 未达上限时允许模型继续规划 retrieve_knowledge / call_tool。
-  const completedToolSteps = await db
+  const attemptedToolSteps = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(schema.toolExecutions)
     .where(
       and(
         eq(schema.toolExecutions.turnId, job.turnId),
-        inArray(schema.toolExecutions.status, ["succeeded", "planned"]),
+        inArray(schema.toolExecutions.status, [
+          "succeeded",
+          "planned",
+          "failed",
+        ]),
       ),
     );
-  const toolStepsUsed = completedToolSteps[0]?.count ?? 1;
+  const toolStepsUsed = attemptedToolSteps[0]?.count ?? 1;
   // 行为参数（R2）：读取失败/未注入时回落出厂默认。
   let behavior: BehaviorSettings | undefined;
   try {
@@ -474,23 +485,40 @@ export async function processPlannedToolTurn(
   ).toolStepBudget;
   const budgetExhausted = toolStepsUsed >= toolStepBudget;
 
+  // 恢复路径的 availableTools 与预算对齐：预算未耗尽且检索能力在位时
+  // 如实上报（策略插件据此生成「知识库可用」提示），耗尽则禁用工具。
+  const recoveryAvailableTools = budgetExhausted
+    ? []
+    : [
+        ...(dependencies.knowledgeSearch ? ["retrieve_knowledge"] : []),
+        "query_contact_profile",
+        "fetch_url",
+      ];
+
   const strategySystem = strategy
     ? strategy.buildModelRequest({
         conversationId: execution.conversationId,
         contactId: conversation?.contactId ?? "",
         messages: context.history,
         facts: {},
-        availableTools: [],
+        availableTools: recoveryAvailableTools,
         chatType,
       }).system
-    : buildSystemPrompt(true, chatType);
+    : buildSystemPrompt(
+        !budgetExhausted && Boolean(dependencies.knowledgeSearch),
+        chatType,
+      );
+
+  const decisionInstruction = toolFailure
+    ? "请基于以上情况生成最终决策：可基于既有对话信息直接作答，或坦诚告知对方暂时无法完成该项查询；不得虚构工具结果。"
+    : "请基于工具结果生成自然语言或结构化最终决策；不得依据常识补全工具结果或声称执行了尚未执行的动作。";
 
   const response = await completeAgentDecision(
     client,
     [
       {
         role: "system",
-        content: `${strategySystem}${context.prompt}\n工具执行结果（可信事实）：${JSON.stringify(toolResult.result ?? {})}${skillHintSection}\n请基于工具结果生成自然语言或结构化最终决策；不得依据常识补全工具结果或声称执行了尚未执行的动作。next_action 必须为 reply、ask_for_information、handoff、no_action、wait 或 end_session${budgetExhausted ? "，不得再次调用工具（工具步数预算已耗尽）" : "；确有必要时可再次调用 retrieve_knowledge 或 call_tool 继续查证"}。`,
+        content: `${strategySystem}${context.prompt}${toolFacts}${skillHintSection}\n${decisionInstruction}next_action 必须为 reply、ask_for_information、handoff、no_action、wait 或 end_session${budgetExhausted ? "，不得再次调用工具（工具步数预算已耗尽）" : "；确有必要时可再次调用 retrieve_knowledge 或 call_tool 继续查证"}。`,
       },
       ...context.history,
     ],
@@ -569,6 +597,14 @@ async function recordModelCallEvent(
       usage: input.response.usage ?? null,
     },
   });
+}
+
+/**
+ * 工具失败回执：工具失败不转人工，而是把失败原因如实注入恢复提示词，
+ * 由模型决定降级作答或自行请求人工。回执明确禁止虚构结果。
+ */
+function toolFailureFacts(toolName: string, errorCode: string): string {
+  return `\n工具执行结果（可信事实）：工具「${toolName}」本次执行失败（原因：${errorCode}），没有返回任何可用结果。不得虚构查询结果，也不得声称已完成该查询或操作。`;
 }
 
 /**
