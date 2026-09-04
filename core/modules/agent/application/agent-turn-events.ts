@@ -23,7 +23,8 @@ export type AgentTurnEventType =
   | "delivery_unknown"
   | "delivery_failed"
   | "scheduled_send_created"
-  | "scheduled_send_cancelled";
+  | "scheduled_send_cancelled"
+  | "model_call";
 
 export async function recordAgentTurnEvent(
   db: NodePgDatabase<typeof schema> | AgentTurnDatabase,

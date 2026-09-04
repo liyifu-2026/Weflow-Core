@@ -43,6 +43,13 @@ function toTextModelError(error: unknown): TextModelError {
       retryable: true,
     });
   }
+  if (message.includes("model_output_truncated")) {
+    return new TextModelError("invalid_response", message, {
+      cause: error,
+      reason: "truncated",
+      retryable: true,
+    });
+  }
   if (error instanceof Error && error.name === "TimeoutError") {
     return new TextModelError("timeout", message, {
       cause: error,

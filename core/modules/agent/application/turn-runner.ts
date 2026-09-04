@@ -86,6 +86,11 @@ export type TurnRunnerDependencies = {
    * 未注入时使用出厂默认（与可配置前行为逐字节一致）。
    */
   behaviorSettings?: (() => Promise<BehaviorSettings>) | undefined;
+  /**
+   * Agent 决策调用专用超时（THINKING-PIPELINE-PLAN B3，默认 180s）。
+   * 长思考需要比其他模型调用更长的窗口；未注入时回落客户端配置。
+   */
+  decisionTimeoutMs?: number | undefined;
 };
 
 /**
@@ -221,7 +226,14 @@ export async function processAgentTurn(
         ...context.history,
       ],
       model,
+      { timeoutMs: dependencies.decisionTimeoutMs },
     );
+    await recordModelCallEvent(db, {
+      turnId: turn.turnId,
+      conversationId: turn.conversationId,
+      model,
+      response: modelResponse,
+    });
     const decision = strategy
       ? agentActionToDecision(
           strategy.parseModelResponse({ text: modelResponse.text }),
@@ -236,6 +248,15 @@ export async function processAgentTurn(
         riskLevel: decision.riskLevel,
       },
     });
+
+    if (modelResponse.reasoning) {
+      await recordAgentTurnEvent(db, {
+        turnId: turn.turnId,
+        conversationId: turn.conversationId,
+        eventType: "model_reasoning",
+        payload: { reasoning: modelResponse.reasoning },
+      });
+    }
 
     // 行为参数（R2）：读取失败/未注入时回落出厂默认，绝不阻断 Turn。
     let behavior: BehaviorSettings | undefined;
@@ -474,7 +495,14 @@ export async function processPlannedToolTurn(
       ...context.history,
     ],
     model,
+    { timeoutMs: dependencies.decisionTimeoutMs },
   );
+  await recordModelCallEvent(db, {
+    turnId: job.turnId,
+    conversationId: execution.conversationId,
+    model,
+    response,
+  });
   const decision = strategy
     ? agentActionToDecision(strategy.parseModelResponse({ text: response.text }))
     : parseAgentDecision(response.text);
@@ -508,6 +536,38 @@ export async function processPlannedToolTurn(
           ...(behavior.nudgeText ? { defaultNudgeText: behavior.nudgeText } : {}),
         }
       : {}),
+  });
+}
+
+/** 记录一次决策模型调用的可观测事实（token/延迟/finish_reason）。 */
+async function recordModelCallEvent(
+  db: Database,
+  input: {
+    turnId: string;
+    conversationId: string;
+    model: string;
+    response: {
+      finishReason?: string | undefined;
+      latencyMs?: number | undefined;
+      usage?:
+        | {
+            inputTokens?: number | undefined;
+            outputTokens?: number | undefined;
+            totalTokens?: number | undefined;
+          }
+        | undefined;
+    };
+  },
+): Promise<void> {
+  await recordAgentTurnEvent(db, {
+    turnId: input.turnId,
+    conversationId: input.conversationId,
+    eventType: "model_call",
+    payload: {
+      finishReason: input.response.finishReason ?? null,
+      latencyMs: input.response.latencyMs ?? null,
+      usage: input.response.usage ?? null,
+    },
   });
 }
 

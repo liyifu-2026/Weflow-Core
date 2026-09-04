@@ -42,4 +42,14 @@ export type TextGenerationRequest = {
   signal?: AbortSignal;
   purpose?: string;
   traceId?: string;
+  /**
+   * 思考控制（THINKING-PIPELINE-PLAN B1）。缺省跟随调用形态：
+   * structured（JSON 决策）= 开、text = 关（与既有行为逐字节一致）。
+   * 探针（docs/model-probe-result.json）证实 DeepSeek API 尊重该字段。
+   */
+  thinking?: boolean;
+  /** 单次补全 token 预算（含思维链）。缺省用客户端配置（MODEL_MAX_TOKENS）。 */
+  maxTokens?: number;
+  /** 单次调用超时（毫秒）。缺省用客户端配置。 */
+  timeoutMs?: number;
 };

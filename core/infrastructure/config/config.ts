@@ -49,6 +49,8 @@ const environmentSchema = z.object({
     .enum(["deepseek-v4-flash", "deepseek-v4-pro"])
     .default("deepseek-v4-flash"),
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(60_000),
+  MODEL_MAX_TOKENS: z.coerce.number().int().min(1_000).default(16_384),
+  MODEL_DECISION_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(180_000),
   VISION_BASE_URL: z.url().default("https://token-plan-cn.xiaomimimo.com/v1"),
   VISION_API_KEY: z.string().min(1).optional(),
   VISION_MODEL: z.string().min(1).default("mimo-v2.5"),
@@ -135,6 +137,10 @@ export type RuntimeConfig = {
         apiKey: string;
         name: "deepseek-v4-flash" | "deepseek-v4-pro";
         timeoutMs: number;
+        /** 单次补全 token 预算（含思维链；THINKING-PIPELINE-PLAN B1） */
+        maxTokens: number;
+        /** Agent 决策调用专用超时（长思考；默认 180s） */
+        decisionTimeoutMs: number;
       }
     | undefined;
   vision:
@@ -277,6 +283,8 @@ export function loadConfig(): RuntimeConfig {
           apiKey: parsed.MODEL_API_KEY,
           name: parsed.MODEL_NAME,
           timeoutMs: parsed.MODEL_TIMEOUT_MS,
+          maxTokens: parsed.MODEL_MAX_TOKENS,
+          decisionTimeoutMs: parsed.MODEL_DECISION_TIMEOUT_MS,
         }
       : undefined,
     vision: parsed.VISION_API_KEY

@@ -131,6 +131,7 @@ await runProcess({
         apiKey: modelSettings.textModel.apiKey ?? "",
         model: modelSettings.textModel.name,
         timeoutMs: textTimeoutMs,
+        maxTokens: config.model?.maxTokens,
       }),
     );
 
@@ -439,6 +440,7 @@ await runProcess({
               ...(resolveAiEmployeeId ? { resolveAiEmployeeId } : {}),
               ...(triage ? { triage } : {}),
               behaviorSettings: readBehaviorSettings,
+              decisionTimeoutMs: config.model?.decisionTimeoutMs,
             },
           );
           await executor.execute({

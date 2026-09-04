@@ -104,6 +104,8 @@ export class AgentTurnExecutor {
        * 与可配置前的行为逐字节一致。
        */
       behaviorSettings?: (() => Promise<BehaviorSettings>) | undefined;
+      /** Agent 决策调用专用超时（THINKING-PIPELINE-PLAN B3，默认 180s） */
+      decisionTimeoutMs?: number | undefined;
     } = {},
   ) {}
 

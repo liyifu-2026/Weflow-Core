@@ -65,6 +65,12 @@ export type CompletionOptions = {
   /** 单次调用模型覆盖（运行时切换模型无需重建客户端/重启） */
   model?: string;
   signal?: AbortSignal;
+  /** 思考控制；缺省跟随 jsonObject（structured=开，与既有行为一致） */
+  thinking?: boolean;
+  /** 单次补全预算（含思维链）；缺省用客户端配置 */
+  maxTokens?: number;
+  /** 单次调用超时；缺省用客户端配置 */
+  timeoutMs?: number;
 };
 
 type ClientOptions = {
@@ -72,6 +78,8 @@ type ClientOptions = {
   apiKey: string;
   model: string;
   timeoutMs: number;
+  /** 单次补全 token 预算（含思维链）；默认 8_000。来源：MODEL_MAX_TOKENS。 */
+  maxTokens?: number;
   fetch?: typeof globalThis.fetch;
 };
 
@@ -104,6 +112,9 @@ export class OpenAiCompatibleClient implements TextModel {
       jsonObject: request.output === "structured",
       ...(request.modelId ? { model: request.modelId } : {}),
       ...(request.signal ? { signal: request.signal } : {}),
+      ...(request.thinking !== undefined ? { thinking: request.thinking } : {}),
+      ...(request.maxTokens !== undefined ? { maxTokens: request.maxTokens } : {}),
+      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
     });
   }
 
@@ -113,7 +124,9 @@ export class OpenAiCompatibleClient implements TextModel {
   ): Promise<TextGenerationResult> {
     const startedAt = Date.now();
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const timeoutSignal = AbortSignal.timeout(this.#options.timeoutMs);
+      const timeoutSignal = AbortSignal.timeout(
+        options.timeoutMs ?? this.#options.timeoutMs,
+      );
       const signal = options.signal
         ? AbortSignal.any([options.signal, timeoutSignal])
         : timeoutSignal;
@@ -130,13 +143,14 @@ export class OpenAiCompatibleClient implements TextModel {
             messages,
             stream: false,
             // Provider-specific protocol translation stays inside this adapter.
+            // 探针证实：DeepSeek API 尊重该字段（enabled/disabled 均生效）。
             thinking: {
-              type: options.jsonObject ? "enabled" : "disabled",
+              type: (options.thinking ?? options.jsonObject) ? "enabled" : "disabled",
             },
             ...(options.jsonObject
               ? { response_format: { type: "json_object" } }
               : {}),
-            max_tokens: 8_000,
+            max_tokens: options.maxTokens ?? this.#options.maxTokens ?? 8_000,
           }),
           signal,
         },
@@ -149,6 +163,13 @@ export class OpenAiCompatibleClient implements TextModel {
       }
 
       const parsed = responseSchema.parse(await response.json());
+      const finishReasonRaw = parsed.choices[0]?.finish_reason ?? null;
+      // 截断守卫（决策 #2）：绝不把截断输出当成功返回给解析器。
+      if (finishReasonRaw === "length") {
+        throw new Error(
+          "model_output_truncated: finish_reason=length (budget exhausted, likely long thinking)",
+        );
+      }
       const content = parsed.choices[0]?.message.content.trim();
       const reasoning = extractReasoning(parsed);
       if (content) {
