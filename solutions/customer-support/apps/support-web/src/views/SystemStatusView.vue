@@ -55,6 +55,9 @@ const status = ref<StatusResponse | null>(null);
 const turns = ref<AgentTurn[]>([]);
 const loading = ref(true);
 const error = ref("");
+const lastUpdated = ref<Date | null>(null);
+const stale = ref(false);
+const busy = ref(false);
 const selectedService = ref(
   typeof route.query.service === "string" ? route.query.service : "",
 );
@@ -129,8 +132,15 @@ function detailStatusLabel(value: string) {
   return map[value] ?? value;
 }
 
+const lastUpdatedText = computed(() =>
+  lastUpdated.value ? lastUpdated.value.toLocaleTimeString() : "",
+);
+
 async function load() {
-  loading.value = true;
+  // 只有首次加载（还没有数据）才整页骨架屏；自动刷新静默进行，失败转为陈旧横幅。
+  const initial = status.value === null;
+  busy.value = true;
+  loading.value = initial;
   error.value = "";
   try {
     const tasks: Promise<unknown>[] = [
@@ -142,14 +152,19 @@ async function load() {
         .catch(() => undefined),
     ];
     await Promise.all(tasks);
+    lastUpdated.value = new Date();
+    stale.value = false;
     await nextTick();
     if (selectedService.value)
       document
         .getElementById(`service-${selectedService.value}`)
         ?.scrollIntoView({ block: "center" });
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : "系统状态加载失败";
+    if (initial)
+      error.value = reason instanceof Error ? reason.message : "系统状态加载失败";
+    else stale.value = true;
   } finally {
+    busy.value = false;
     loading.value = false;
   }
 }
@@ -188,8 +203,8 @@ onBeforeUnmount(stopAutoRefresh);
           平台各服务的配置与健康状态，每 30 秒自动刷新。
         </p>
       </div>
-      <Button variant="outline" size="sm" :disabled="loading" @click="load">
-        <RotateCw class="size-4" :class="loading && 'animate-spin'" />
+      <Button variant="outline" size="sm" :disabled="busy" @click="load">
+        <RotateCw class="size-4" :class="busy && 'animate-spin'" />
         刷新
       </Button>
     </div>
@@ -198,6 +213,15 @@ onBeforeUnmount(stopAutoRefresh);
       <AlertDescription class="flex items-center justify-between gap-4">
         <span>{{ error }}</span>
         <Button variant="outline" size="sm" @click="load">重新加载</Button>
+      </AlertDescription>
+    </Alert>
+
+    <Alert v-if="stale && !error" variant="outline" class="mt-4" role="status">
+      <AlertDescription class="flex items-center justify-between gap-4">
+        <span>
+          自动刷新失败，数据可能已过期（最后成功 {{ lastUpdatedText }}）。
+        </span>
+        <Button variant="outline" size="sm" @click="load">立即重试</Button>
       </AlertDescription>
     </Alert>
 
