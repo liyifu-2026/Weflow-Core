@@ -357,3 +357,78 @@ describe("historical 事件摄取（空库 Backfill）", () => {
     ).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("毒事件单条隔离（管道不冻结）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("一页内混入毒事件：好事件照常入库，毒事件被跳过且不抛错", async () => {
+    const db = createStubDb();
+    const error = vi.fn();
+    const good1 = liveEvent({
+      eventId: "wechat:wxid_demo:201",
+      channelMessageId: "201",
+      cursor: "1",
+    });
+    // 不支持的 kind：归一化阶段抛 channel_event_unsupported_kind
+    const poison = liveEvent({
+      eventId: "wechat:wxid_demo:202",
+      channelMessageId: "202",
+      kind: "mystery",
+      cursor: "2",
+    });
+    const good2 = liveEvent({
+      eventId: "wechat:wxid_demo:203",
+      channelMessageId: "203",
+      cursor: "3",
+    });
+
+    await expect(
+      ingestChannelEvents(
+        db as never,
+        [good1, poison, good2],
+        "3",
+        { info: () => {}, warn: () => {}, error } as never,
+      ),
+    ).resolves.toBeUndefined();
+
+    // 毒事件前后的两个好事件都入库
+    expect(db.__rows.messages.map((m) => m.channelMessageId)).toEqual([
+      "201",
+      "203",
+    ]);
+    // 毒事件记录了 error 日志（原始事件在 Host 事件库可查）
+    expect(error).toHaveBeenCalledTimes(1);
+    // 逐事件事务：两个好事件各一个事务 + 页末游标推进一个事务
+    expect(db.transaction).toHaveBeenCalledTimes(3);
+  });
+
+  it("全部为毒事件的页：不抛错、零入库，游标照常推进", async () => {
+    const db = createStubDb();
+    const poisonA = liveEvent({
+      eventId: "wechat:wxid_demo:301",
+      kind: "mystery",
+      cursor: "1",
+    });
+    const poisonB = liveEvent({
+      eventId: "wechat:wxid_demo:302",
+      kind: "image",
+      mediaRef: null,
+      cursor: "2",
+    });
+
+    await expect(
+      ingestChannelEvents(
+        db as never,
+        [poisonA, poisonB],
+        "2",
+        { info: () => {}, warn: () => {}, error: () => {} } as never,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(db.__rows.messages).toHaveLength(0);
+    // 无事件入库时只有页末游标推进这一笔事务
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+  });
+});
