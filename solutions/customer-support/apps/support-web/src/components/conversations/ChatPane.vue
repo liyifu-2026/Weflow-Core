@@ -4,7 +4,7 @@
  * 「AI 正在思考」气泡 + wait 时间线节点 + 新消息提示 + 接管条/输入区。
  * 状态与动作全部由父级注入，本组件不持有业务状态。
  */
-import { computed, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { Ellipsis, ArrowDown, Loader2 } from "lucide-vue-next";
 import { useRoute } from "vue-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -81,6 +81,36 @@ const props = defineProps<{
   retryBusy: boolean;
   outcomeBusy: boolean;
 }>();
+
+// 已耗时显示（THINKING 修复）：让等待可视化，避免"是不是卡了"的焦虑
+const nowTick = ref(Date.now());
+let elapsedTimer: ReturnType<typeof setInterval> | null = null;
+watch(
+  () => Boolean(props.liveThinking),
+  (active) => {
+    if (active && !elapsedTimer) {
+      nowTick.value = Date.now();
+      elapsedTimer = setInterval(() => (nowTick.value = Date.now()), 1_000);
+    } else if (!active && elapsedTimer) {
+      clearInterval(elapsedTimer);
+      elapsedTimer = null;
+    }
+  },
+);
+onUnmounted(() => {
+  if (elapsedTimer) clearInterval(elapsedTimer);
+});
+const liveElapsedText = computed(() => {
+  const startedAt = props.liveThinking?.startedAt;
+  if (!startedAt) return "";
+  const seconds = Math.max(
+    0,
+    Math.floor((nowTick.value - new Date(startedAt).getTime()) / 1_000),
+  );
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)} 分 ${String(seconds % 60).padStart(2, "0")} 秒`;
+});
+
 
 const emit = defineEmits<{
   "open-customer": [];
@@ -254,7 +284,9 @@ function onComposerTextUpdate(value: string) {
                   <i class="size-1.5 animate-bounce rounded-full bg-muted-foreground/70 [animation-delay:150ms]" />
                   <i class="size-1.5 animate-bounce rounded-full bg-muted-foreground/70 [animation-delay:300ms]" />
                 </span>
-                <span class="text-sm font-medium text-muted-foreground">{{ liveThinking.lastEventLabel }}</span>
+                <span class="text-sm font-medium text-muted-foreground">
+                  {{ liveThinking.lastEventLabel }}<template v-if="liveElapsedText"> · {{ liveElapsedText }}</template>
+                </span>
               </div>
               <details v-if="liveThinking.reasoning" class="mt-2 border-t border-dashed border-border pt-1.5">
                 <summary class="cursor-pointer select-none text-xs text-muted-foreground">思考过程</summary>

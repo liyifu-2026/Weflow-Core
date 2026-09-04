@@ -441,8 +441,25 @@ export async function registerRoutes(server, ctx) {
         .where(eq(schema.agentTurns.conversationId, conversationId))
         .orderBy(desc(schema.agentTurns.createdAt))
         .limit(1);
-      if (!turn || turn.status === "completed" || turn.status === "superseded") {
+      // live 判定收口（THINKING 修复）：只有 queued/running 算"处理中"，
+      // failed / suppressed_* / completed / superseded 全部是终态——否则
+      // 失败或被压制的最新轮次会让"正在处理"气泡永远挂着。
+      const LIVE_EXCLUDED = new Set([
+        "completed",
+        "superseded",
+        "failed",
+        "suppressed_handoff",
+        "suppressed_policy",
+      ]);
+      if (!turn || LIVE_EXCLUDED.has(turn.status)) {
         return { live: null };
+      }
+      // stale 防线：queued/running 超过 5 分钟（worker 挂掉/重启遗留）
+      // 不再报告 live——绝不产生"永远转圈"。
+      const STALE_RUNNING_MS = 5 * 60 * 1000;
+      const startedAtMs = new Date(turn.startedAt ?? turn.createdAt).getTime();
+      if (Number.isFinite(startedAtMs) && Date.now() - startedAtMs > STALE_RUNNING_MS) {
+        return { live: null, stale: true };
       }
       const events = await db
         .select({

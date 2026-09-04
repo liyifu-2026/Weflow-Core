@@ -118,11 +118,13 @@ function liveStageLabel(eventType?: string): string {
   if (!eventType) return "正在处理…";
   return STAGE_LABELS[eventType] ?? "正在处理…";
 }
+let livePollFailures = 0;
 async function pollLiveTurn(conversationId: string) {
   try {
     const result = await api<any>(
       `/api/v1/agent/live-turn/${encodeURIComponent(conversationId)}`,
     );
+    livePollFailures = 0;
     liveThinking.value = result?.live
       ? {
           turnId: result.live.turnId,
@@ -133,7 +135,11 @@ async function pollLiveTurn(conversationId: string) {
         }
       : null;
   } catch {
-    /* 轮询失败静默：下个周期重试 */
+    // 轮询失败静默重试；但连续失败（BFF 重启/下线）时清空气泡，绝不永久滞留
+    livePollFailures += 1;
+    if (livePollFailures >= 3) {
+      liveThinking.value = null;
+    }
   }
 }
 function startLivePolling(conversationId: string) {
