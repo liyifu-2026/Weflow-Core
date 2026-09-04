@@ -29,6 +29,14 @@ function resolveWeRoot(): string {
 export const WE_ROOT = resolveWeRoot();
 export const CORE_DIR = join(WE_ROOT, "weflow", "core");
 export const CONSOLE_DIR = join(WE_ROOT, "weflow", "apps", "console");
+export const SUPPORT_WEB_DIR = join(
+  WE_ROOT,
+  "weflow-solutions",
+  "solutions",
+  "customer-support",
+  "apps",
+  "support-web",
+);
 export const HOST_DIR = join(WE_ROOT, "weflow", "runtimes", "channel-host-wechat");
 export const DEV_LOG_DIR = join(CORE_DIR, ".dev-logs");
 export const PID_FILE = join(DEV_LOG_DIR, "dev-pids.json");
@@ -166,15 +174,22 @@ export function serviceDefinitions(): ServiceDefinition[] {
       elevated: true,
     },
     {
+      // R1 收敛后产品唯一网页端是 support-web（自带登录+布局），
+      // Console 壳退役；key 保留 "console" 以兼容 dev-pids.json 旧记录。
       key: "console",
-      label: "Console (Vite)",
-      port: () => 5173,
+      label: "Support Web (Vite)",
+      port: () => 5174,
       probe: { type: "tcp" },
       required: true,
       mtimePaths: [],
-      start: [join(CONSOLE_DIR, "node_modules", ".bin", "vite.cmd"), "--port", "5173", "--strictPort"],
-      cwd: CONSOLE_DIR,
-      identity: ["vite", join(CONSOLE_DIR, "node_modules", ".bin", "vite")],
+      start: [
+        join(SUPPORT_WEB_DIR, "node_modules", ".bin", "vite.cmd"),
+        "--port",
+        "5174",
+        "--strictPort",
+      ],
+      cwd: SUPPORT_WEB_DIR,
+      identity: ["vite", join(SUPPORT_WEB_DIR, "node_modules", ".bin", "vite")],
       elevated: false,
     },
   ];

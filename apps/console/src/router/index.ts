@@ -1,6 +1,14 @@
 import { createRouter, createWebHistory } from "vue-router";
 import { useWeflowAuthStore } from "@/weflow/auth-store";
 
+/**
+ * Console 平台壳路由（R1 收敛后）。
+ *
+ * 业务 UI 已全部收敛到 support-web 产品本体（weflow-solutions 仓库），
+ * Console 不再承载 ExtensionHost / consoleExtensions。这里只保留平台级
+ * 路由；业务扩展相关路由（/extensions/:solutionId/:extensionId 与
+ * catch-all）已删除。
+ */
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
@@ -22,7 +30,9 @@ const router = createRouter({
         {
           path: "",
           name: "overview",
-          component: () => import("@/weflow/views/OverviewV2.vue"),
+          // 平台总览的业务卡片区已随微前端退役；此路由暂以系统状态页
+          // 兜底（R2 由设置中心 / 新总览接管）。
+          redirect: { path: "/system/status" },
         },
         {
           path: "account/profile",
@@ -33,11 +43,6 @@ const router = createRouter({
           path: "help",
           name: "help",
           component: () => import("@/weflow/views/HelpView.vue"),
-        },
-        {
-          path: "extensions/:solutionId/:extensionId",
-          name: "extensionHost",
-          component: () => import("@/weflow/views/ExtensionHost.vue"),
         },
         {
           path: "system/users",
@@ -71,26 +76,6 @@ const router = createRouter({
           path: "system/status",
           name: "systemStatus",
           component: () => import("@/weflow/views/SystemStatusView.vue"),
-        },
-        {
-          path: "settings",
-          name: "settings",
-          component: () => import("@/weflow/views/SettingsCenter.vue"),
-          meta: { admin: true },
-        },
-        {
-          path: "platform/solutions",
-          name: "solutions",
-          component: () => import("@/weflow/views/SolutionsView.vue"),
-          meta: { admin: true },
-        },
-        {
-          // ExtensionHost catch-all：未匹配平台路由的地址一律交给扩展宿主，
-          // 按已激活 Solution 声明的 path（支持 ':param' 单段通配）解析；
-          // 未命中时由视图渲染平台中立的「未找到业务扩展」空态。
-          path: ":pathMatch(.*)*",
-          name: "extensionHostCatchAll",
-          component: () => import("@/weflow/views/ExtensionHost.vue"),
         },
       ],
     },

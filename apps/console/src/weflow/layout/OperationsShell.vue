@@ -11,12 +11,10 @@ import WfDrawer from "../components/WfDrawer.vue";
 import { useEscClose } from "../composables/use-esc-close";
 import WfConfirmDialog from "../components/WfConfirmDialog.vue";
 import { resetWeflowWorkspaceStores } from "../stores/reset";
-import { useExtensionStore } from "../stores/extensions";
 
 const router = useRouter();
 const route = useRoute();
 const auth = useWeflowAuthStore();
-const extensions = useExtensionStore();
 const collapsed = ref(localStorage.getItem("wf-sidebar") === "collapsed");
 const theme = ref<"light" | "dark">(
   localStorage.getItem("wf-theme") === "dark" ? "dark" : "light",
@@ -26,7 +24,7 @@ const mobileNavOpen = ref(false);
 const noticeOpen = ref(false);
 watch(() => route.fullPath, () => { mobileNavOpen.value = false; noticeOpen.value = false; });
 useEscClose(computed(() => profileOpen.value), () => closeProfile());
-const groups = computed(() => [
+const allGroups = computed(() => [
   {
     label: "工作台",
     items: [{ to: "/", icon: "overview", label: "平台总览" }],
@@ -37,7 +35,6 @@ const groups = computed(() => [
           label: "平台",
           items: [
             { to: "/system/status", icon: "runtime", label: "系统状态" },
-            { to: "/platform/solutions", icon: "verify", label: "业务方案" },
             { to: "/system/users", icon: "users", label: "用户与角色" },
             { to: "/system/audit", icon: "audit", label: "审计日志" },
           ],
@@ -45,20 +42,6 @@ const groups = computed(() => [
       ]
     : []),
 ]);
-
-const dynamicGroups = computed(() => {
-  const map = new Map<string, Array<{ to: string; icon: string; label: string }>>();
-  for (const item of extensions.navItems) {
-    const group = item.extension.group || "业务";
-    const label = item.extension.title;
-    const icon = item.extension.icon || "engine";
-    if (!map.has(group)) map.set(group, []);
-    map.get(group)!.push({ to: item.to, icon, label });
-  }
-  return Array.from(map.entries()).map(([label, items]) => ({ label, items }));
-});
-
-const allGroups = computed(() => [...groups.value, ...dynamicGroups.value]);
 
 function applyTheme() {
   document.documentElement.dataset.theme = theme.value;
@@ -94,7 +77,6 @@ function closeProfile() {
 onMounted(() => {
   applyTheme();
   if (route.query.profile === "1") profileOpen.value = true;
-  void extensions.load();
 });
 </script>
 
@@ -135,16 +117,6 @@ onMounted(() => {
         </section>
       </nav>
       <div class="wf-sidebar-foot">
-        <router-link
-          v-if="auth.isAdmin"
-          to="/settings"
-          class="wf-nav-item"
-          active-class=""
-          exact-active-class="wf-route-active"
-        >
-          <WfIcon name="settings" />
-          <span>系统设置</span>
-        </router-link>
         <router-link
           to="/help"
           class="wf-nav-item"
