@@ -53,7 +53,7 @@ import {
   extractTriagePolicy,
 } from "../../modules/agent/application/triage-classifier.js";
 import { createBehaviorSettingsReader } from "../../modules/agent/application/behavior-settings.js";
-import { createCachedExtensionSettingsReader } from "../../modules/solution/application/read-extension-settings.js";
+import { createCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
 import {
   MapSkillRegistry,
   type AgentSkill,
@@ -292,8 +292,8 @@ await runProcess({
     // plus optional `preResolveAiEmployeePrompt`. Without any plugin, the
     // registries stay empty and the built-in generic platform prompt is used.
     // Priority: explicit SKILL_PLUGIN_PATH / STRATEGY_PLUGIN_PATH overrides;
-    // otherwise plugins are discovered from the Solution Store's active
-    // junctions (manifest artifacts with targetProcess: "agent-worker").
+    // otherwise plugins are discovered from WEFLOW_PLUGIN_DIR's plugins/
+    // subdirectories (R3: no more Solution Store).
     type AgentPluginModule = {
       skill?: AgentSkill;
       strategy?: AgentExecutionStrategy;

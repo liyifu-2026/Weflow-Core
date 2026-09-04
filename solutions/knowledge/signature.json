@@ -1,6 +1,0 @@
-{
-  "algorithm": "ed25519",
-  "keyId": "dev-key",
-  "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "signature": "dummy-signature-for-dev-unsigned"
-}

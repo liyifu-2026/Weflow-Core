@@ -48,17 +48,12 @@ import { startExpoPushDispatcher } from "../../infrastructure/notifications/expo
 import { registerKnowledgeProviderRoutes } from "../../modules/knowledge-provider/interface/http-routes.js";
 import { registerKnoraBridgeRoutes } from "../../modules/knora-bridge/interface/http-routes.js";
 import { registerOperationsRoutes } from "../../modules/operations/interface/http-routes.js";
-import { registerSolutionStoreRoutes } from "../../modules/solution/interface/store-routes.js";
-import { registerSolutionMarketplaceRoutes } from "../../modules/solution/interface/marketplace-routes.js";
-import { startSolutionAutoUpdate } from "../../infrastructure/solutions/solution-auto-update.js";
-import { loadInstalledSolutionPlugins } from "../../infrastructure/solutions/solution-plugin-loader.js";
-import { adaptSolutionPlugin } from "../../infrastructure/solutions/solution-plugin-adapter.js";
 import { inspectKnowledgeEngine } from "../../modules/knowledge-provider/application/boundary.js";
 import { startMobileHandoffMaintenance } from "../../modules/handoff/application/mobile-handoff-service.js";
 import { startMemoryMaintenance } from "../../modules/memory/application/memory-maintenance.js";
 import { routeMediaToHuman } from "../../modules/handoff/application/route-media-to-human.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
-import { createCachedExtensionSettingsReader } from "../../modules/solution/application/read-extension-settings.js";
+import { createCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
 import {
   extractGroupChatSettings,
   resolveGroupChatPolicy,
@@ -231,21 +226,8 @@ await runProcess({
           : {}),
       },
     );
-    // Solution Store 是安装事实的唯一来源：这里只投影只读状态与
-    // consoleExtensions；安装/激活通过 weflowctl 完成。
-    registerSolutionStoreRoutes(server, postgres.db);
-    // npm 风格插件市场：列出 @weflow-leaif/* 可用包并提供安装/更新入口。
-    // npm token 通过 WEFLOW_NPM_TOKEN 注入（与 weflowctl 一致）。
-    registerSolutionMarketplaceRoutes(server, postgres.db, {
-      ...(process.env.WEFLOW_NPM_TOKEN !== undefined
-        ? { npmToken: process.env.WEFLOW_NPM_TOKEN }
-        : {}),
-      ...(process.env.WEFLOW_NPM_REGISTRY !== undefined
-        ? { registryBase: process.env.WEFLOW_NPM_REGISTRY }
-        : {}),
-    });
-    // 业务 Solution 的 backend 插件（BFF）：注册已安装 Solution 的业务路由
-    // （如 AI Employees / 业务 handoff 操作）。加载失败只降级告警。
+    // 业务 Solution 的 backend 插件（BFF）：从 WEFLOW_PLUGIN_DIR 直读
+    // 业务路由（如 AI Employees）。加载失败只降级告警。
     await loadInstalledBackendPlugins(server, {
       db: postgres.db,
       logger,
@@ -307,31 +289,6 @@ await runProcess({
       db: postgres.db,
       logger,
     });
-    // 启动时从 Solution Store 加载 active Solution 的插件。Store 是安装
-    // 事实的唯一来源；单个插件失败只降级告警，不阻断平台启动。
-    const solutionKernel = new RuntimeKernel();
-    try {
-      for (const loaded of await loadInstalledSolutionPlugins()) {
-        try {
-          solutionKernel.register(adaptSolutionPlugin(loaded));
-        } catch (error) {
-          logger.warn(
-            { err: error, plugin: loaded.id },
-            "solution plugin registration failed",
-          );
-        }
-      }
-      await solutionKernel.start();
-      logger.info(
-        { plugins: solutionKernel.diagnostics().plugins.length },
-        "solution plugins loaded from store",
-      );
-    } catch (error) {
-      logger.warn(
-        { err: error },
-        "loading solution plugins failed; continuing without them",
-      );
-    }
     if (config.channelHost && channelKernel) {
       const channelSource = channelKernel.get(CHANNEL_EVENTS_CAPABILITY);
       const channelMedia = channelKernel.get(CHANNEL_MEDIA_CAPABILITY);
@@ -405,41 +362,33 @@ await runProcess({
         intervalMs: 60_000,
         syncContacts: syncChannelContactProfiles,
       });
-      // Solution 自动升级轮询（P2.2）：按 ~/.weflow/config.json 的
-      // update.enabled/strategy 定期查 registry 并升级；默认每小时。
-      const stopSolutionAutoUpdate = startSolutionAutoUpdate({ logger });
+      // Solution 自动升级轮询已随平台化拆除（R3）删除。
       return async () => {
         stopMobileHandoffMaintenance();
         stopChannelHostPoller();
         stopChannelHostOutboundPoller();
         stopChannelHostMediaPoller();
         stopChannelHostContactPoller();
-        stopSolutionAutoUpdate();
         stopAgentTurnDispatcher();
         stopMemoryCaptureDispatcher();
         stopTurnAdmissionDispatcher();
         stopMemoryMaintenance();
         stopMediaProcessingDispatcher();
         stopPushDispatcher();
-        await solutionKernel.stop();
         await channelKernel.stop();
       };
     }
     logger.info(
       "Channel Host is not configured; background channel polling is disabled",
     );
-    // 无 Channel Host 时仍启动 Solution 自动升级轮询
-    const stopSolutionAutoUpdate = startSolutionAutoUpdate({ logger });
     return async () => {
       stopMobileHandoffMaintenance();
-      stopSolutionAutoUpdate();
       stopAgentTurnDispatcher();
       stopMemoryCaptureDispatcher();
       stopTurnAdmissionDispatcher();
       stopMemoryMaintenance();
       stopMediaProcessingDispatcher();
       stopPushDispatcher();
-      await solutionKernel.stop();
     };
   },
 });
