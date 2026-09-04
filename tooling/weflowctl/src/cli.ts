@@ -18,6 +18,11 @@ import { fileURLToPath } from "node:url";
 import { createCliOutput, renderCommandResult } from "./cli-output.js";
 import { runCompletionCommand, runConfigCommand } from "./weflowctl-config.js";
 import { DEV_USAGE, renderDevResult, runDevCommand } from "./weflowctl-dev.js";
+import { SERVICE_USAGE } from "./service/definitions.js";
+import {
+  renderServiceResult,
+  runServiceCommand,
+} from "./service/service-runtime.js";
 
 /**
  * Resolve the CLI's own version. Works from source (`src/../package.json`)
@@ -59,6 +64,8 @@ function topLevelUsage(): string {
     "Domains:",
     "  dev          Development environment health & lifecycle",
     "               doctor / up / down",
+    "  service      Windows 服务管理（api / agent-worker / ingestion-worker）",
+    "               install / uninstall / start / stop / restart / status",
     "  config       Read and write local CLI configuration",
     "  completion   Generate shell completion scripts (bash/zsh/powershell)",
     "",
@@ -81,7 +88,8 @@ if (argv.includes("--version")) {
 } else if (
   domain !== "config" &&
   domain !== "completion" &&
-  domain !== "dev"
+  domain !== "dev" &&
+  domain !== "service"
 ) {
   const output = createCliOutput({ json: jsonMode, quiet: quietMode });
   output.error({
@@ -129,6 +137,22 @@ if (argv.includes("--version")) {
         output.json(result.data);
       } else {
         const failed = renderDevResult(commandName, result.data, output);
+        if (failed) process.exitCode = 1;
+      }
+    }
+  } else if (domain === "service") {
+    if (commandArgs.length === 0) {
+      output.info(SERVICE_USAGE);
+      process.exitCode = 0;
+    } else {
+      const result = await runServiceCommand(commandArgs);
+      if (!result.ok) {
+        renderCommandResult(commandName, result, output, { json: jsonMode });
+        process.exitCode = 1;
+      } else if (jsonMode) {
+        output.json(result.data);
+      } else {
+        const failed = renderServiceResult(commandName, result.data, output);
         if (failed) process.exitCode = 1;
       }
     }

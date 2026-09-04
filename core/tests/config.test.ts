@@ -94,4 +94,37 @@ describe("runtime configuration", () => {
       knowledgeBaseIds: ["kb-a", "kb-b"],
     });
   });
+
+  it("defaults webDistDir to undefined and session cookie secure to true", () => {
+    process.env.DATABASE_URL =
+      "postgresql://weflow:weflow@127.0.0.1:5432/weflow";
+    process.env.REDIS_URL = "redis://127.0.0.1:6379";
+
+    const config = loadConfig();
+
+    expect(config.webDistDir).toBeUndefined();
+    expect(config.sessionCookieSecure).toBe(true);
+  });
+
+  it("loads webDistDir and allows disabling the secure session cookie", () => {
+    process.env.DATABASE_URL =
+      "postgresql://weflow:weflow@127.0.0.1:5432/weflow";
+    process.env.REDIS_URL = "redis://127.0.0.1:6379";
+    process.env.WEB_DIST_DIR = "C:\\deploy\\weflow\\support-web\\dist";
+    process.env.SESSION_COOKIE_SECURE = "false";
+
+    const config = loadConfig();
+
+    expect(config.webDistDir).toBe("C:\\deploy\\weflow\\support-web\\dist");
+    expect(config.sessionCookieSecure).toBe(false);
+  });
+
+  it("rejects an invalid SESSION_COOKIE_SECURE value", () => {
+    process.env.DATABASE_URL =
+      "postgresql://weflow:weflow@127.0.0.1:5432/weflow";
+    process.env.REDIS_URL = "redis://127.0.0.1:6379";
+    process.env.SESSION_COOKIE_SECURE = "yes";
+
+    expect(() => loadConfig()).toThrow();
+  });
 });

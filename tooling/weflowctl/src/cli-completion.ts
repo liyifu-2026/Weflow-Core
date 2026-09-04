@@ -1,11 +1,18 @@
 /**
  * Shell completion script generation (bash / zsh / PowerShell).
  *
- * Zero-dependency templates. R3 平台化拆除后 CLI 只剩 dev / config /
- * completion 三个域，补全脚本同步收敛。
+ * Zero-dependency templates. R4：新增 service 域（Windows 服务管理）。
  */
 
 const DEV_COMMANDS = ["doctor", "up", "down"] as const;
+const SERVICE_COMMANDS = [
+  "install",
+  "uninstall",
+  "start",
+  "stop",
+  "restart",
+  "status",
+] as const;
 const CONFIG_COMMANDS = ["get", "set", "list"] as const;
 
 export function bashCompletion(): string {
@@ -14,7 +21,7 @@ export function bashCompletion(): string {
   return `# weflowctl bash completion
 _weflowctl_completions() {
   local cur="${D}{COMP_WORDS[COMP_CWORD]}"
-  local domains="dev config completion"
+  local domains="dev service config completion"
   if [ "${D}COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "${D}domains --help --version --json --quiet" -- "${D}cur") )
     return 0
@@ -22,6 +29,10 @@ _weflowctl_completions() {
   case "${D}prev" in
     dev)
       COMPREPLY=( $(compgen -W "${DEV_COMMANDS.join(" ")}" -- "${D}cur") )
+      return 0
+      ;;
+    service)
+      COMPREPLY=( $(compgen -W "${SERVICE_COMMANDS.join(" ")}" -- "${D}cur") )
       return 0
       ;;
     config)
@@ -40,7 +51,7 @@ export function zshCompletion(): string {
 # weflowctl zsh completion
 _weflowctl() {
   local -a domains
-  domains=(dev config completion)
+  domains=(dev service config completion)
   _arguments -C \\
     '1:domain:($domains)' \\
     '*::command:->args'
@@ -50,6 +61,10 @@ _weflowctl() {
         dev)
           local -a cmds
           cmds=(${DEV_COMMANDS.map((c) => `'${c}'`).join(" ")})
+          _describe "command" cmds
+          ;;
+        service)
+          cmds=(${SERVICE_COMMANDS.map((c) => `'${c}'`).join(" ")})
           _describe "command" cmds
           ;;
         config)
@@ -66,6 +81,7 @@ _weflowctl "$@"
 
 export function powershellCompletion(): string {
   const devList = DEV_COMMANDS.join("|");
+  const serviceList = SERVICE_COMMANDS.join("|");
   const configList = CONFIG_COMMANDS.join("|");
   return `# weflowctl PowerShell completion
 Register-ArgumentCompleter -Native -CommandName weflowctl -ScriptBlock {
@@ -79,6 +95,12 @@ Register-ArgumentCompleter -Native -CommandName weflowctl -ScriptBlock {
           ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) }
       }
     }
+    'service' {
+      if ($tokens.Count -le 2) {
+        '${serviceList}'.Split('|') | Where-Object { $_ -like "$wordToComplete*" } |
+          ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) }
+      }
+    }
     'config' {
       if ($tokens.Count -le 2) {
         '${configList}'.Split('|') | Where-Object { $_ -like "$wordToComplete*" } |
@@ -86,7 +108,7 @@ Register-ArgumentCompleter -Native -CommandName weflowctl -ScriptBlock {
       }
     }
     default {
-      'dev config completion' | Where-Object { $_ -like "$wordToComplete*" } |
+      'dev service config completion' | Where-Object { $_ -like "$wordToComplete*" } |
         ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) }
     }
   }

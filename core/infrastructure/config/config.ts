@@ -81,6 +81,20 @@ const environmentSchema = z.object({
   WEKNORA_ORIGIN: z.url().optional(),
   /** CORS 白名单（逗号分隔的完整 origin）；不配置则完全不开放跨域 */
   CORS_ORIGINS: z.string().trim().optional(),
+  /**
+   * 产品网页端（support-web 构建产物）静态托管目录。
+   * 生产部署由 api 进程直接托管前端（WEB_DIST_DIR=.../support-web/dist）；
+   * 未配置时不注册静态路由（开发态走 Vite dev server）。
+   */
+  WEB_DIST_DIR: z.string().trim().optional(),
+  /**
+   * 会话 Cookie Secure 覆盖：production 默认 Secure（HTTPS only）。
+   * 局域网 HTTP 部署需显式设为 false，否则浏览器不回传 Cookie 无法登录。
+   */
+  SESSION_COOKIE_SECURE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
   /** WeKnora 桥接：账号凭证加密密钥（缺失时桥接路由返回 503） */
   KNORA_ACCOUNT_ENC_KEY: z.string().min(8).optional(),
   /** WeKnora 桥接：weflow 用户归入的租户（成员管理与激活租户） */
@@ -170,6 +184,10 @@ export type RuntimeConfig = {
     | undefined;
   /** CORS 白名单 origin 列表；空数组 = 不开放跨域 */
   corsOrigins: string[];
+  /** 前端静态托管目录（undefined = 不托管，开发态走 Vite dev server） */
+  webDistDir: string | undefined;
+  /** 会话 Cookie 是否带 Secure（production 默认 true，可显式覆盖） */
+  sessionCookieSecure: boolean;
   /** WeKnora 桥接配置（账号代管 + 界面嵌入的一次性登录交换） */
   knoraBridge: {
     encKey: string | undefined;
@@ -309,6 +327,8 @@ export function loadConfig(): RuntimeConfig {
       .split(",")
       .map((origin) => origin.trim())
       .filter(Boolean),
+    webDistDir: parsed.WEB_DIST_DIR,
+    sessionCookieSecure: parsed.SESSION_COOKIE_SECURE,
     knoraBridge: {
       encKey: parsed.KNORA_ACCOUNT_ENC_KEY,
       tenantId: parsed.KNORA_TENANT_ID,

@@ -38,17 +38,12 @@ const steps = [
   ["packages/plugin-sdk", ["test"]],
   ["packages/admin-sdk", ["build"]],
   ["packages/admin-sdk", ["test"]],
-  ["packages/solution-sdk", ["build"]],
-  ["packages/solution-sdk", ["test"]],
   ["packages/ui", ["build"]],
   ["packages/ui", ["test"]],
   // Platform apps.
   ["core", ["check"]],
-  ["apps/console", ["check"]],
   ["tooling/weflowctl", ["typecheck"]],
   ["tooling/weflowctl", ["build"]],
-  ["apps/solution-runner", ["typecheck"]],
-  ["apps/solution-runner", ["build"]],
 ];
 
 for (const [dir, script] of steps) {

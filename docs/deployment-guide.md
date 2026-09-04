@@ -1,740 +1,417 @@
-# Weflow 完整部署指南
+# Weflow 部署指南（Windows 服务器）
 
-从零开始部署 Weflow 平台 + 客服业务插件 + FRP 隧道，直至完全可运行。
+从零在 Windows 服务器上部署 Weflow AI 客服产品：数据库 → 三进程服务 → 前端 → 微信通道，直至登录收发消息。并给出产品的核心运维卖点——**热更新规程**。
+
+> R4 部署形态：进程清单 = **api / agent-worker / ingestion-worker** 三个 Windows 服务 + PostgreSQL + Redis；前端由 api 进程静态托管（无需 Vite / Node 前端服务）；微信通道 Channel Host 与微信桌面版同机、运行在登录用户会话中。
 
 ---
 
 ## 目录
 
-1. [环境要求](#1-环境要求)
-2. [克隆仓库](#2-克隆仓库)
-3. [Docker 基础设施](#3-docker-基础设施)
-4. [Core 配置与启动](#4-core-配置与启动)
-5. [Console 启动](#5-console-启动)
-6. [Channel Host（微信通道）](#6-channel-host微信通道)
-7. [Agent Worker 启动](#7-agent-worker-启动)
-8. [安装客服业务插件](#8-安装客服业务插件)
-9. [FRP 公网隧道](#9-frp-公网隧道)
-10. [完整启动流程（一键脚本）](#10-完整启动流程一键脚本)
-11. [验证与排障](#11-验证与排障)
-12. [附录：端口一览](#12-附录端口一览)
+1. [架构与进程清单](#1-架构与进程清单)
+2. [环境要求](#2-环境要求)
+3. [安装基础设施（PostgreSQL / Redis）](#3-安装基础设施postgresql--redis)
+4. [安装产品代码](#4-安装产品代码)
+5. [生产配置 .env](#5-生产配置-env)
+6. [数据库迁移与初始账号](#6-数据库迁移与初始账号)
+7. [构建产物](#7-构建产物)
+8. [Windows 服务化（weflowctl service）](#8-windows-服务化weflowctl-service)
+9. [前端托管说明](#9-前端托管说明)
+10. [微信通道 Channel Host](#10-微信通道-channel-host)
+11. [验证：从零拉起到登录收发](#11-验证从零拉起到登录收发)
+12. [热更新规程（核心卖点）](#12-热更新规程核心卖点)
+13. [监控与日志](#13-监控与日志)
+14. [桌面端（Tauri 壳）](#14-桌面端tauri-壳)
+15. [附录：端口一览与排障](#15-附录端口一览与排障)
 
 ---
 
-## 1. 环境要求
-
-| 依赖 | 版本要求 | 说明 |
-|------|---------|------|
-| **Node.js** | `>=24 <25` | 推荐用 nvm-windows 切换 |
-| **pnpm** | `>=10` | `npm install -g pnpm` |
-| **Docker Desktop** | 最新版 | 使用 WSL2 后端，自带 PostgreSQL + Redis |
-| **Python** | `>=3.9` | Channel Host 用，推荐 3.12 |
-| **uv** | 最新版 | Python 包管理器，`pip install uv` |
-| **Git** | 最新版 | 克隆仓库 |
-| **微信桌面版** | `4.1.12+` | Channel Host 读取本地微信数据库 |
-| **Windows** | 10/11 | Channel Host 依赖 Windows UIA |
-
-### 安装 Node.js 24
-
-```bash
-# 用 nvm-windows
-nvm install 24
-nvm use 24
-node -v  # 应显示 v24.x.x
-```
-
-### 安装 pnpm
-
-```bash
-npm install -g pnpm
-pnpm -v  # 应显示 10.x.x
-```
-
----
-
-## 2. 克隆仓库
-
-```bash
-# 选择一个工作目录
-mkdir C:\Users\<你>\Desktop\We && cd C:\Users\<你>\Desktop\We
-
-# 克隆平台核心仓库
-git clone https://github.com/liyifu-2026/Weflow.git weflow
-
-# 克隆业务插件仓库
-git clone https://github.com/liyifu-2026/Weflow-Solutions.git weflow-solutions
-```
-
-最终目录结构：
+## 1. 架构与进程清单
 
 ```
-We/
-├── weflow/                  # 平台核心（Core + Console + SDK）
-│   ├── core/                # 后端 API、Agent Worker、数据库
-│   ├── apps/console/        # 前端管理控制台
-│   ├── runtimes/channel-host-wechat/  # 微信通道（Python）
-│   ├── packages/            # SDK（contracts、plugin-sdk、solution-sdk）
-│   ├── deploy/              # Docker Compose（PostgreSQL + Redis）
-│   └── scripts/             # 启动脚本
-└── weflow-solutions/        # 业务插件（客服方案）
-    └── solutions/
-        ├── customer-support/    # 客服 Solution Pack
-        └── weknora-connector/   # 知识库连接器
+                ┌────────────────────────── Windows 服务器 ──────────────────────────┐
+                │                                                                    │
+  浏览器/桌面端 ─┼──▶ api 服务 (3100) ────── 静态托管前端 dist（SPA + /api 同源）      │
+                │      │  │                                                          │
+                │      │  └── Postgres (5432) / Redis (6379)                         │
+                │      ▼                                                             │
+                │  agent-worker 服务 (3101) ── Agent Turn 执行（热更新单位）          │
+                │  ingestion-worker 服务 (3102) ── 媒体/语音处理（热更新单位）        │
+                │                                                                    │
+                │  Channel Host (43123, 用户会话进程) ◀──▶ 微信桌面版（同机）         │
+                └────────────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## 3. Docker 基础设施
-
-Weflow 需要以下 Docker 容器：
-
-| 容器 | 端口 | 用途 |
+| 组件 | 形态 | 说明 |
 |------|------|------|
-| `weflow-postgres` | `5432` | Core 主数据库 |
-| `weflow-redis` | `6379` | Core 缓存/队列 |
-| `WeKnora-app` | `8080` | 知识检索服务 |
-| `WeKnora-frontend` | `80` | 知识库 Web UI |
-| `ZhiNanKB-qdrant` | `6333-6334` | 向量数据库 |
-| `ZhiNanKB-postgres` | (内部) | 知识库元数据 |
-| `ZhiNanKB-redis` | (内部) | 知识库缓存 |
-| `ZhiNanKB-docreader` | (内部) | 文档解析 |
-
-### 3.1 启动 Core 基础设施（PostgreSQL + Redis）
-
-```bash
-cd weflow
-
-# 使用项目自带的 Compose 文件
-docker compose -f deploy/compose.yaml up -d
-
-# 验证
-docker ps --filter "name=weflow"
-# 应看到 weflow-postgres 和 weflow-redis 状态为 healthy
-```
-
-### 3.2 启动 WeKnora / ZhiNanKB（知识服务）
-
-WeKnora 和 ZhiNanKB 的部署由各自的仓库管理。如果你已有这些容器在运行（比如之前部署过），直接确认：
-
-```bash
-docker ps --filter "name=WeKnora" --filter "name=ZhiNanKB"
-```
-
-如果没有，需要从 WeKnora 仓库部署（参考其文档）。默认配置下 Core 连接 `http://127.0.0.1:8080/api/v1`。
+| api | Windows 服务 | 全部 HTTP API + 静态托管前端 + 后台调度器（轮询/推送/记忆） |
+| agent-worker | Windows 服务 | Agent Turn 执行（模型调用、会话模式引擎） |
+| ingestion-worker | Windows 服务 | 媒体转码、视觉描述、语音转写 |
+| PostgreSQL 16 | 本机服务 | 主数据库 |
+| Redis 7 | 本机服务 | 队列（BullMQ） |
+| Channel Host | 登录用户会话进程 | 微信通道适配（UIA 自动化，**不可服务化**） |
 
 ---
 
-## 4. Core 配置与启动
+## 2. 环境要求
 
-### 4.1 安装依赖
+| 依赖 | 版本 | 说明 |
+|------|------|------|
+| Windows | Server 2019+ / 10 / 11 | 与微信桌面同系统系 |
+| Node.js | >=24 <25 | nvm-windows 或官方安装包 |
+| pnpm | >=10 | `npm install -g pnpm` |
+| Git | 最新版 | 拉代码与热更新回退 |
+| PostgreSQL 16 | 16.x | 本机安装（或 Docker） |
+| Redis 7 | 7.x | Windows 可用 Memurai / WSL2 Docker |
+| 微信桌面版 | 4.1.12+ | 保持登录状态 |
+| Python 3.12 + uv | 最新 | 仅 Channel Host 需要 |
 
-```bash
-cd weflow
+---
 
-# 一次性安装所有子项目依赖
+## 3. 安装基础设施（PostgreSQL / Redis）
+
+**方式 A：Docker（推荐，与开发环境一致）**
+
+```powershell
+docker compose -f deploy\compose.yaml up -d
+```
+
+**方式 B：本机安装 PostgreSQL 16 + Memurai（Redis 兼容）**
+
+安装后创建数据库与账号：
+
+```sql
+CREATE USER weflow WITH PASSWORD '强密码';
+CREATE DATABASE weflow OWNER weflow;
+```
+
+---
+
+## 4. 安装产品代码
+
+```powershell
+mkdir C:\weflow; cd C:\weflow
+
+git clone https://github.com/liyifu-2026/Weflow.git weflow
+git clone https://github.com/liyifu-2026/Weflow-Solutions.git weflow-solutions
+
+# 安装依赖（两个仓库）
+cd C:\weflow\weflow
+pnpm --dir packages/contracts install
+pnpm --dir packages/contracts build     # core 的类型别名指向 contracts 产物，必须先构建
+pnpm --dir core install
+pnpm --dir tooling/weflowctl install && pnpm --dir tooling/weflowctl build
+
+cd C:\weflow\weflow-solutions
 pnpm install:all
 ```
 
-如果 `install:all` 报错，可以逐个安装：
-
-```bash
-pnpm --dir core install
-pnpm --dir apps/console install
-pnpm --dir packages/contracts install
-pnpm --dir packages/plugin-sdk install
-pnpm --dir packages/solution-sdk install
-```
-
-### 4.2 配置环境变量
-
-```bash
-cd weflow/core
-
-# 复制示例配置
-cp .env.example .env
-```
-
-编辑 `core/.env`，确保以下关键配置：
-
-```env
-# === 数据库 ===
-DATABASE_URL=postgresql://weflow:weflow@127.0.0.1:5432/weflow
-REDIS_URL=redis://127.0.0.1:6379
-
-# === AI 模型（必填）===
-MODEL_BASE_URL=https://api.deepseek.com
-MODEL_API_KEY=sk-你的API密钥
-MODEL_NAME=deepseek-v4-flash
-MODEL_TIMEOUT_MS=60000
-
-# === 视觉模型（可选）===
-VISION_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1
-VISION_API_KEY=你的视觉API密钥
-VISION_MODEL=mimo-v2.5
-
-# === Channel Host ===
-CHANNEL_HOST_BASE_URL=http://127.0.0.1:43123
-CHANNEL_HOST_TOKEN=dev
-CHANNEL_HOST_POLL_INTERVAL_MS=1000
-
-# === WeKnora 知识服务 ===
-WEKNORA_BASE_URL=http://127.0.0.1:8080/api/v1
-WEKNORA_API_KEY=你的WeKnora密钥
-WEKNORA_TIMEOUT_MS=15000
-WEKNORA_ORIGIN=https://kb.leaif.com
-KNORA_ACCOUNT_ENC_KEY=6f6ee9db2d9eb63ce946878156595bfe55a6bcdb8ad7c87290134cb7d891e547
-
-# === CORS ===
-CORS_ORIGINS=https://kb.leaif.com
-
-# === 微信账号（可选）===
-WECHAT_ACCOUNT=wxid_你的微信ID
-```
-
-> **重要**：`MODEL_API_KEY` 是必填项，没有它 Agent 无法运行。
-
-### 4.3 数据库迁移
-
-```bash
-cd weflow/core
-
-# 设置环境变量（tsx 不自动加载 .env）
-$env:DATABASE_URL="postgresql://weflow:weflow@127.0.0.1:5432/weflow"
-$env:REDIS_URL="redis://127.0.0.1:6379"
-$env:SESSION_SECRET="your-session-secret-at-least-32-chars"
-
-# 执行迁移
-pnpm migrate
-```
-
-成功后会看到 `database migrations completed`。
-
-### 4.4 创建管理员用户
-
-```bash
-# 确保环境变量已设置（同上）
-$env:DATABASE_URL="postgresql://weflow:weflow@127.0.0.1:5432/weflow"
-$env:REDIS_URL="redis://127.0.0.1:6379"
-$env:SESSION_SECRET="your-session-secret"
-
-# 创建管理员（密码至少 12 位）
-pnpm create-user admin --role=admin
-```
-
-脚本会输出类似：
-
-```
-created admin admin
-initial password (shown once): xK9mB2vP7qR4wN1j!aA1
-```
-
-> **务必保存这个密码**，它只显示一次。
-
-如果忘记密码，用 `reset-password` 重置：
-
-```bash
-pnpm reset-password admin --password=YourNewPassword123
-```
-
-### 4.5 启动 Core API
-
-```bash
-cd weflow/core
-
-# 加载 .env 环境变量后启动
-$env:DATABASE_URL="postgresql://weflow:weflow@127.0.0.1:5432/weflow"
-$env:REDIS_URL="redis://127.0.0.1:6379"
-$env:SESSION_SECRET="your-session-secret"
-$env:CHANNEL_HOST_TOKEN="dev"
-$env:MODEL_API_KEY="你的API密钥"
-$env:WEKNORA_API_KEY="你的WeKnora密钥"
-
-pnpm dev:api
-```
-
-看到 `Server listening on 0.0.0.0:3100` 表示启动成功。
-
-或者使用一键启动脚本（自动加载 .env）：
-
-```bash
-cd weflow
-.\scripts\start-dev.ps1
-```
-
-这会同时启动 Channel Host 和 Core API。
+> 目录约定：以下文档统一假设产品根为 `C:\weflow`，两个仓库并列于其下。
 
 ---
 
-## 5. Console 启动
+## 5. 生产配置 .env
 
-在另一个终端：
-
-```bash
-cd weflow/apps/console
-
-pnpm dev
+```powershell
+copy C:\weflow\weflow\core\.env.production.example C:\weflow\weflow\core\.env
+notepad C:\weflow\weflow\core\.env
 ```
 
-Console 启动在 `http://localhost:5173/console/`，自动代理 `/api` 到 Core API（`localhost:3100`）。
+逐项填写 `<...>` 占位值。关键项：
 
-打开浏览器访问 `http://localhost:5173/console/`，用第 4.4 步创建的管理员账号登录。
+| 键 | 必填 | 说明 |
+|----|------|------|
+| `DATABASE_URL` / `REDIS_URL` | ✅ | 数据库与缓存连接串 |
+| `MODEL_API_KEY` | ✅ | 模型密钥，缺失则 Agent 不工作 |
+| `WEB_DIST_DIR` | ✅ | 指向前端构建产物（见第 9 节） |
+| `SESSION_COOKIE_SECURE` | ✅ | 局域网 HTTP 必须为 `false`；HTTPS 部署保持 `true` |
+| `CHANNEL_HOST_BASE_URL` / `TOKEN` | 微信功能 | 与 Channel Host 配对 |
+| `WEFLOW_PLUGIN_DIR` | ✅ | 业务插件目录直读根，指向 `weflow-solutions\solutions\customer-support` |
+
+> `.env` 修改后需重启进程生效：`weflowctl service restart`。
 
 ---
 
-## 6. Channel Host（微信通道）
+## 6. 数据库迁移与初始账号
 
-Channel Host 是 Python 服务，负责连接微信桌面客户端、收发消息。
+```powershell
+cd C:\weflow\weflow\core
 
-### 6.1 前置条件
+# 迁移（幂等，可重复执行）
+pnpm migrate:prod
 
-- Windows 10/11
-- 微信桌面版 4.1.12+ 已登录
-- Python 3.9+（推荐 3.12）
+# 创建管理员（密码至少 12 位，输出只显示一次，务必保存）
+node --env-file=.env dist/scripts/create-user.js admin --role=admin
+```
 
-### 6.2 安装依赖
+忘记密码时重置：
 
-```bash
-cd weflow/runtimes/channel-host-wechat
+```powershell
+node --env-file=.env dist/scripts/reset-password.js admin --password=新密码
+```
 
-# 用 uv 创建虚拟环境并安装依赖
+---
+
+## 7. 构建产物
+
+```powershell
+# core 后端产物（dist/，服务进程入口）
+cd C:\weflow\weflow\core
+pnpm build
+
+# 前端产物（support-web/dist/）
+cd C:\weflow\weflow-solutions
+pnpm build
+
+# 业务插件产物（plugins/*/dist，Core 直读）
+# pnpm build 已包含
+```
+
+> 顺序约束：`packages/contracts` 改动后，先 `pnpm --dir packages/contracts build` 再构建 core；`weflow-solutions` 的 `pnpm build` 已按依赖顺序串联。
+
+---
+
+## 8. Windows 服务化（weflowctl service）
+
+R4 起 `weflowctl` 提供 `service` 域，用 [WinSW2](https://github.com/winsw/winsw)（单 exe + XML，MIT 协议）把三进程包装为 Windows 服务：自动启动（延迟）、崩溃自动重启（10s/30s 两次后放弃，1 小时重置计数）、日志按大小滚动。
+
+```powershell
+cd C:\weflow\weflow
+
+# 1. 下载 WinSW host（18MB，联网一次；已存在则跳过）
+node tooling\weflowctl\dist\cli.js service fetch-host
+
+# 2. 安装（生成 tools\winsw\weflow-<key>.exe/.xml 并注册服务；需管理员终端）
+node tooling\weflowctl\dist\cli.js service install
+
+# 3. 启动 / 停止 / 重启 / 状态
+node tooling\weflowctl\dist\cli.js service start
+node tooling\weflowctl\dist\cli.js service stop
+node tooling\weflowctl\dist\cli.js service restart
+node tooling\weflowctl\dist\cli.js service status
+
+# 卸载
+node tooling\weflowctl\dist\cli.js service uninstall
+```
+
+等价的系统服务名：`weflow-core-api`、`weflow-agent-worker`、`weflow-ingestion-worker`（也可用 `services.msc` 或 `Get-Service` 管理）。
+
+**install 的前置检查**（不满足会明确报错）：
+
+- `core/dist/apps/api/main.js` 存在（先 `pnpm build`）
+- `core/.env` 含 `DATABASE_URL` / `REDIS_URL`
+- `tools/winsw/weflow-service.exe` 存在（先 `service fetch-host`）
+
+> **端口冲突提示**：服务与开发进程（`weflowctl dev up`）使用相同端口，二者互斥。切换形态前先 `weflowctl dev down` 或 `weflowctl service stop`。
+
+**Channel Host 不服务化**：微信通道依赖已登录微信桌面窗口的 UIA 自动化，必须运行在登录用户的桌面会话。用任务计划程序设为「登录时启动」（见第 10 节）。
+
+---
+
+## 9. 前端托管说明
+
+前端由 **api 进程静态托管**（`WEB_DIST_DIR` 指向 `support-web/dist`），不再需要 Vite dev server：
+
+- `/` 与所有非 `/api`、`/health`、`/customer-support` 的 GET 请求回落 `index.html`（SPA browser history）
+- `assets/*` 带 hash，长缓存（immutable）；`index.html` 不缓存 → 前端整包替换即生效，无需重启
+- 前端与 API 同源，无 CORS 配置负担
+
+开发环境仍用 `weflowctl dev up`（Vite 5174 + 热重载）；`WEB_DIST_DIR` 不配置时 api 不注册静态路由，开发互不影响。
+
+---
+
+## 10. 微信通道 Channel Host
+
+```powershell
+cd C:\weflow\weflow\runtimes\channel-host-wechat
+
+# 首次安装
 uv venv .venv
 .venv\Scripts\activate
 uv pip install -e .
-uv pip install winsdk pypinyin  # OCR 发送路径的额外依赖
-```
+uv pip install winsdk pypinyin
 
-### 6.3 配置
-
-Channel Host 的配置在 `channel_host/` 目录下。确保：
-
-1. 微信桌面版已登录
-2. Channel Host 能读取微信数据库（首次运行会自动解密）
-
-### 6.4 启动
-
-```bash
-cd weflow/runtimes/channel-host-wechat
-
-# 方式一：直接启动
+# 启动（保持微信桌面版已登录；锁屏时发送不可用）
 .venv\Scripts\python -m channel_host.main
-
-# 方式二：用 run.ps1
-.\run.ps1
 ```
 
-Channel Host 监听在 `http://127.0.0.1:43123`。
+开机自启（任务计划程序，管理员 PowerShell）：
 
-> **注意**：Channel Host 必须在微信登录状态下运行。桌面锁屏时发送功能不可用。
+```powershell
+schtasks /create /tn "Weflow-ChannelHost" `
+  /tr "C:\weflow\weflow\runtimes\channel-host-wechat\run.ps1" `
+  /sc onlogon /rl highest
+```
 
 ---
 
-## 7. Agent Worker 启动
+## 11. 验证：从零拉起到登录收发
 
-Agent Worker 负责执行 AI 对话（Agent Turn）。在另一个终端：
+```powershell
+# 1. 基础设施
+docker compose -f C:\weflow\weflow\deploy\compose.yaml up -d
 
-```bash
-cd weflow/core
+# 2. 服务
+cd C:\weflow\weflow
+node tooling\weflowctl\dist\cli.js service status
 
-# 设置环境变量（同 Core API）
-$env:DATABASE_URL="postgresql://weflow:weflow@127.0.0.1:5432/weflow"
-$env:REDIS_URL="redis://127.0.0.1:6379"
-$env:MODEL_API_KEY="你的API密钥"
+# 3. 健康
+curl http://127.0.0.1:3100/health/ready     # {"process":"core-api","status":"ready"}
+curl http://127.0.0.1:3101/health/live      # {"process":"agent-worker","status":"ok"}
+curl http://127.0.0.1:3102/health/live      # {"process":"ingestion-worker","status":"ok"}
 
-# 启动 Agent Worker
-pnpm dev:agent-worker
+# 4. 前端（返回 SPA 页面）
+curl http://127.0.0.1:3100/conversations
+
+# 5. 登录（200 且 Set-Cookie 无 Secure 即局域网可登录）
+curl -i -X POST http://127.0.0.1:3100/api/v1/auth/login `
+  -H "Content-Type: application/json" `
+  -d '{"username":"admin","password":"你的密码"}'
+
+# 6. 启动 Channel Host，用微信给绑定的联系人发消息，验证收发闭环
 ```
-
-如果有客服插件，启动时注入插件路径（见第 8 步）。
 
 ---
 
-## 8. 安装客服业务插件
+## 12. 热更新规程（核心卖点）
 
-### 方式一：开发期快捷注入（推荐日常开发）
+Weflow 的部署形态让「改代码 → 上线」不需要停机窗口：api 持有 HTTP 入口保持不动，只滚动重启两个 worker；前端整包替换即时生效。
 
-直接在启动 Agent Worker 时注入插件路径：
+### 12.1 前端更新（无重启，秒级）
 
-```bash
-cd weflow/core
+```powershell
+cd C:\weflow\weflow-solutions
+git pull
+pnpm --dir solutions/customer-support/apps/support-web build
 
-$env:DATABASE_URL="postgresql://weflow:weflow@127.0.0.1:5432/weflow"
-$env:REDIS_URL="redis://127.0.0.1:6379"
-$env:MODEL_API_KEY="你的API密钥"
-$env:SKILL_PLUGIN_PATH="C:\Users\<你>\Desktop\We\weflow-solutions\solutions\customer-support\plugins\product-troubleshooting\dist\index.js"
-$env:STRATEGY_PLUGIN_PATH="C:\Users\<你>\Desktop\We\weflow-solutions\solutions\customer-support\plugins\customer-support-strategy\dist\index.js"
-
-pnpm dev:agent-worker
+# 原子替换（先换名再删旧，避免文件占用）
+Rename-Item C:\weflow\weflow\solutions\customer-support\apps\support-web\dist dist.old
+# （新 dist 由 build 生成）
+Remove-Item -Recurse -Force C:\weflow\weflow\solutions\customer-support\apps\support-web\dist.old
 ```
 
-先构建插件：
+生效机制：`index.html` 不缓存，浏览器下次加载即取新版本；`assets/*` 文件名带 hash，新旧共存互不冲突。**用户无感知，不丢会话。**
 
-```bash
-cd weflow-solutions
+### 12.2 后端更新（只重启 worker，api 不动）
 
-pnpm install:all
-pnpm build
-```
+```powershell
+cd C:\weflow\weflow
+git pull
 
-### 方式二：Solution Pack 安装（正式部署）
+# 0. 回退点：记录当前 commit，迁移前做数据库快照（见 12.5）
+git log -1 --format=%H > C:\weflow\.last-good-commit
 
-#### 8.1 构建插件
-
-```bash
-cd weflow-solutions
-
-# 安装依赖
-pnpm install:all
-
-# 构建所有插件和应用
-pnpm build
-```
-
-#### 8.2 打包 Solution Pack
-
-```bash
-# 打包客服方案
-pnpm pack:solution
-```
-
-这会生成 `solutions/customer-support/artifacts/` 下的 `.tgz` 文件。
-
-#### 8.3 通过 Console 安装
-
-1. 打开 Console（`http://localhost:5173/console/`）
-2. 进入「业务方案」页面
-3. 点击「导入方案」
-4. 选择打包好的 Solution Pack（zip 格式）
-5. 等待安装完成
-
-#### 8.4 通过 API 安装
-
-```bash
-# 先登录获取 token
-TOKEN=$(curl -s -X POST http://127.0.0.1:3100/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"你的密码"}' \
-  -c - | grep weflow_session | awk '{print $NF}')
-
-# 打包为 zip
-cd weflow-solutions/solutions/customer-support
-# 将 manifest + lock + signature + artifacts 打成 zip
-
-# 导入
-curl -X POST http://127.0.0.1:3100/api/v1/admin/solutions/import \
-  -H "Cookie: weflow_session=$TOKEN" \
-  -F "file=@customer-support.zip"
-```
-
-### 方式三：weflowctl CLI 安装
-
-```bash
-cd weflow
-
-# 构建 weflowctl
+# 1. 依赖与构建
+pnpm --dir packages/contracts build   # contracts 有改动时
+pnpm --dir core build
 pnpm --dir tooling/weflowctl build
 
-# 导入方案
-node tooling/weflowctl/dist/cli.js solution import \
-  --path solutions/customer-support \
-  --core-url http://127.0.0.1:3100 \
-  --admin-token <your-token>
+# 2. 迁移（幂等；只在有新 migration 时产生变更）
+cd core && pnpm migrate:prod && cd ..
+
+# 3. 重启 worker（api 不动，HTTP 零中断）
+node tooling\weflowctl\dist\cli.js service restart
+
+# 4. 体检
+node tooling\weflowctl\dist\cli.js dev doctor
+```
+
+> agent-worker 与 ingestion-worker 不持有监听端口（健康端口仅探活），重启即断点恢复：进行中的 Agent Turn 由 Redis 队列与数据库状态机接管，重启后继续处理。
+
+**插件目录直读**（R3 后唯一插件加载方式）：`WEFLOW_PLUGIN_DIR` 下的 `plugins/*/dist` 与 `backend/` 由 Core 直接 import——改插件后 `pnpm build` 插件 → `service restart` 即生效，无需任何打包/安装/激活流程。
+
+### 12.3 配置更新（.env）
+
+修改 `core/.env` 后：
+
+```powershell
+node tooling\weflowctl\dist\cli.js service restart
+```
+
+### 12.4 回退
+
+```powershell
+# 1. 代码回退
+cd C:\weflow\weflow
+git revert <bad-commit>        # 或 git reset --hard (cat C:\weflow\.last-good-commit)
+pnpm --dir core build
+node tooling\weflowctl\dist\cli.js service restart
+
+# 2. 数据库回退（迁移有破坏性变更时，用 12.5 的快照恢复）
+```
+
+### 12.5 迁移前快照
+
+任何含 migration 的更新前：
+
+```powershell
+docker exec weflow-postgres pg_dump -U weflow weflow > C:\weflow\backup\weflow-$(Get-Date -Format yyyyMMdd-HHmmss).sql
+# 恢复：docker exec -i weflow-postgres psql -U weflow weflow < <快照文件>
+```
+
+### 12.6 热更新体检
+
+每次更新后：
+
+```powershell
+node tooling\weflowctl\dist\cli.js dev doctor    # 服务/DB/Redis/通道协议全项体检
+curl http://127.0.0.1:3100/health/ready
 ```
 
 ---
 
-## 9. FRP 公网隧道
+## 13. 监控与日志
 
-FRP 用于将本地服务暴露到公网，供外部访问（如微信回调、知识库 UI）。
-
-### 9.1 架构
-
-```
-公网用户
-    ↓
-frps 服务器 (38.22.235.27:7000)
-    ↓
-frpc 客户端 (你的电脑)
-    ↓
-本地服务
-```
-
-| 域名 | 映射 | 本地端口 |
-|------|------|---------|
-| `api.leaif.com` | Core API | `3100` |
-| `web.leaif.com` | Console | `5174` |
-| `kb.leaif.com` | WeKnora 前端 | `80` |
-
-### 9.2 下载 frpc
-
-```bash
-# 下载 frp 客户端（Windows）
-# https://github.com/fatedier/frp/releases
-# 解压到 weflow/tools/frp/
-
-# 目录结构
-weflow/tools/frp/
-├── frpc.exe          # 客户端
-├── frpc.toml         # 配置文件（见下方）
-└── frpc.log          # 运行日志
-```
-
-### 9.3 配置 frpc.toml
-
-```bash
-# 编辑 scripts/frpc.toml
-```
-
-内容：
-
-```toml
-# Weflow frpc 隧道配置
-serverAddr = "38.22.235.27"
-serverPort = 7000
-auth.token = "你的frp认证token"
-
-# 登录失败不退出，持续重试
-loginFailExit = false
-
-# 本地管理接口
-webServer.addr = "127.0.0.1"
-webServer.port = 7400
-
-[[proxies]]
-name = "weflow-api"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 3100
-remotePort = 28660
-
-[[proxies]]
-name = "weflow-web"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 5174
-remotePort = 28661
-
-[[proxies]]
-name = "weflow-kb"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 80
-remotePort = 28662
-```
-
-### 9.4 启动 frpc
-
-```bash
-cd weflow/scripts
-
-# 方式一：直接启动
-..\tools\frp\frpc.exe -c frpc.toml
-
-# 方式二：用幂等启动脚本（推荐，防重复）
-.\frpc-start.ps1
-
-# 方式三：设置开机自启（任务计划程序）
-schtasks /create /tn "Weflow-frpc" /tr "powershell -File C:\Users\<你>\Desktop\We\scripts\frpc-start.ps1" /sc onlogon
-```
-
-### 9.5 验证隧道
-
-```bash
-# 检查 frpc 状态
-Invoke-RestMethod -Uri "http://127.0.0.1:7400/api/status"
-
-# 从公网测试（需要服务器 Caddy/Nginx 反代到 frps 端口）
-curl https://api.leaif.com/health/ready
-```
-
----
-
-## 10. 完整启动流程（一键脚本）
-
-### 10.1 手动启动顺序
-
-按以下顺序在不同终端启动：
-
-```bash
-# 终端 1：Docker 基础设施
-docker compose -f weflow/deploy/compose.yaml up -d
-
-# 终端 2：Core API
-cd weflow/core
-.\scripts\start-dev.ps1
-# 或手动：
-$env:DATABASE_URL="postgresql://weflow:weflow@127.0.0.1:5432/weflow"
-$env:REDIS_URL="redis://127.0.0.1:6379"
-$env:SESSION_SECRET="your-secret"
-$env:CHANNEL_HOST_TOKEN="dev"
-$env:MODEL_API_KEY="你的密钥"
-$env:WEKNORA_API_KEY="你的密钥"
-pnpm dev:api
-
-# 终端 3：Agent Worker（带插件）
-cd weflow/core
-$env:DATABASE_URL="postgresql://weflow:weflow@127.0.0.1:5432/weflow"
-$env:REDIS_URL="redis://127.0.0.1:6379"
-$env:MODEL_API_KEY="你的密钥"
-$env:SKILL_PLUGIN_PATH="C:\Users\<你>\Desktop\We\weflow-solutions\solutions\customer-support\plugins\product-troubleshooting\dist\index.js"
-$env:STRATEGY_PLUGIN_PATH="C:\Users\<你>\Desktop\We\weflow-solutions\solutions\customer-support\plugins\customer-support-strategy\dist\index.js"
-pnpm dev:agent-worker
-
-# 终端 4：Console
-cd weflow/apps/console
-pnpm dev
-
-# 终端 5：Channel Host
-cd weflow/runtimes/channel-host-wechat
-.venv\Scripts\python -m channel_host.main
-
-# 终端 6：frpc
-cd weflow/scripts
-.\frpc-start.ps1
-```
-
-### 10.2 使用 start-dev.ps1（推荐）
-
-`start-dev.ps1` 会自动加载 `.env` 并启动 Channel Host + Core API：
-
-```bash
-cd weflow
-.\scripts\start-dev.ps1
-```
-
-停止：
-
-```bash
-.\scripts\start-dev.ps1 -Stop
-```
-
----
-
-## 11. 验证与排障
-
-### 11.1 健康检查
-
-```bash
-# Core API
-Invoke-RestMethod -Uri "http://127.0.0.1:3100/health/ready"
-# 应返回 {"process":"core-api","status":"ready"}
-
-# 登录测试
-Invoke-RestMethod -Uri "http://127.0.0.1:3100/api/v1/auth/login" `
-  -Method POST `
-  -ContentType "application/json" `
-  -Body '{"username":"admin","password":"你的密码"}'
-
-# Agent Worker
-Invoke-RestMethod -Uri "http://127.0.0.1:3101/health/ready"
-
-# Console
-Invoke-RestMethod -Uri "http://127.0.0.1:5173/console/"
-```
-
-### 11.2 常见问题
-
-#### 数据库连接失败
-
-```
-Error: connect ECONNREFUSED 127.0.0.1:5432
-```
-
-**解决**：确保 Docker 容器在运行：
-
-```bash
-docker ps --filter "name=weflow-postgres"
-docker start weflow-postgres
-```
-
-#### 登录返回 invalid_credentials
-
-**解决**：密码可能不匹配，重置密码：
-
-```bash
-$env:DATABASE_URL="postgresql://weflow:weflow@127.0.0.1:5432/weflow"
-$env:REDIS_URL="redis://127.0.0.1:6379"
-pnpm reset-password admin --password=NewPassword123
-```
-
-#### Console 显示"请求未能完成"
-
-**原因**：API 返回 401 或 404。
-
-**排查**：
-
-1. 检查浏览器登录状态（Cookie 是否有效）
-2. 检查 Core API 是否在运行：`Invoke-RestMethod http://127.0.0.1:3100/health/ready`
-3. 检查缺失的 API 路由（查看浏览器 Network 面板）
-
-#### tsx watch 不自动重启
-
-**解决**：检查 `.data/logs/core.err.log` 看启动错误，手动重启：
-
-```bash
-# 先杀掉旧进程
-Get-Process -Name "node" | Where-Object {
-  (Get-CimInstance Win32_Process -Filter "ProcessId=$($_.Id)").CommandLine -match "apps/api/main.ts"
-} | Stop-Process -Force
-
-# 重新启动
-.\scripts\start-dev.ps1
-```
-
-#### Channel Host 无法连接微信
-
-**解决**：
-
-1. 确保微信桌面版已登录
-2. 确保微信窗口未最小化到托盘
-3. 检查 `CHANNEL_HOST_BASE_URL` 配置
-
-### 11.3 日志位置
-
-| 服务 | 日志路径 |
+| 组件 | 日志位置 |
 |------|---------|
-| Core API | `weflow/core/.data/logs/core.out.log` / `core.err.log` |
-| Channel Host | `weflow/core/.data/logs/channel-host.out.log` / `channel-host.err.log` |
-| frpc | `weflow/tools/frp/frpc.log` |
-| Docker | `docker logs <容器名>` |
+| 三个 Windows 服务 | `weflow\tools\winsw\logs\weflow-<key>.out.log` / `.err.log` / `.wrapper.log`（按 10MB 滚动，保留 8 份） |
+| Channel Host | 启动任务的控制台输出 / `core\.data\logs\channel-host.*.log` |
+| PostgreSQL / Redis | `docker logs` 或系统事件日志 |
+
+健康端点：`/health/live`（进程存活）、`/health/ready`（依赖就绪，503 = Postgres/Redis 异常）。
 
 ---
 
-## 12. 附录：端口一览
+## 14. 桌面端（Tauri 壳）
+
+R4 提供可选的 Windows 桌面端：Tauri WebView2 壳加载产品网页端，**业务零改动**。
+
+- 位置：`weflow\apps\desktop`
+- 目标地址可配置：默认 `http://127.0.0.1:3100`（同机部署），改 `weflow.conf` 指向任意已部署 api 地址
+- 自动更新：Tauri updater 预留自托管更新源占位（`apps/desktop/tauri.conf.json` 的 `plugins.updater`）
+- 构建与使用见 `weflow\apps\desktop\README.md`
+
+---
+
+## 15. 附录：端口一览与排障
+
+### 端口
 
 | 端口 | 服务 | 说明 |
 |------|------|------|
-| `3100` | Core API | 主后端 API |
-| `3101` | Agent Worker | AI 对话处理 |
-| `3102` | Ingestion Worker | 媒体处理 |
-| `5173` | Console (dev) | 前端开发服务器 |
-| `5432` | PostgreSQL | Core 主数据库 |
-| `6379` | Redis | Core 缓存/队列 |
-| `43123` | Channel Host | 微信通道服务 |
-| `7400` | frpc admin | FRP 管理接口 |
-| `8080` | WeKnora | 知识检索 API |
-| `80` | WeKnora UI | 知识库前端 |
-| `6333-6334` | Qdrant | 向量数据库 |
-| `28660` | frps → API | 公网 API 映射 |
-| `28661` | frps → Console | 公网 Console 映射 |
-| `28662` | frps → KB | 公网知识库映射 |
+| 3100 | api | HTTP API + 前端托管 |
+| 3101 / 3102 | agent-worker / ingestion-worker | 健康探针 |
+| 5432 / 6379 | PostgreSQL / Redis | 数据层 |
+| 43123 | Channel Host | 微信通道（本机回环） |
 
----
+### 排障速查
 
-## 快速参考
+| 现象 | 排查 |
+|------|------|
+| `service install` 报缺 host | 先 `service fetch-host`（或手动下载 WinSW，见报错信息中的 URL） |
+| 服务启动后立即停止 | `tools\winsw\logs\weflow-core-api.err.log` 看崩溃栈；常见：端口被 dev 进程占用（`dev down`）、`.env` 缺键、dist 未构建 |
+| 服务 Running 但健康 503 | Postgres/Redis 未启动；`docker ps` 检查 |
+| 登录 200 但页面仍要求登录 | `SESSION_COOKIE_SECURE=false` 未配置（HTTPS 部署除外）；浏览器 F12 看 Cookie 是否回传 |
+| SPA 路由刷新 404 | `WEB_DIST_DIR` 未配置或目录缺 `index.html` |
+| 前端更新后仍是旧页面 | 强刷（Ctrl+F5）；确认 dist 替换成功（`index.html` 内 assets hash 变化） |
+| 微信收发不通 | 微信已登录且未锁屏；Channel Host 在运行；`CHANNEL_HOST_TOKEN` 两端一致 |
+| `tsc` 产物嵌套 `dist/core/` | 已在 R4 修复（tsconfig paths 指向 contracts dist）；出现说明用了旧 tsconfig，`rm -rf dist && pnpm build` |
 
-```bash
-# 首次部署完整流程
-git clone ... weflow && git clone ... weflow-solutions
-cd weflow && docker compose -f deploy/compose.yaml up -d
-pnpm install:all
-cd core && cp .env.example .env  # 编辑 .env 填入 API Key
-pnpm migrate
-pnpm create-user admin --role=admin  # 保存输出的密码
-cd ../.. && .\scripts\start-dev.ps1
-# 新终端：
-cd weflow/apps/console && pnpm dev
-# 新终端：
-cd weflow-solutions && pnpm install:all && pnpm build
-# 用快捷注入方式启动 Agent Worker（见第 8 步）
-# 启动 frpc（见第 9 步）
-```
+### 与开发环境的区别
+
+| | 开发（`weflowctl dev up`） | 生产（`weflowctl service`） |
+|---|---|---|
+| 进程 | tsx 直跑源码，watch 热重载 | node 跑 `dist/`，WinSW 托管 |
+| 前端 | Vite dev server (5174) + 代理 | api 静态托管（3100 同源） |
+| .env | `core/.env` | 同一文件；`NODE_ENV=production` 时服务生效 |
+| 日志 | `core/.dev-logs/` | `tools/winsw/logs/` |

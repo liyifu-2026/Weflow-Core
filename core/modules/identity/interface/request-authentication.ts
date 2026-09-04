@@ -94,18 +94,30 @@ export async function requireRunnerIdentity(
 }
 
 /**
+ * 会话 Cookie 是否带 Secure：production 默认 true（HTTPS only），
+ * 可用 SESSION_COOKIE_SECURE 显式覆盖（局域网 HTTP 部署必须为 false，
+ * 否则浏览器不回传 Cookie 导致无法登录）。与 config schema 的枚举对齐。
+ */
+function cookieSecure(): boolean {
+  const override = process.env.SESSION_COOKIE_SECURE?.trim();
+  if (override === "true") return true;
+  if (override === "false") return false;
+  return process.env.NODE_ENV === "production";
+}
+
+/**
  * 生成会话 Cookie 字符串。
- * 本地开发通常通过 HTTP（包括局域网 IP）访问 Console；生产环境仍始终使用 Secure。
+ * 本地开发通常通过 HTTP（包括局域网 IP）访问；生产环境默认使用 Secure。
  */
 export function sessionCookie(token: string, expiresAt: Date): string {
-  const secure = process.env.NODE_ENV === "production";
+  const secure = cookieSecure();
   const domain = COOKIE_DOMAIN ? ` Domain=${COOKIE_DOMAIN};` : "";
   return `${COOKIE_NAME}=${token}; Path=/; HttpOnly;${domain}${secure ? " Secure;" : ""} SameSite=Strict; Expires=${expiresAt.toUTCString()}`;
 }
 
 /** 生成清除会话 Cookie 的 Set-Cookie 头值 */
 export function clearSessionCookie(): string {
-  const secure = process.env.NODE_ENV === "production";
+  const secure = cookieSecure();
   const domain = COOKIE_DOMAIN ? ` Domain=${COOKIE_DOMAIN};` : "";
   return `${COOKIE_NAME}=; Path=/; HttpOnly;${domain}${secure ? " Secure;" : ""} SameSite=Strict; Max-Age=0`;
 }

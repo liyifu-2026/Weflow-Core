@@ -10,6 +10,10 @@ import { runProcess } from "../../infrastructure/runtime/run-process.js";
 import multipart from "@fastify/multipart";
 import { LocalFileStorage } from "../../infrastructure/file_storage/local-file-storage.js";
 import { registerCors } from "../../infrastructure/http/cors.js";
+import {
+  registerWebStatic,
+  resolveWebDistDir,
+} from "../../infrastructure/http/web-static.js";
 import { startAgentTurnDispatcher } from "../../infrastructure/redis/agent-turn-dispatcher.js";
 import { loadInstalledBackendPlugins } from "../../infrastructure/solutions/backend-plugin-loader.js";
 import { startMemoryCaptureDispatcher } from "../../infrastructure/redis/memory-capture-dispatcher.js";
@@ -74,6 +78,13 @@ await runProcess({
   /** 配置 HTTP 服务器，注册所有业务模块的路由 */
   configureServer: async (server, { config, postgres, logger }) => {
     registerCors(server, config.corsOrigins);
+    // 产品网页端静态托管（R4 部署形态）：生产环境由 api 进程直接托管
+    // support-web 构建产物，不再依赖 Vite dev server。未配置时跳过。
+    const webDistDir = resolveWebDistDir(config.webDistDir);
+    if (webDistDir) {
+      await registerWebStatic(server, webDistDir);
+      logger.info({ webDistDir }, "serving web dist");
+    }
     await server.register(multipart, {
       limits: { fileSize: 100 * 1_024 * 1_024, files: 1 },
     });

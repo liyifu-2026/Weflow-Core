@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 .data/
 *.log
 
@@ -48,3 +49,6 @@ ios/build/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Windows 服务包装（weflowctl service fetch-host 下载的 WinSW host + 生成的配置/日志）
+tools/winsw/
