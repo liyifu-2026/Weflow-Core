@@ -7,6 +7,20 @@
  */
 import { computed, onMounted, ref } from "vue";
 import {
+  CircleAlert,
+  FileText,
+  FolderOpen,
+  MoreHorizontal,
+  Pencil,
+  Search,
+  Trash2,
+  Upload,
+} from "lucide-vue-next";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
   assetContentUrl,
   deleteAsset,
   formatAssetSize,
@@ -17,7 +31,6 @@ import {
   type AssetItem,
 } from "../assets/api";
 import AssetImage from "../components/AssetImage.vue";
-import WfIcon from "../components/WfIcon.vue";
 
 const items = ref<AssetItem[]>([]);
 const nextCursor = ref<string | null>(null);
@@ -35,6 +48,12 @@ const hiddenInput = ref<HTMLInputElement | null>(null);
 
 const accept = computed(() => (category.value === "image" ? "image/*" : "*/*"));
 const filtered = computed(() => items.value);
+
+const CATEGORIES = [
+  { key: "all", label: "全部" },
+  { key: "image", label: "图片空间" },
+  { key: "file", label: "文件空间" },
+] as const;
 
 async function load() {
   loading.value = true;
@@ -78,8 +97,8 @@ function applySearch() {
   void load();
 }
 
-function switchCategory(next: AssetCategory | "all") {
-  category.value = next;
+function switchCategory(next: string | number) {
+  category.value = next as AssetCategory | "all";
   void load();
 }
 
@@ -156,74 +175,98 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="wf-asset-page">
-    <header class="wf-asset-page-head">
+  <div class="mx-auto w-full max-w-5xl p-6">
+    <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
       <div>
-        <h1 class="wf-asset-page-title">素材空间</h1>
-        <p class="wf-asset-page-sub">
+        <h1 class="text-2xl font-semibold tracking-tight">素材空间</h1>
+        <p class="mt-1 text-sm text-muted-foreground">
           会话中可复用的图片与文件，选择器与这里共用同一空间。
         </p>
       </div>
-      <button class="wf-button primary" :disabled="uploading" @click="triggerUpload">
-        <WfIcon name="upload" :size="15" />
+      <Button :disabled="uploading" @click="triggerUpload">
+        <Upload class="size-4" />
         {{ uploading ? "上传中…" : "上传素材" }}
-      </button>
+      </Button>
       <input
         ref="hiddenInput"
         type="file"
         :accept="accept"
-        style="display: none"
+        class="hidden"
         @change="onFileChosen"
       />
     </header>
 
-    <div class="wf-asset-toolbar">
-      <div class="wf-asset-tabs" role="tablist">
-        <button
-          v-for="c in [
-            { key: 'all', label: '全部' },
-            { key: 'image', label: '图片空间' },
-            { key: 'file', label: '文件空间' },
-          ]"
-          :key="c.key"
-          type="button"
-          class="wf-asset-tab"
-          :class="{ active: category === c.key }"
-          @click="switchCategory(c.key as AssetCategory | 'all')"
-        >
-          {{ c.label }}
-        </button>
-      </div>
-      <div class="wf-asset-search">
-        <WfIcon name="search" :size="14" />
-        <input
+    <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <Tabs
+        :model-value="category"
+        @update:model-value="switchCategory"
+      >
+        <TabsList>
+          <TabsTrigger
+            v-for="c in CATEGORIES"
+            :key="c.key"
+            :value="c.key"
+          >
+            {{ c.label }}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <form class="relative w-full sm:w-64" @submit.prevent="applySearch">
+        <Search
+          class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+        />
+        <Input
           v-model="searchInput"
           placeholder="搜索素材名称…"
-          @keydown.enter="applySearch"
+          class="pl-8"
         />
-        <button
-          v-if="searchApplied"
-          type="button"
-          class="wf-link"
-          @click="applySearch"
-        >
-          重搜
-        </button>
+      </form>
+    </div>
+
+    <p
+      v-if="notice"
+      class="mb-4 flex items-center gap-2 text-sm text-destructive"
+    >
+      <CircleAlert class="size-4" />
+      {{ notice }}
+    </p>
+
+    <!-- loading -->
+    <div
+      v-if="loading"
+      class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4"
+    >
+      <div v-for="n in 8" :key="n" class="space-y-2">
+        <Skeleton class="h-[110px] w-full" />
+        <Skeleton class="h-4 w-3/4" />
       </div>
     </div>
 
-    <p v-if="notice" class="wf-asset-notice">{{ notice }}</p>
-
-    <div v-if="loading" class="wf-asset-page-empty">加载中…</div>
-    <div v-else-if="!filtered.length" class="wf-asset-page-empty">
-      {{ searchApplied ? "没有匹配的素材" : "空间还是空的，点右上角「上传素材」" }}
+    <!-- empty -->
+    <div
+      v-else-if="!filtered.length"
+      class="flex flex-col items-center gap-2 py-24 text-center"
+    >
+      <FolderOpen class="size-8 text-muted-foreground/60" />
+      <p class="text-sm font-medium">
+        {{ searchApplied ? "没有匹配的素材" : "空间还是空的" }}
+      </p>
+      <p class="text-sm text-muted-foreground">
+        {{ searchApplied ? "换个关键词试试" : "点右上角「上传素材」添加第一份文件" }}
+      </p>
     </div>
+
+    <!-- grid -->
     <template v-else>
-      <div class="wf-asset-page-grid">
-        <div v-for="asset in filtered" :key="asset.assetId" class="wf-asset-card">
+      <div class="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-4">
+        <div
+          v-for="asset in filtered"
+          :key="asset.assetId"
+          class="group flex flex-col overflow-hidden rounded-lg border bg-card transition-colors hover:border-foreground/20"
+        >
           <button
             type="button"
-            class="wf-asset-thumb"
+            class="flex h-[110px] w-full items-center justify-center bg-muted/50"
             :title="asset.name"
             @click="openContent(asset)"
           >
@@ -231,210 +274,73 @@ onMounted(load);
               v-if="asset.category === 'image'"
               :asset-id="asset.assetId"
               :name="asset.name"
+              class="h-full w-full object-cover"
             />
-            <span v-else class="wf-asset-thumb-fallback">📄</span>
+            <FileText v-else class="size-8 text-muted-foreground/60" />
           </button>
-          <div class="wf-asset-meta">
-            <span class="wf-asset-name" :title="asset.name">{{ asset.name }}</span>
-            <span class="wf-asset-size">
+          <div class="flex min-w-0 flex-col gap-0.5 p-2 pb-1">
+            <span class="truncate text-sm" :title="asset.name">{{ asset.name }}</span>
+            <span class="text-xs text-muted-foreground">
               {{ formatAssetSize(asset.size) }} · {{ formatDate(asset.createdAt) }}
             </span>
           </div>
-          <div class="wf-asset-actions">
-            <button type="button" class="wf-link" @click="startRename(asset)">
+          <div class="flex items-center gap-1 p-1.5 pt-0">
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-7 px-2 text-xs text-muted-foreground"
+              :disabled="busyId === asset.assetId"
+              @click="startRename(asset)"
+            >
+              <Pencil class="size-3.5" />
               改名
-            </button>
-            <button
-              type="button"
-              class="wf-link danger"
+            </Button>
+            <span class="grow" />
+            <Button
+              variant="ghost"
+              size="icon"
+              class="size-7 text-destructive hover:text-destructive"
+              title="删除"
               :disabled="busyId === asset.assetId"
               @click="remove(asset)"
             >
-              删除
-            </button>
+              <Trash2 class="size-3.5" />
+            </Button>
           </div>
-          <div v-if="renamingId === asset.assetId" class="wf-asset-rename">
-            <input
+          <div v-if="renamingId === asset.assetId" class="flex gap-1.5 p-2 pt-0">
+            <Input
               v-model="renameValue"
               maxlength="255"
+              class="h-8 text-xs"
               @keydown.enter="confirmRename"
             />
-            <button
-              type="button"
-              class="wf-link"
+            <Button
+              variant="outline"
+              size="sm"
+              class="h-8 shrink-0 px-2 text-xs"
               :disabled="busyId === asset.assetId || !renameValue.trim()"
               @click="confirmRename"
             >
               保存
-            </button>
-            <button type="button" class="wf-link" @click="renamingId = ''">
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-8 shrink-0 px-2 text-xs text-muted-foreground"
+              title="取消"
+              @click="renamingId = ''"
+            >
               取消
-            </button>
+            </Button>
           </div>
         </div>
       </div>
-      <div v-if="nextCursor" class="wf-asset-page-more">
-        <button
-          class="wf-button ghost"
-          :disabled="loadingMore"
-          @click="loadMore"
-        >
+      <div v-if="nextCursor" class="flex justify-center pt-6">
+        <Button variant="outline" :disabled="loadingMore" @click="loadMore">
+          <MoreHorizontal class="size-4" />
           {{ loadingMore ? "加载中…" : "加载更多" }}
-        </button>
+        </Button>
       </div>
     </template>
   </div>
 </template>
-
-<style scoped>
-.wf-asset-page {
-  padding: 24px 28px 48px;
-  max-width: 1080px;
-  margin: 0 auto;
-}
-.wf-asset-page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-.wf-asset-page-title {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 650;
-  color: var(--wf-text, #17181a);
-}
-.wf-asset-page-sub {
-  margin: 4px 0 0;
-  color: var(--wf-text-muted, #8a93a6);
-  font-size: 13px;
-}
-.wf-asset-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-.wf-asset-tabs {
-  display: flex;
-  gap: 4px;
-}
-.wf-asset-tab {
-  border: 1px solid transparent;
-  background: transparent;
-  padding: 6px 14px;
-  border-radius: 999px;
-  cursor: pointer;
-  color: var(--wf-text-muted, #5b6472);
-  font-size: 13px;
-}
-.wf-asset-tab.active {
-  background: var(--wf-primary-soft, #eef3ff);
-  color: var(--wf-primary, #2f5cff);
-  border-color: var(--wf-primary-border, #c9d7ff);
-}
-.wf-asset-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid var(--wf-border, #e3e6ee);
-  border-radius: 8px;
-  padding: 6px 10px;
-  min-width: 240px;
-}
-.wf-asset-search input {
-  flex: 1;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 13px;
-}
-.wf-asset-page-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 14px;
-}
-.wf-asset-card {
-  border: 1px solid var(--wf-border, #e3e6ee);
-  border-radius: 12px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  background: var(--wf-surface, #fff);
-}
-.wf-asset-thumb {
-  height: 110px;
-  width: 100%;
-  padding: 0;
-  border: none;
-  background: var(--wf-surface-muted, #f5f6fa);
-  cursor: pointer;
-  display: block;
-}
-.wf-asset-thumb-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  font-size: 26px;
-  color: var(--wf-text-muted, #8a93a6);
-}
-.wf-asset-meta {
-  padding: 8px 10px 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.wf-asset-name {
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--wf-text, #17181a);
-}
-.wf-asset-size {
-  font-size: 11px;
-  color: var(--wf-text-muted, #8a93a6);
-}
-.wf-asset-actions {
-  display: flex;
-  gap: 10px;
-  padding: 4px 10px 10px;
-}
-.wf-asset-rename {
-  display: flex;
-  gap: 6px;
-  padding: 0 10px 10px;
-}
-.wf-asset-rename input {
-  flex: 1;
-  min-width: 0;
-  border: 1px solid var(--wf-border, #e3e6ee);
-  border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 12px;
-}
-.wf-asset-page-more {
-  display: flex;
-  justify-content: center;
-  padding-top: 20px;
-}
-.wf-asset-page-empty {
-  text-align: center;
-  color: var(--wf-text-muted, #8a93a6);
-  padding: 72px 0;
-  font-size: 13px;
-}
-.wf-asset-notice {
-  color: #b42318;
-  font-size: 12px;
-  margin: 0 0 12px;
-}
-.wf-link.danger {
-  color: #b42318;
-}
-</style>

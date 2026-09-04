@@ -2,6 +2,37 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
+  Archive,
+  CircleAlert,
+  Plus,
+  RotateCcw,
+  Search,
+  UserRound,
+} from "lucide-vue-next";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+import {
   archiveAiEmployee,
   createAiEmployee,
   createAiEmployeeVersion,
@@ -82,6 +113,19 @@ const visibleContacts = computed(() => {
 
 function contactLabel(contact: ContactSummary) {
   return contactDisplayName({ contact });
+}
+
+function statusBadge(status: string) {
+  return status === "active"
+    ? { text: "启用", variant: "secondary" as const }
+    : { text: "已归档", variant: "outline" as const };
+}
+
+function versionBadge(status: string) {
+  if (status === "published")
+    return { text: "已发布", variant: "secondary" as const };
+  if (status === "draft") return { text: "草稿", variant: "outline" as const };
+  return { text: "已归档", variant: "outline" as const };
 }
 
 function selectEmployee(employee: AiEmployee) {
@@ -250,7 +294,8 @@ async function archive() {
   }
 }
 
-async function changeDefault() {
+async function changeDefault(value: string) {
+  defaultId.value = value || null;
   try {
     await setWorkspaceAgentDefault(defaultId.value);
   } catch (reason) {
@@ -273,12 +318,6 @@ async function changeBinding(contactId: string, value: string) {
   }
 }
 
-function onBindingChange(contactId: string, event: Event) {
-  const target = event.target;
-  if (target instanceof HTMLSelectElement)
-    void changeBinding(contactId, target.value);
-}
-
 function versionLabel(version: AiEmployeeVersion) {
   return `v${version.version}`;
 }
@@ -287,353 +326,374 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="wf-page wf-page-wide">
-    <header class="wf-page-head">
-      <div>
-        <h1>AI Employees</h1>
-        <p>定义可发布、可回滚的 AI 员工，并在右侧把每个联系人绑定到具体的 AI Employee。</p>
-      </div>
+  <div class="mx-auto w-full max-w-6xl p-6">
+    <header class="mb-6">
+      <h1 class="text-2xl font-semibold tracking-tight">AI Employees</h1>
+      <p class="mt-1 text-sm text-muted-foreground">
+        定义可发布、可回滚的 AI 员工，并在右侧把每个联系人绑定到具体的 AI Employee。
+      </p>
     </header>
-    <div v-if="error" class="wf-error">
-      <span>{{ error }}</span>
-      <button class="wf-button compact" @click="load">重新加载</button>
-    </div>
-    <div v-if="bindingError" class="wf-error">
-      <span>{{ bindingError }}</span>
-    </div>
 
-    <section class="wf-panel wf-employee-create">
-      <div class="wf-panel-head">
-        <h2>建立 AI Employee</h2>
-        <span class="wf-section-caption">完整 Prompt 文本由版本管理</span>
-      </div>
-      <div class="wf-panel-body wf-grid">
-        <div class="wf-field wf-span-4">
-          <label>Key</label>
-          <input v-model="newKey" class="wf-input" placeholder="product-support" />
-        </div>
-        <div class="wf-field wf-span-4">
-          <label>名称</label>
-          <input v-model="newName" class="wf-input" placeholder="产品支持顾问" />
-        </div>
-        <div class="wf-field wf-span-4">
-          <label>说明</label>
-          <input v-model="newDescription" class="wf-input" placeholder="处理产品故障与售后咨询" />
-        </div>
-        <div class="wf-field wf-span-12">
-          <label>首个 Prompt 草稿</label>
-          <textarea
-            v-model="newPrompt"
-            class="wf-textarea"
-            rows="4"
-            placeholder="描述这个 AI Employee 的工作目标、语气、业务范围与限制。"
-          />
-        </div>
-        <div class="wf-span-12">
-          <button
-            class="wf-button primary"
-            :disabled="creating || !newKey || !newName || !newPrompt"
-            @click="createEmployee"
+    <Alert v-if="error" variant="destructive" class="mb-4">
+      <CircleAlert class="size-4" />
+      <AlertDescription class="flex flex-wrap items-center gap-3">
+        {{ error }}
+        <Button variant="outline" size="sm" class="ml-auto" @click="load">
+          重新加载
+        </Button>
+      </AlertDescription>
+    </Alert>
+    <Alert v-if="bindingError" variant="destructive" class="mb-4">
+      <CircleAlert class="size-4" />
+      <AlertDescription>{{ bindingError }}</AlertDescription>
+    </Alert>
+
+    <!-- 新建表单 -->
+    <Card class="mb-6">
+      <CardHeader>
+        <CardTitle>建立 AI Employee</CardTitle>
+        <CardDescription>完整 Prompt 文本由版本管理</CardDescription>
+        <CardAction>
+          <Button
+            :variant="creating ? 'outline' : 'default'"
+            size="sm"
+            @click="creating = !creating"
           >
-            {{ creating ? "建立中" : "建立草稿" }}
-          </button>
-        </div>
-      </div>
-    </section>
+            <Plus class="size-4" />
+            {{ creating ? "取消" : "新建" }}
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent v-if="creating">
+        <form class="grid gap-4 sm:grid-cols-3" @submit.prevent="createEmployee">
+          <div class="space-y-2">
+            <Label for="new-emp-key">Key</Label>
+            <Input id="new-emp-key" v-model="newKey" placeholder="product-support" />
+          </div>
+          <div class="space-y-2">
+            <Label for="new-emp-name">名称</Label>
+            <Input id="new-emp-name" v-model="newName" placeholder="产品支持顾问" />
+          </div>
+          <div class="space-y-2">
+            <Label for="new-emp-desc">说明</Label>
+            <Input
+              id="new-emp-desc"
+              v-model="newDescription"
+              placeholder="处理产品故障与售后咨询"
+            />
+          </div>
+          <div class="space-y-2 sm:col-span-3">
+            <Label for="new-emp-prompt">首个 Prompt 草稿</Label>
+            <Textarea
+              id="new-emp-prompt"
+              v-model="newPrompt"
+              rows="4"
+              placeholder="描述这个 AI Employee 的工作目标、语气、业务范围与限制。"
+            />
+          </div>
+          <div class="sm:col-span-3">
+            <Button
+              type="submit"
+              :disabled="creating || !newKey || !newName || !newPrompt"
+            >
+              {{ creating ? "建立中" : "建立草稿" }}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
 
-    <div v-if="loading" class="wf-panel">
-      <div class="wf-panel-body wf-skeleton">正在读取 AI Employee</div>
+    <!-- loading -->
+    <div v-if="loading" class="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)_320px]">
+      <Skeleton class="h-72 w-full" />
+      <Skeleton class="h-72 w-full" />
+      <Skeleton class="h-72 w-full" />
     </div>
-    <div v-else class="wf-employee-grid">
-      <aside class="wf-strategy-rail">
-        <div class="wf-panel-head">
-          <h2>AI Employee</h2>
-          <span class="wf-section-caption">{{ employees.length }} 个</span>
-        </div>
-        <button
-          v-for="employee in employees"
-          :key="employee.definitionId"
-          class="wf-side-row wf-side-button"
-          :class="{ active: selectedId === employee.definitionId }"
-          @click="selectEmployee(employee)"
-        >
-          <img
-            v-if="employee.avatarUrl"
-            :src="employee.avatarUrl"
-            alt=""
-            class="wf-employee-avatar"
-          />
-          <div class="wf-row-title">
-            <span>{{ employee.name }}</span>
-            <span
-              class="wf-status"
-              :class="employee.status === 'active' ? 'good' : 'warn'"
-            >{{ employee.status === 'active' ? '启用' : '已归档' }}</span>
-          </div>
-          <div class="wf-row-preview">{{ employee.key }}</div>
-          <div class="wf-row-meta">
-            <span>{{ employee.versions.length }} 个版本</span>
-            <span v-if="employee.definitionId === defaultId">共享默认</span>
-          </div>
-        </button>
-        <div v-if="!employees.length" class="wf-empty">
-          <div>
-            <strong>还没有 AI Employee</strong>
-            <p>先建立一个草稿，再发布给新建的 Agent Turn 使用。</p>
-          </div>
-        </div>
-      </aside>
 
-      <main v-if="selected" class="wf-object-sheet">
-        <div class="wf-object-title">
-          <div>
-            <span
-              class="wf-status"
-              :class="selected.status === 'active' ? 'good' : 'warn'"
-            >{{ selected.status === 'active' ? '启用' : '已归档' }}</span>
-            <h2>{{ selected.name }}</h2>
-            <span class="wf-mono wf-subtle">{{ selected.key }}</span>
+    <!-- 三栏 -->
+    <div v-else class="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)_320px] lg:items-start">
+      <!-- 左：员工列表 -->
+      <Card>
+        <CardHeader>
+          <CardTitle class="text-base">AI Employee</CardTitle>
+          <CardDescription>{{ employees.length }} 个</CardDescription>
+        </CardHeader>
+        <CardContent class="p-2 pt-0">
+          <div v-if="!employees.length" class="flex flex-col items-center gap-1 px-4 py-10 text-center">
+            <UserRound class="size-8 text-muted-foreground/60" />
+            <p class="text-sm font-medium">还没有 AI Employee</p>
+            <p class="text-sm text-muted-foreground">
+              先建立一个草稿，再发布给新建的 Agent Turn 使用。
+            </p>
           </div>
-          <div class="wf-actions">
-            <button
+          <button
+            v-for="employee in employees"
+            :key="employee.definitionId"
+            type="button"
+            class="flex w-full flex-col gap-0.5 rounded-md px-3 py-2.5 text-left transition-colors hover:bg-accent"
+            :class="cn(selectedId === employee.definitionId && 'bg-accent')"
+            @click="selectEmployee(employee)"
+          >
+            <span class="flex items-center gap-2">
+              <img
+                v-if="employee.avatarUrl"
+                :src="employee.avatarUrl"
+                alt=""
+                class="size-7 shrink-0 rounded-full object-cover"
+              />
+              <span class="min-w-0 flex-1 truncate text-sm font-medium">
+                {{ employee.name }}
+              </span>
+              <Badge :variant="statusBadge(employee.status).variant">
+                {{ statusBadge(employee.status).text }}
+              </Badge>
+            </span>
+            <span class="truncate font-mono text-xs text-muted-foreground">
+              {{ employee.key }}
+            </span>
+            <span class="text-xs text-muted-foreground">
+              {{ employee.versions.length }} 个版本
+              <span v-if="employee.definitionId === defaultId"> · 共享默认</span>
+            </span>
+          </button>
+        </CardContent>
+      </Card>
+
+      <!-- 中：详情 -->
+      <Card v-if="selected" class="min-w-0">
+        <CardHeader>
+          <div class="flex flex-wrap items-center gap-2">
+            <Badge :variant="statusBadge(selected.status).variant">
+              {{ statusBadge(selected.status).text }}
+            </Badge>
+            <CardTitle>{{ selected.name }}</CardTitle>
+            <code class="font-mono text-xs text-muted-foreground">{{ selected.key }}</code>
+          </div>
+          <CardAction class="flex gap-2">
+            <Button
               v-if="selected.status === 'active'"
-              class="wf-button"
+              variant="ghost"
+              size="sm"
               :disabled="saving"
               @click="archive"
-            >归档</button>
-            <button
-              class="wf-button"
+            >
+              <Archive class="size-4" />
+              归档
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               :disabled="saving || selected.status !== 'active'"
               @click="createVersion"
-            >新建版本</button>
-          </div>
-        </div>
-        <section class="wf-object-section">
-          <div class="wf-section-heading">
-            <div>
-              <span class="wf-eyebrow">共享工作空间默认</span>
-              <h3>
-                {{ defaultId === selected.definitionId ? '当前默认 AI Employee' : '可设为默认 AI Employee' }}
-              </h3>
-            </div>
-            <select
-              v-model="defaultId"
-              class="wf-select"
-              :disabled="selected.status !== 'active'"
-              @change="changeDefault"
             >
-              <option :value="null">Agent disabled（不设默认）</option>
-              <option
-                v-for="employee in activeEmployees"
-                :key="employee.definitionId"
-                :value="employee.definitionId"
-              >{{ employee.name }}</option>
-            </select>
+              <Plus class="size-4" />
+              新建版本
+            </Button>
+          </CardAction>
+        </CardHeader>
+
+        <!-- 共享默认 -->
+        <CardContent class="space-y-1.5 border-t py-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <Label for="emp-default" class="text-sm font-medium">
+              共享工作空间默认
+            </Label>
+            <Select
+              :model-value="defaultId ?? ''"
+              :disabled="selected.status !== 'active'"
+              @update:model-value="changeDefault(String($event))"
+            >
+              <SelectTrigger id="emp-default" class="w-full sm:w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Agent disabled（不设默认）</SelectItem>
+                <SelectItem
+                  v-for="employee in activeEmployees"
+                  :key="employee.definitionId"
+                  :value="employee.definitionId"
+                >
+                  {{ employee.name }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-          <p class="wf-muted">联系人显式绑定优先于这里的共享默认；关闭 Contact Profile 的 Agent 开关仍然优先禁止创建 Turn。</p>
-        </section>
-        <section class="wf-object-section">
-          <div class="wf-section-heading">
-            <div>
-              <span class="wf-eyebrow">版本</span>
-              <h3>{{ selectedVersion ? versionLabel(selectedVersion) : '未选择版本' }}</h3>
-            </div>
-            <span v-if="publishedVersion" class="wf-status good">线上 {{ versionLabel(publishedVersion) }}</span>
+          <p class="text-sm text-muted-foreground">
+            联系人显式绑定优先于这里的共享默认；关闭 Contact Profile 的 Agent 开关仍然优先禁止创建
+            Turn。
+          </p>
+        </CardContent>
+
+        <!-- 版本 -->
+        <CardContent class="space-y-3 border-t py-4">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <Label class="text-sm font-medium">
+              版本：{{ selectedVersion ? versionLabel(selectedVersion) : "未选择版本" }}
+            </Label>
+            <Badge v-if="publishedVersion" variant="secondary">
+              线上 {{ versionLabel(publishedVersion) }}
+            </Badge>
           </div>
-          <div class="wf-validation-results">
+          <div class="space-y-1">
             <button
               v-for="version in selected.versions"
               :key="version.versionId"
-              class="wf-case-row"
-              :class="{ active: selectedVersionId === version.versionId }"
+              type="button"
+              class="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent"
+              :class="cn(selectedVersionId === version.versionId && 'bg-accent')"
               @click="selectedVersionId = version.versionId"
             >
-              <span class="wf-case-name">{{ versionLabel(version) }}</span>
-              <span
-                class="wf-case-state"
-                :class="version.status === 'published' ? 'good' : version.status === 'draft' ? 'warn' : ''"
-              >{{ version.status === 'published' ? '已发布' : version.status === 'draft' ? '草稿' : '已归档' }}</span>
-              <span class="wf-case-reason">{{ new Date(version.createdAt).toLocaleString() }}</span>
+              <span class="w-12 shrink-0 font-mono text-sm">
+                {{ versionLabel(version) }}
+              </span>
+              <Badge :variant="versionBadge(version.status).variant">
+                {{ versionBadge(version.status).text }}
+              </Badge>
+              <span class="ml-auto text-xs text-muted-foreground">
+                {{ new Date(version.createdAt).toLocaleString() }}
+              </span>
             </button>
           </div>
-        </section>
-        <section v-if="selectedVersion" class="wf-object-section">
-          <div class="wf-section-heading">
-            <div>
-              <span class="wf-eyebrow">Prompt Composition</span>
-              <h3>工作指令</h3>
-            </div>
-            <div class="wf-actions">
-              <button
+        </CardContent>
+
+        <!-- Prompt -->
+        <CardContent v-if="selectedVersion" class="space-y-3 border-t py-4">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <Label class="text-sm font-medium">工作指令（Prompt）</Label>
+            <div class="flex gap-2">
+              <Button
                 v-if="selectedVersion.status === 'draft' && !editing"
-                class="wf-button"
+                variant="outline"
+                size="sm"
                 @click="beginEdit()"
-              >编辑草稿</button>
-              <button
+              >
+                编辑草稿
+              </Button>
+              <Button
                 v-if="selectedVersion.status === 'retired'"
-                class="wf-button"
+                variant="ghost"
+                size="sm"
                 :disabled="saving"
                 @click="rollback"
-              >回滚为线上</button>
-              <button
+              >
+                <RotateCcw class="size-4" />
+                回滚为线上
+              </Button>
+              <Button
                 v-if="selectedVersion.status === 'draft'"
-                class="wf-button primary"
+                size="sm"
                 :disabled="saving"
                 @click="publish"
-              >发布版本</button>
+              >
+                发布版本
+              </Button>
             </div>
           </div>
-          <textarea v-if="editing" v-model="prompt" class="wf-textarea" rows="16" />
-          <pre v-else class="wf-prompt-preview">{{ selectedVersion.prompt }}</pre>
-          <div v-if="editing" class="wf-modal-foot">
-            <button class="wf-button" @click="editing = false">取消</button>
-            <button
-              class="wf-button primary"
-              :disabled="saving || !prompt.trim()"
-              @click="saveDraft"
-            >{{ saving ? '保存中' : '保存草稿' }}</button>
+          <Textarea v-if="editing" v-model="prompt" rows="16" class="font-mono text-xs" />
+          <pre
+            v-else
+            class="max-h-[420px] overflow-auto rounded-md bg-muted p-4 font-mono text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap"
+          >{{ selectedVersion.prompt }}</pre>
+          <div v-if="editing" class="flex justify-end gap-2">
+            <Button variant="outline" size="sm" @click="editing = false">取消</Button>
+            <Button size="sm" :disabled="saving || !prompt.trim()" @click="saveDraft">
+              {{ saving ? "保存中" : "保存草稿" }}
+            </Button>
           </div>
-          <p class="wf-muted">系统安全规则、回复策略和上下文会由 Core 统一组合；这里的文本不能覆盖它们。</p>
-        </section>
-      </main>
-      <div v-else class="wf-empty">
-        <div>
-          <strong>选择一个 AI Employee</strong>
-          <p>左侧选择定义，查看版本和 Prompt。</p>
-        </div>
-      </div>
+          <p class="text-sm text-muted-foreground">
+            系统安全规则、回复策略和上下文会由 Core 统一组合；这里的文本不能覆盖它们。
+          </p>
+        </CardContent>
+      </Card>
 
-      <aside class="wf-bindings-rail">
-        <div class="wf-panel-head">
-          <h2>联系人绑定</h2>
-          <span class="wf-section-caption">{{ contacts.length }} 个联系人</span>
-        </div>
-        <div class="wf-panel-body">
-          <input
-            v-model="search"
-            class="wf-input"
-            placeholder="搜索联系人名称、备注或渠道 ID"
-          />
-        </div>
-        <div v-if="!visibleContacts.length" class="wf-empty">
-          <div>
-            <strong>没有可绑定的联系人</strong>
-            <p>联系人必须先通过 Channel Host 进入 Core。</p>
+      <!-- 中：空态 -->
+      <Card v-else class="flex min-h-72 items-center justify-center">
+        <CardContent class="flex flex-col items-center gap-1 py-10 text-center">
+          <UserRound class="size-8 text-muted-foreground/60" />
+          <p class="text-sm font-medium">选择一个 AI Employee</p>
+          <p class="text-sm text-muted-foreground">左侧选择定义，查看版本和 Prompt。</p>
+        </CardContent>
+      </Card>
+
+      <!-- 右：联系人绑定 -->
+      <Card class="lg:sticky lg:top-6">
+        <CardHeader>
+          <CardTitle class="text-base">联系人绑定</CardTitle>
+          <CardDescription>{{ contacts.length }} 个联系人</CardDescription>
+        </CardHeader>
+        <CardContent class="border-t p-3">
+          <div class="relative">
+            <Search
+              class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              v-model="search"
+              placeholder="搜索联系人名称、备注或渠道 ID"
+              class="pl-8"
+            />
           </div>
-        </div>
-        <div v-else class="wf-binding-list">
+        </CardContent>
+        <CardContent class="max-h-[560px] overflow-auto p-3 pt-0">
           <div
-            v-for="contact in visibleContacts"
-            :key="contact.contactId"
-            class="wf-binding-row"
+            v-if="!visibleContacts.length"
+            class="flex flex-col items-center gap-1 py-10 text-center"
           >
-            <div class="wf-binding-name">
-              <strong>{{ contactLabel(contact) }}</strong>
-              <span class="wf-mono wf-subtle">{{ contact.contactId }}</span>
-            </div>
-            <div class="wf-binding-current">
-              <span
-                v-if="bindingMap.get(contact.contactId)"
-                class="wf-status good"
-              >{{ bindingMap.get(contact.contactId)?.definition.name }}</span>
-              <span v-else class="wf-muted">使用共享默认</span>
-            </div>
-            <select
-              class="wf-select"
-              :disabled="savingBindingContactId === contact.contactId"
-              :value="bindingMap.get(contact.contactId)?.definitionId ?? ''"
-              @change="onBindingChange(contact.contactId, $event)"
-            >
-              <option value="">使用共享默认</option>
-              <option
-                v-for="employee in activeEmployees"
-                :key="employee.definitionId"
-                :value="employee.definitionId"
-              >{{ employee.name }}</option>
-            </select>
+            <p class="text-sm font-medium">没有可绑定的联系人</p>
+            <p class="text-sm text-muted-foreground">
+              联系人必须先通过 Channel Host 进入 Core。
+            </p>
           </div>
-        </div>
-      </aside>
+          <div v-else class="divide-y">
+            <div
+              v-for="contact in visibleContacts"
+              :key="contact.contactId"
+              class="flex flex-col gap-1.5 py-3 first:pt-1 last:pb-1"
+            >
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium">{{ contactLabel(contact) }}</p>
+                <p class="truncate font-mono text-xs text-muted-foreground">
+                  {{ contact.contactId }}
+                </p>
+              </div>
+              <div class="flex items-center gap-2">
+                <Badge
+                  v-if="bindingMap.get(contact.contactId)"
+                  variant="secondary"
+                  class="max-w-28 shrink-0"
+                >
+                  <span class="truncate">
+                    {{ bindingMap.get(contact.contactId)?.definition.name }}
+                  </span>
+                </Badge>
+                <span v-else class="shrink-0 text-xs text-muted-foreground">
+                  使用共享默认
+                </span>
+                <Select
+                  :model-value="bindingMap.get(contact.contactId)?.definitionId ?? ''"
+                  :disabled="savingBindingContactId === contact.contactId"
+                  @update:model-value="changeBinding(contact.contactId, String($event))"
+                >
+                  <SelectTrigger size="sm" class="ml-auto h-8 min-w-0 flex-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">使用共享默认</SelectItem>
+                    <SelectItem
+                      v-for="employee in activeEmployees"
+                      :key="employee.definitionId"
+                      :value="employee.definitionId"
+                    >
+                      {{ employee.name }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
+
+    <Separator class="opacity-0" />
   </div>
 </template>
-
-<style scoped>
-.wf-employee-create { margin-bottom: var(--wf-space-4); }
-.wf-employee-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  object-fit: cover;
-  flex-shrink: 0;
-  background: var(--wf-surface-soft, #eef2f7);
-}
-.wf-prompt-preview {
-  margin: 0;
-  padding: var(--wf-space-3);
-  max-height: 420px;
-  overflow: auto;
-  color: var(--wf-text-secondary);
-  background: var(--wf-surface-soft);
-  white-space: pre-wrap;
-  font: inherit;
-  line-height: 1.7;
-}
-.wf-employee-grid {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 320px;
-  gap: 16px;
-  align-items: start;
-}
-.wf-bindings-rail {
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
-  border-radius: 12px;
-  background: var(--wf-surface, #ffffff);
-  display: flex;
-  flex-direction: column;
-  max-height: 720px;
-  overflow: hidden;
-}
-.wf-binding-list {
-  overflow: auto;
-  padding: 8px 12px 16px;
-}
-.wf-binding-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 4px 12px;
-  align-items: center;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--wf-border, rgba(0, 0, 0, 0.05));
-}
-.wf-binding-row:last-child { border-bottom: 0; }
-.wf-binding-name {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  grid-column: 1;
-  min-width: 0;
-}
-.wf-binding-name strong {
-  font-size: 13px;
-  color: var(--wf-text, #17181a);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wf-binding-current {
-  grid-column: 1;
-  font-size: 12px;
-}
-.wf-binding-row .wf-select {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  min-width: 140px;
-}
-@media (max-width: 1100px) {
-  .wf-employee-grid {
-    grid-template-columns: 1fr;
-  }
-  .wf-bindings-rail { max-height: none; }
-}
-</style>

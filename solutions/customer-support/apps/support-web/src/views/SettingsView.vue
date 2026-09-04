@@ -13,7 +13,17 @@
  * ⑦ 部署：环境只读展示（改 .env 重启生效）
  */
 import { computed, onMounted, ref, watch } from "vue";
-import WfIcon from "../components/WfIcon.vue";
+import {
+  BookOpen,
+  Bot,
+  Radio,
+  Server,
+  Settings2,
+  Shield,
+  SlidersHorizontal,
+  type LucideIcon,
+} from "lucide-vue-next";
+import { cn } from "@/lib/utils";
 import SettingsAiEmployees from "./settings/SettingsAiEmployees.vue";
 import SettingsModels from "./settings/SettingsModels.vue";
 import SettingsKnowledge from "./settings/SettingsKnowledge.vue";
@@ -22,15 +32,15 @@ import SettingsChannel from "./settings/SettingsChannel.vue";
 import SettingsSecurity from "./settings/SettingsSecurity.vue";
 import SettingsDeployment from "./settings/SettingsDeployment.vue";
 
-const SECTIONS = [
-  { key: "aiEmployees", label: "AI员工", icon: "agent" },
-  { key: "models", label: "模型", icon: "engine" },
-  { key: "knowledge", label: "知识库", icon: "knowledge" },
-  { key: "behavior", label: "行为", icon: "verify" },
-  { key: "channel", label: "通道", icon: "runtime" },
-  { key: "security", label: "安全", icon: "users" },
-  { key: "deployment", label: "部署", icon: "settings" },
-] as const;
+const SECTIONS: Array<{ key: string; label: string; icon: LucideIcon }> = [
+  { key: "aiEmployees", label: "AI 员工", icon: Bot },
+  { key: "models", label: "模型", icon: Settings2 },
+  { key: "knowledge", label: "知识库", icon: BookOpen },
+  { key: "behavior", label: "行为", icon: SlidersHorizontal },
+  { key: "channel", label: "通道", icon: Radio },
+  { key: "security", label: "安全", icon: Shield },
+  { key: "deployment", label: "部署", icon: Server },
+];
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
 
@@ -72,87 +82,48 @@ function select(key: SectionKey) {
 </script>
 
 <template>
-  <div class="wf-page wf-settings-center">
-    <header class="wf-page-head">
-      <div>
-        <h1>设置中心</h1>
-        <p>七分区集中管理：AI员工 / 模型 / 知识库 / 行为 / 通道 / 安全 / 部署。改动即时生效，无需重启。</p>
-      </div>
+  <div class="mx-auto w-full max-w-5xl p-6">
+    <header class="mb-6">
+      <h1 class="text-2xl font-semibold tracking-tight">设置中心</h1>
+      <p class="mt-1 text-sm text-muted-foreground">
+        AI 员工 / 模型 / 知识库 / 行为 / 通道 / 安全 / 部署。改动即时生效，无需重启。
+      </p>
     </header>
-    <div class="wf-settings-layout">
-      <nav class="wf-settings-nav" aria-label="设置分区">
+
+    <div class="grid gap-6 lg:grid-cols-[180px_minmax(0,1fr)] lg:items-start">
+      <nav aria-label="设置分区" class="flex gap-1 overflow-x-auto lg:sticky lg:top-6 lg:flex-col lg:overflow-visible">
         <button
           v-for="section in SECTIONS"
           :key="section.key"
-          class="wf-settings-nav-item"
-          :class="{ active: active === section.key }"
+          type="button"
+          class="inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+          :class="cn(active === section.key && 'bg-accent font-medium text-accent-foreground')"
           @click="select(section.key)"
         >
-          <WfIcon :name="section.icon" />
+          <component :is="section.icon" class="size-4 text-muted-foreground" />
           <span>{{ section.label }}</span>
         </button>
       </nav>
-      <section class="wf-settings-panel">
+
+      <div class="min-w-0">
         <component :is="activeComponent" />
-      </section>
+      </div>
     </div>
   </div>
 </template>
 
-<style scoped>
-.wf-settings-center {
-  max-width: 1200px;
+<style>
+/*
+ * 兼容垫片（第 6 批删除 console-shared.css 时一并移除）：legacy 样式表中
+ * 未分层的 `button { color: inherit }` 优先于 @layer utilities 的工具类，
+ * 导致 text-primary-foreground / text-secondary-foreground 在 button 元素上
+ * 失效（default 按钮黑底配深字、暗色对比异常）。此处把关键前景色工具类
+ * 提升到无层上下文恢复语义色。
+ */
+button[data-slot="button"].text-primary-foreground {
+  color: var(--primary-foreground);
 }
-.wf-settings-layout {
-  display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-.wf-settings-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
-  border-radius: 12px;
-  background: var(--wf-surface, #fff);
-  padding: 8px;
-  position: sticky;
-  top: 16px;
-}
-.wf-settings-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: none;
-  background: transparent;
-  border-radius: 8px;
-  padding: 8px 12px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--wf-text, #17181a);
-  cursor: pointer;
-  text-align: left;
-}
-.wf-settings-nav-item:hover {
-  background: var(--wf-surface-hover, rgba(0, 0, 0, 0.04));
-}
-.wf-settings-nav-item.active {
-  background: var(--wf-primary-soft, rgba(37, 99, 235, 0.1));
-  color: var(--wf-primary, #2563eb);
-  font-weight: 600;
-}
-.wf-settings-panel {
-  min-width: 0;
-}
-@media (max-width: 860px) {
-  .wf-settings-layout {
-    grid-template-columns: 1fr;
-  }
-  .wf-settings-nav {
-    position: static;
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
+button[data-slot="button"].text-secondary-foreground {
+  color: var(--secondary-foreground);
 }
 </style>

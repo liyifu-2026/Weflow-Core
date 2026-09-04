@@ -12,31 +12,17 @@ void auth.ensureSession();
 </script>
 
 <template>
-  <div class="wf-page wf-page-wide wf-admin-page">
-    <header class="wf-page-head">
-      <div>
-        <h1>管理</h1>
-        <p>白名单集中在此管理；系统开关、模型、群策略请前往「设置中心」。</p>
-      </div>
-    </header>
-
-    <div class="wf-admin-body">
+  <div class="flex h-full min-h-0 flex-col">
+    <div class="mx-auto w-full max-w-5xl shrink-0 p-6 pb-0">
+      <header>
+        <h1 class="text-2xl font-semibold tracking-tight">管理</h1>
+        <p class="mt-1 text-sm text-muted-foreground">
+          白名单集中在此管理；系统开关、模型、群策略请前往「设置中心」。
+        </p>
+      </header>
+    </div>
+    <div class="min-h-0 flex-1">
       <WhitelistTab />
     </div>
   </div>
 </template>
-
-<style scoped>
-.wf-admin-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.wf-admin-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-</style>

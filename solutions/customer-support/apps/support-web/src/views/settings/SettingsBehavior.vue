@@ -4,6 +4,18 @@
  * + Kill Switch 瞬时暂停。对接 Core GET/PATCH /api/v1/admin/runtime-settings。
  */
 import { onMounted, ref } from "vue";
+import { CircleAlert, CircleCheck } from "lucide-vue-next";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import { api } from "../../api";
 
 type RuntimeSettings = {
@@ -100,47 +112,55 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="wf-section">
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>全局运行开关</strong>
-        <span v-if="notice" class="wf-settings-notice">{{ notice }}</span>
-        <span v-if="error" class="wf-settings-error">{{ error }}</span>
-      </div>
-      <div v-if="loading && !settings" class="wf-settings-body">
-        <span class="wf-skeleton">正在加载运行开关…</span>
-      </div>
-      <div v-else-if="settings" class="wf-settings-body">
-        <div v-for="row in SWITCH_ROWS" :key="row.key" class="wf-form-row">
-          <label>
-            <strong>{{ row.label }}</strong>
-            <span>{{ row.desc }}</span>
-          </label>
-          <label class="wf-switch">
-            <input
-              type="checkbox"
+  <div class="space-y-6">
+    <Card>
+      <CardHeader>
+        <CardTitle>全局运行开关</CardTitle>
+        <CardDescription>改动即时生效，无需重启。</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div v-if="loading && !settings" class="space-y-4">
+          <Skeleton v-for="n in 4" :key="n" class="h-9 w-full" />
+        </div>
+        <Alert v-else-if="error" variant="destructive" class="mb-4">
+          <CircleAlert class="size-4" />
+          <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+        <div v-else-if="settings" class="space-y-5">
+          <div
+            v-for="row in SWITCH_ROWS"
+            :key="row.key"
+            class="flex items-start justify-between gap-6"
+          >
+            <div class="space-y-0.5">
+              <Label :for="`switch-${row.key}`">{{ row.label }}</Label>
+              <p class="text-sm text-muted-foreground">{{ row.desc }}</p>
+            </div>
+            <Switch
+              :id="`switch-${row.key}`"
               :checked="Boolean(settings[row.key])"
               :disabled="saving"
-              @change="patch(row.key)"
+              @update:checked="patch(row.key)"
             />
-            <span class="wf-switch-slider" />
-          </label>
+          </div>
+          <p
+            v-if="notice && !error"
+            class="flex items-center gap-2 text-sm text-muted-foreground"
+          >
+            <CircleCheck class="size-4" />
+            {{ notice }}
+          </p>
         </div>
-      </div>
-    </section>
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>消息同步</strong>
-      </div>
-      <div class="wf-settings-body">
-        <p class="wf-settings-hint">
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle>消息同步</CardTitle>
+        <CardDescription>
           微信历史消息回溯已迁移至系统状态页维护；此处仅保留运行时开关。
-        </p>
-      </div>
-    </section>
+        </CardDescription>
+      </CardHeader>
+    </Card>
   </div>
 </template>
-
-<style scoped>
-@import "./settings-shared.css";
-</style>

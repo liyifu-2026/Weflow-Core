@@ -5,6 +5,17 @@
  * DATABASE_URL / REDIS_URL / 端口等基础设施来自 .env，标注「改 .env 重启生效」。
  */
 import { onMounted, ref } from "vue";
+import { RefreshCw } from "lucide-vue-next";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "../../api";
 
 type ServiceStatus = {
@@ -45,61 +56,73 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="wf-section">
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>服务探活（只读）</strong>
-        <span class="spacer" />
-        <button class="wf-button compact" @click="load">刷新</button>
-        <span v-if="error" class="wf-settings-error">{{ error }}</span>
-      </div>
-      <div v-if="loading" class="wf-settings-body">
-        <span class="wf-skeleton">正在读取部署状态…</span>
-      </div>
-      <div v-else-if="status" class="wf-settings-body">
-        <div v-for="service in status.services" :key="service.key" class="wf-settings-kv">
-          <span class="k">{{ service.name }}</span>
-          <span class="v">
-            {{ service.configuration.summary }} · {{ service.health.summary }}
-          </span>
+  <div class="space-y-6">
+    <!-- 服务探活 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>服务探活（只读）</CardTitle>
+        <CardAction>
+          <Button variant="outline" size="sm" :disabled="loading" @click="load">
+            <RefreshCw class="size-4" :class="loading && 'animate-spin'" />
+            刷新
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <div v-if="loading" class="space-y-4">
+          <Skeleton v-for="n in 4" :key="n" class="h-9 w-full" />
         </div>
-      </div>
-    </section>
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>基础设施（.env，只读）</strong>
-      </div>
-      <div class="wf-settings-body">
-        <div v-for="env in ENV_KEYS" :key="env.key" class="wf-settings-kv">
-          <span class="k">{{ env.label }}</span>
-          <span class="v mono">{{ env.key }}</span>
+        <Alert v-else-if="error" variant="destructive">
+          <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+        <div v-else-if="status" class="space-y-4">
+          <div
+            v-for="service in status.services"
+            :key="service.key"
+            class="flex flex-col gap-0.5 border-b pb-4 last:border-b-0 last:pb-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-6"
+          >
+            <span class="shrink-0 text-sm font-medium">{{ service.name }}</span>
+            <span class="text-sm text-muted-foreground">
+              {{ service.configuration.summary }} · {{ service.health.summary }}
+            </span>
+          </div>
         </div>
-        <p class="wf-settings-hint">
-          基础设施连接与端口来自部署环境的 <code>.env</code> 文件。<strong>修改 .env
-          后需要重启服务（weflowctl dev down && dev up）才生效</strong>；运行时可调项
-          （模型 / 开关 / 行为参数 / 群策略）请使用对应分区，保存即时生效，无需重启。
-        </p>
-      </div>
-    </section>
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>部署形态</strong>
-      </div>
-      <div class="wf-settings-body">
-        <p class="wf-settings-hint">
+      </CardContent>
+    </Card>
+
+    <!-- 基础设施 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>基础设施（.env，只读）</CardTitle>
+        <CardDescription>
+          修改 .env 后需要重启服务（weflowctl dev down &amp;&amp; dev up）才生效；
+          运行时可调项（模型 / 开关 / 行为参数 / 群策略）在对应分区保存即时生效。
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div class="space-y-4">
+          <div
+            v-for="env in ENV_KEYS"
+            :key="env.key"
+            class="flex flex-col gap-0.5 border-b pb-4 last:border-b-0 last:pb-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-6"
+          >
+            <span class="shrink-0 text-sm font-medium">{{ env.label }}</span>
+            <code class="font-mono text-xs text-muted-foreground">{{ env.key }}</code>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+
+    <!-- 部署形态 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>部署形态</CardTitle>
+        <CardDescription>
           Weflow 是单进程部署、配置集中、可高效热更新的 AI 客服产品：Core API、
           Agent Worker、Ingestion Worker 与 Channel Host 同机部署，配置以设置中心为准，
           .env 仅承担首次部署种子与基础设施连接。Windows 桌面端封装在后续阶段交付。
-        </p>
-      </div>
-    </section>
+        </CardDescription>
+      </CardHeader>
+    </Card>
   </div>
 </template>
-
-<style scoped>
-@import "./settings-shared.css";
-.mono {
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-}
-</style>

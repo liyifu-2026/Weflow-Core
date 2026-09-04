@@ -5,6 +5,28 @@
  */
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { CircleAlert, CircleCheck, Plus, Trash2 } from "lucide-vue-next";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import {
   readPipelineSettings,
   writePipelineSettings,
@@ -54,6 +76,15 @@ const GROUP_MODE_OPTIONS: Array<{
   { value: "accept_all", label: "全部响应", hint: "易刷屏，需配合概率/冷却" },
   { value: "off", label: "关闭（全群静默）", hint: "所有群不响应" },
 ];
+
+const ENTRY_LINKS: Array<{ label: string; desc: string; to: string }> = [
+  { label: "联系人白名单", desc: "逐联系人启用/停用 AI", to: "/whitelist" },
+  { label: "审计日志", desc: "设置变更 / Handoff / 运营操作", to: "/system/audit" },
+  { label: "用户与角色", desc: "账号与权限管理", to: "/system/users" },
+];
+
+const modeLabel = (value: GroupChatMode) =>
+  GROUP_MODE_OPTIONS.find((option) => option.value === value)?.label ?? value;
 
 const config = ref<GroupChatConfig>(JSON.parse(JSON.stringify(DEFAULT_GROUP_CHAT)));
 const rawSettings = ref<Record<string, unknown>>({});
@@ -168,197 +199,215 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="wf-section">
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>入口</strong>
-      </div>
-      <div class="wf-settings-body wf-entry-row">
-        <button class="wf-button" @click="router.push('/whitelist')">
-          联系人白名单（逐联系人启用/停用 AI）
-        </button>
-        <button class="wf-button" @click="router.push('/system/audit')">
-          审计日志（设置变更 / Handoff / 运营操作）
-        </button>
-        <button class="wf-button" @click="router.push('/system/users')">
-          用户与角色
-        </button>
-      </div>
-    </section>
+  <div class="space-y-6">
+    <!-- 入口 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>入口</CardTitle>
+      </CardHeader>
+      <CardContent class="flex flex-wrap gap-2">
+        <Button
+          v-for="link in ENTRY_LINKS"
+          :key="link.to"
+          variant="outline"
+          @click="router.push(link.to)"
+        >
+          {{ link.label }}
+          <span class="text-muted-foreground">{{ link.desc }}</span>
+        </Button>
+      </CardContent>
+    </Card>
 
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>群聊策略</strong>
-        <span class="spacer" />
-        <span v-if="notice" class="wf-settings-notice">{{ notice }}</span>
-        <span v-if="error" class="wf-settings-error">{{ error }}</span>
-      </div>
-      <div v-if="loading" class="wf-settings-body">
-        <span class="wf-skeleton">正在加载群策略…</span>
-      </div>
-      <div v-else class="wf-settings-body">
-        <p class="wf-settings-hint">
+    <!-- 群聊策略 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>群聊策略</CardTitle>
+        <CardDescription>
           群聊回复自动简洁（2-3 句）、不含私人信息——系统强制。群聊判定发生在建
           Turn 之前：未命中触发条件的群消息不消耗任何模型调用。判定异常自动回落「仅@」。
-        </p>
-        <div class="wf-form-row">
-          <label>
-            <strong>触发模式（何时在群里开口）</strong>
-          </label>
-          <select v-model="config.mode" class="wf-input">
-            <option v-for="option in GROUP_MODE_OPTIONS" :key="option.value" :value="option.value">
-              {{ option.label }}（{{ option.hint }}）
-            </option>
-          </select>
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div v-if="loading" class="space-y-4">
+          <Skeleton v-for="n in 5" :key="n" class="h-9 w-full" />
         </div>
-        <div v-if="config.mode === 'mention_or_keyword'" class="wf-form-row">
-          <label>
-            <strong>响应关键词</strong>
-            <span>逗号分隔，命中即回复；请控制数量。</span>
-          </label>
-          <textarea
-            :value="config.keywords.join('，')"
-            rows="2"
-            class="wf-input"
-            placeholder="报价，售后…"
-            @input="config.keywords = (($event.target as HTMLTextAreaElement).value ?? '').split(/[，,]/).map((w) => w.trim()).filter(Boolean)"
-          />
-        </div>
-        <template v-if="config.mode === 'accept_all'">
-          <div class="wf-form-row">
-            <label>
-              <strong>响应概率：{{ Math.round(config.probability * 100) }}%</strong>
-              <span>每条群消息有此概率回复。</span>
-            </label>
+        <form v-else class="space-y-5" @submit.prevent="save">
+          <Alert v-if="error" variant="destructive">
+            <CircleAlert class="size-4" />
+            <AlertDescription>{{ error }}</AlertDescription>
+          </Alert>
+          <p
+            v-if="notice && !error"
+            class="flex items-center gap-2 text-sm text-muted-foreground"
+          >
+            <CircleCheck class="size-4" />
+            {{ notice }}
+          </p>
+
+          <div class="space-y-2">
+            <Label for="group-mode">触发模式（何时在群里开口）</Label>
+            <Select v-model="config.mode">
+              <SelectTrigger id="group-mode" class="w-full sm:max-w-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  v-for="option in GROUP_MODE_OPTIONS"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}（{{ option.hint }}）
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div v-if="config.mode === 'mention_or_keyword'" class="space-y-2">
+            <Label for="group-keywords">响应关键词</Label>
+            <Textarea
+              id="group-keywords"
+              :value="config.keywords.join('，')"
+              rows="2"
+              placeholder="报价，售后…"
+              @input="
+                config.keywords = (($event.target as HTMLTextAreaElement).value ?? '')
+                  .split(/[，,]/)
+                  .map((w) => w.trim())
+                  .filter(Boolean)
+              "
+            />
+            <p class="text-xs text-muted-foreground">
+              逗号分隔，命中即回复；请控制数量。
+            </p>
+          </div>
+
+          <div v-if="config.mode === 'accept_all'" class="space-y-2">
+            <Label for="group-probability">
+              响应概率：{{ Math.round(config.probability * 100) }}%
+            </Label>
             <input
+              id="group-probability"
               v-model.number="config.probability"
               type="range"
               min="0"
               max="100"
               step="5"
-              style="width: 100%"
+              class="w-full accent-[var(--primary)]"
             />
+            <p class="text-xs text-muted-foreground">每条群消息有此概率回复。</p>
           </div>
-        </template>
-        <template v-if="config.mode !== 'off'">
-          <div class="wf-form-row">
-            <label>
-              <strong>冷却护栏</strong>
-              <span>窗口设为 0 = 关闭冷却，防刷屏。</span>
-            </label>
-            <div class="wf-cooldown">
-              <input
+
+          <div v-if="config.mode !== 'off'" class="space-y-2">
+            <Label>冷却护栏</Label>
+            <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <Input
                 v-model.number="config.cooldownMinutes"
                 type="number"
                 min="0"
                 max="240"
-                class="wf-input wf-input-narrow"
+                class="w-20"
               />
               <span>分钟内最多</span>
-              <input
+              <Input
                 v-model.number="config.maxRepliesPerCooldown"
                 type="number"
                 min="1"
                 max="100"
-                class="wf-input wf-input-narrow"
+                class="w-20"
               />
               <span>条</span>
             </div>
+            <p class="text-xs text-muted-foreground">窗口设为 0 = 关闭冷却，防刷屏。</p>
           </div>
-        </template>
-        <div class="wf-form-row">
-          <label>
-            <strong>群聊附加指令</strong>
-            <span>追加到群聊提示词，可留空。</span>
-          </label>
-          <textarea
-            v-model="config.extraInstruction"
-            rows="2"
-            class="wf-input"
-            placeholder="例：本群是售后群，报价问题一律转人工"
-          />
-        </div>
-        <div class="wf-form-row">
-          <label>
-            <strong>群单独配置</strong>
-            <span>格式：群 conversationRef + 模式；覆盖全局策略。</span>
-          </label>
-          <div class="wf-override-list">
-            <div
-              v-for="(override, index) in config.groupOverrides"
-              :key="override.conversationRef + String(index)"
-              class="wf-override-row"
-            >
-              <input
-                v-model="override.conversationRef"
-                class="wf-input"
-                placeholder="12345678@chatroom"
-              />
-              <select v-model="override.mode" class="wf-input">
-                <option v-for="option in GROUP_MODE_OPTIONS" :key="option.value" :value="option.value">
-                  {{ option.label }}
-                </option>
-              </select>
-              <button
-                class="wf-button compact danger"
-                @click="config.groupOverrides.splice(index, 1)"
+
+          <div class="space-y-2">
+            <Label for="group-extra">群聊附加指令</Label>
+            <Textarea
+              id="group-extra"
+              v-model="config.extraInstruction"
+              rows="2"
+              placeholder="例：本群是售后群，报价问题一律转人工"
+            />
+            <p class="text-xs text-muted-foreground">追加到群聊提示词，可留空。</p>
+          </div>
+
+          <div class="space-y-2">
+            <Label>群单独配置</Label>
+            <p class="text-xs text-muted-foreground">
+              格式：群 conversationRef + 模式；覆盖全局策略。
+            </p>
+            <div class="space-y-3">
+              <div
+                v-for="(override, index) in config.groupOverrides"
+                :key="override.conversationRef + String(index)"
+                class="grid gap-2 rounded-md border p-3 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_auto]"
               >
-                删除
-              </button>
-              <input
-                v-if="override.mode === 'mention_or_keyword'"
-                class="wf-input wf-override-keywords"
-                placeholder="该群关键词，逗号分隔"
-                :value="override.keywords.join('，')"
-                @input="override.keywords = (($event.target as HTMLInputElement).value ?? '').split(/[，,]/).map((w) => w.trim()).filter(Boolean)"
-              />
+                <Input
+                  v-model="override.conversationRef"
+                  placeholder="12345678@chatroom"
+                />
+                <Select v-model="override.mode">
+                  <SelectTrigger class="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem
+                      v-for="option in GROUP_MODE_OPTIONS"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ modeLabel(option.value) }}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  class="text-destructive hover:text-destructive"
+                  title="删除该群覆盖"
+                  @click="config.groupOverrides.splice(index, 1)"
+                >
+                  <Trash2 class="size-4" />
+                </Button>
+                <Input
+                  v-if="override.mode === 'mention_or_keyword'"
+                  class="sm:col-span-3"
+                  placeholder="该群关键词，逗号分隔"
+                  :value="override.keywords.join('，')"
+                  @input="
+                    override.keywords = (($event.target as HTMLInputElement).value ?? '')
+                      .split(/[，,]/)
+                      .map((w) => w.trim())
+                      .filter(Boolean)
+                  "
+                />
+              </div>
             </div>
-            <button
-              class="wf-button compact"
-              @click="config.groupOverrides.push({ conversationRef: '', mode: 'mention_or_keyword', keywords: [] })"
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              @click="
+                config.groupOverrides.push({
+                  conversationRef: '',
+                  mode: 'mention_or_keyword',
+                  keywords: [],
+                })
+              "
             >
-              + 添加群覆盖
-            </button>
+              <Plus class="size-4" />
+              添加群覆盖
+            </Button>
           </div>
-        </div>
-        <div class="wf-form-actions">
-          <button class="wf-button primary" :disabled="saving" @click="save">
-            {{ saving ? "保存中…" : "保存群策略" }}
-          </button>
-        </div>
-      </div>
-    </section>
+
+          <div>
+            <Button type="submit" :disabled="saving">
+              {{ saving ? "保存中…" : "保存群策略" }}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   </div>
 </template>
-
-<style scoped>
-@import "./settings-shared.css";
-.wf-entry-row {
-  flex-direction: row;
-  flex-wrap: wrap;
-}
-.wf-cooldown {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--wf-text-secondary, #5f6368);
-}
-.wf-cooldown .wf-input-narrow {
-  width: 72px;
-}
-.wf-override-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.wf-override-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
-  gap: 6px;
-  align-items: center;
-}
-.wf-override-keywords {
-  grid-column: 1 / -1;
-}
-</style>

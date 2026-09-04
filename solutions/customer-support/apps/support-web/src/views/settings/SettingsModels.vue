@@ -6,6 +6,35 @@
  */
 import { onMounted, ref } from "vue";
 import { api } from "../../api";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  CircleAlert,
+  CircleCheck,
+  CircleX,
+  Plus,
+} from "lucide-vue-next";
 
 type ModelEntry = {
   modelId: string;
@@ -193,14 +222,13 @@ async function removeModel(model: ModelEntry) {
   }
 }
 
-async function bindSlot(slot: string, event: Event) {
-  const target = event.target as HTMLSelectElement;
+async function bindSlot(slot: string, modelId: string) {
   saving.value = true;
   error.value = "";
   try {
     await api(`/api/v1/admin/model-gateway/slots/${encodeURIComponent(slot)}`, {
       method: "PUT",
-      body: JSON.stringify({ modelId: target.value || null }),
+      body: JSON.stringify({ modelId: modelId || null }),
     });
     notice.value = "槽位已更新；约 15 秒内生效";
     await load();
@@ -215,255 +243,338 @@ function healthOf(modelId: string): ModelHealth | undefined {
   return data.value?.health.find((h) => h.modelId === modelId);
 }
 
-function healthLabel(modelId: string): { text: string; cls: string } {
+type HealthTone = "secondary" | "destructive" | "outline";
+function healthBadge(modelId: string): { text: string; tone: HealthTone } {
   const health = healthOf(modelId);
   if (!health || health.lastSuccess === null)
-    return { text: "未探测", cls: "" };
+    return { text: "未探测", tone: "outline" };
   return health.lastSuccess
-    ? { text: "正常", cls: "good" }
-    : { text: "异常", cls: "bad" };
+    ? { text: "正常", tone: "secondary" }
+    : { text: "异常", tone: "destructive" };
 }
 
 onMounted(load);
 </script>
 
 <template>
-  <div class="wf-section">
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>模型槽位</strong>
-        <span class="spacer" />
-        <span v-if="notice" class="wf-settings-notice">{{ notice }}</span>
-        <span v-if="error" class="wf-settings-error">{{ error }}</span>
-      </div>
-      <div v-if="loading" class="wf-settings-body">
-        <span class="wf-skeleton">正在加载模型网关…</span>
-      </div>
-      <div v-else-if="data" class="wf-settings-body">
-        <p class="wf-settings-hint">
-          槽位决定各业务环节用哪个模型。绑定后从注册表取端点与密钥；未绑定的槽位回落 .env 首次种子配置。
-        </p>
-        <div v-for="slot in SLOTS" :key="slot.key" class="wf-form-row">
-          <label>
-            <strong>{{ slot.label }}</strong>
-            <span>{{ slot.desc }}</span>
-          </label>
-          <select
-            class="wf-input"
-            :value="data.slots[slot.key] ?? ''"
-            :disabled="saving"
-            @change="bindSlot(slot.key, $event)"
+  <div class="space-y-6">
+    <!-- 模型槽位 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>模型槽位</CardTitle>
+        <CardDescription>
+          槽位决定各业务环节用哪个模型。绑定后从注册表取端点与密钥；未绑定的槽位回落
+          .env 首次种子配置。
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div v-if="loading" class="space-y-4">
+          <Skeleton v-for="n in 3" :key="n" class="h-9 w-full" />
+        </div>
+        <Alert v-else-if="error" variant="destructive">
+          <CircleAlert class="size-4" />
+          <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+        <div v-else-if="data" class="space-y-4">
+          <div
+            v-for="slot in SLOTS"
+            :key="slot.key"
+            class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-center"
           >
-            <option value="">未绑定（回落 .env 种子）</option>
-            <option
-              v-for="model in data.models.filter((m) => m.enabled)"
-              :key="model.modelId"
-              :value="model.modelId"
+            <div class="space-y-0.5">
+              <p class="text-sm font-medium leading-none">{{ slot.label }}</p>
+              <p class="text-sm text-muted-foreground">{{ slot.desc }}</p>
+            </div>
+            <Select
+              :model-value="data.slots[slot.key] ?? ''"
+              :disabled="saving"
+              @update:model-value="bindSlot(slot.key, String($event))"
             >
-              {{ model.displayName }}（{{ model.modelId }}）
-            </option>
-          </select>
-        </div>
-      </div>
-    </section>
-
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>模型注册表</strong>
-        <span class="spacer" />
-        <button class="wf-button compact" @click="creating = !creating">
-          {{ creating ? "取消新建" : "+ 新建模型" }}
-        </button>
-      </div>
-      <div v-if="creating" class="wf-settings-body wf-new-model">
-        <div class="wf-form-row">
-          <label><strong>模型 ID</strong><span>唯一标识（如 deepseek-v4-flash）</span></label>
-          <input v-model="newModel.modelId" class="wf-input" placeholder="model-id" />
-        </div>
-        <div class="wf-form-row">
-          <label><strong>模型名</strong><span>请求上游时使用的模型名</span></label>
-          <input v-model="newModel.displayName" class="wf-input" placeholder="deepseek-v4-flash" />
-        </div>
-        <div class="wf-form-row">
-          <label><strong>端点 Base URL</strong></label>
-          <input v-model="newModel.baseUrl" class="wf-input" placeholder="https://api.example.com/v1" />
-        </div>
-        <div class="wf-form-row">
-          <label><strong>API Key</strong></label>
-          <input v-model="newModel.apiKey" type="password" class="wf-input" placeholder="sk-…" />
-        </div>
-        <div class="wf-form-row">
-          <label><strong>能力标签</strong></label>
-          <div class="wf-cap-row">
-            <label v-for="cap in CAPABILITIES" :key="cap" class="wf-cap">
-              <input
-                type="checkbox"
-                :checked="newModel.capabilities.includes(cap)"
-                @change="
-                  ($event.target as HTMLInputElement).checked
-                    ? newModel.capabilities.push(cap)
-                    : (newModel.capabilities = newModel.capabilities.filter((c) => c !== cap))
-                "
-              />
-              {{ CAPABILITY_LABELS[cap] }}
-            </label>
-          </div>
-        </div>
-        <div class="wf-form-row">
-          <label><strong>故障转移 →</strong><span>主模型失败/超时自动切到该模型</span></label>
-          <select v-model="newModel.failoverTo" class="wf-input" :disabled="!data">
-            <option :value="null">无</option>
-            <option v-for="model in data?.models ?? []" :key="model.modelId" :value="model.modelId">
-              {{ model.displayName }}
-            </option>
-          </select>
-        </div>
-        <div class="wf-form-actions">
-          <button class="wf-button primary" :disabled="saving || !newModel.modelId.trim() || !newModel.baseUrl.trim()" @click="createModel">
-            {{ saving ? "创建中…" : "创建模型" }}
-          </button>
-        </div>
-      </div>
-      <div v-if="data && data.models.length" class="wf-settings-body">
-        <div v-for="model in data.models" :key="model.modelId" class="wf-model-item">
-          <div class="wf-model-line">
-            <span class="wf-status" :class="healthLabel(model.modelId).cls">
-              {{ healthLabel(model.modelId).text }}
-            </span>
-            <strong>{{ model.displayName }}</strong>
-            <code class="wf-mono">{{ model.modelId }}</code>
-            <span v-if="!model.enabled" class="wf-status warn">已禁用</span>
-            <span class="spacer" />
-            <button v-if="!editing[model.modelId]" class="wf-button compact" @click="startEdit(model)">编辑</button>
-            <button class="wf-button compact danger" :disabled="saving" @click="removeModel(model)">删除</button>
-          </div>
-          <div v-if="!editing[model.modelId]" class="wf-model-meta">
-            <span>{{ model.baseUrl }}</span>
-            <span>{{ model.capabilities.map((c) => CAPABILITY_LABELS[c] ?? c).join(" / ") || "无标签" }}</span>
-            <span v-if="model.failoverTo">故障转移 → {{ model.failoverTo }}</span>
-            <span>超时 {{ Math.round(model.timeoutMs / 1000) }}s</span>
-            <span>{{ model.hasApiKey ? "密钥已配置" : "无密钥" }}</span>
-          </div>
-          <div v-else class="wf-settings-body wf-edit-form">
-            <div class="wf-form-row">
-              <label><strong>模型名</strong></label>
-              <input v-model="editing[model.modelId]!.displayName" class="wf-input" />
-            </div>
-            <div class="wf-form-row">
-              <label><strong>端点 Base URL</strong></label>
-              <input v-model="editing[model.modelId]!.baseUrl" class="wf-input" />
-            </div>
-            <div class="wf-form-row">
-              <label><strong>API Key</strong><span>{{ model.hasApiKey ? "留空保持不变" : "未配置" }}</span></label>
-              <input v-model="editing[model.modelId]!.apiKey" type="password" class="wf-input" placeholder="留空保持不变" />
-            </div>
-            <div class="wf-form-row">
-              <label><strong>能力标签</strong></label>
-              <div class="wf-cap-row">
-                <label v-for="cap in CAPABILITIES" :key="cap" class="wf-cap">
-                  <input
-                    type="checkbox"
-                    :checked="(editing[model.modelId]!.capabilities ?? []).includes(cap)"
-                    @change="
-                      ($event.target as HTMLInputElement).checked
-                        ? editing[model.modelId]!.capabilities?.push(cap)
-                        : (editing[model.modelId]!.capabilities = (editing[model.modelId]!.capabilities ?? []).filter((c) => c !== cap))
-                    "
-                  />
-                  {{ CAPABILITY_LABELS[cap] }}
-                </label>
-              </div>
-            </div>
-            <div class="wf-form-row">
-              <label><strong>故障转移 →</strong></label>
-              <select v-model="editing[model.modelId]!.failoverTo" class="wf-input">
-                <option :value="null">无</option>
-                <option
-                  v-for="other in data!.models.filter((m) => m.modelId !== model.modelId)"
-                  :key="other.modelId"
-                  :value="other.modelId"
+              <SelectTrigger class="w-full">
+                <SelectValue placeholder="选择模型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">未绑定（回落 .env 种子）</SelectItem>
+                <SelectItem
+                  v-for="model in data.models.filter((m) => m.enabled)"
+                  :key="model.modelId"
+                  :value="model.modelId"
                 >
-                  {{ other.displayName }}
-                </option>
-              </select>
-            </div>
-            <div class="wf-form-row">
-              <label><strong>启用</strong></label>
-              <label class="wf-switch">
-                <input v-model="editing[model.modelId]!.enabled" type="checkbox" />
-                <span class="wf-switch-slider" />
+                  {{ model.displayName }}（{{ model.modelId }}）
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+
+    <!-- 模型注册表 -->
+    <Card>
+      <CardHeader>
+        <CardTitle>模型注册表</CardTitle>
+        <CardDescription>
+          统一维护端点与密钥；保存后约 15 秒内热生效，无需重启。
+        </CardDescription>
+        <CardAction>
+          <Button
+            :variant="creating ? 'outline' : 'default'"
+            size="sm"
+            @click="creating = !creating"
+          >
+            <Plus class="size-4" />
+            {{ creating ? "取消新建" : "新建模型" }}
+          </Button>
+        </CardAction>
+      </CardHeader>
+
+      <!-- 新建表单 -->
+      <CardContent v-if="creating" class="border-t pt-6">
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div class="space-y-2">
+            <Label for="new-model-id">模型 ID</Label>
+            <Input id="new-model-id" v-model="newModel.modelId" placeholder="model-id" />
+            <p class="text-xs text-muted-foreground">唯一标识（如 deepseek-v4-flash）</p>
+          </div>
+          <div class="space-y-2">
+            <Label for="new-model-name">模型名</Label>
+            <Input
+              id="new-model-name"
+              v-model="newModel.displayName"
+              placeholder="deepseek-v4-flash"
+            />
+            <p class="text-xs text-muted-foreground">请求上游时使用的模型名</p>
+          </div>
+          <div class="space-y-2 sm:col-span-2">
+            <Label for="new-model-url">端点 Base URL</Label>
+            <Input
+              id="new-model-url"
+              v-model="newModel.baseUrl"
+              placeholder="https://api.example.com/v1"
+            />
+          </div>
+          <div class="space-y-2 sm:col-span-2">
+            <Label for="new-model-key">API Key</Label>
+            <Input
+              id="new-model-key"
+              v-model="newModel.apiKey"
+              type="password"
+              placeholder="sk-…"
+            />
+          </div>
+          <div class="space-y-2">
+            <Label>能力标签</Label>
+            <div class="flex gap-4">
+              <label
+                v-for="cap in CAPABILITIES"
+                :key="cap"
+                class="flex items-center gap-2 text-sm"
+              >
+                <Checkbox
+                  :checked="newModel.capabilities.includes(cap)"
+                  @update:checked="
+                    (checked: boolean | 'indeterminate') =>
+                      (newModel.capabilities = checked
+                        ? [...newModel.capabilities, cap]
+                        : newModel.capabilities.filter((c) => c !== cap))
+                  "
+                />
+                {{ CAPABILITY_LABELS[cap] }}
               </label>
             </div>
-            <div class="wf-form-actions">
-              <button class="wf-button" @click="cancelEdit(model.modelId)">取消</button>
-              <button class="wf-button primary" :disabled="saving" @click="saveModel(model)">
-                {{ saving ? "保存中…" : "保存" }}
-              </button>
+          </div>
+          <div class="space-y-2">
+            <Label>故障转移</Label>
+            <Select v-model="newModel.failoverTo" :disabled="!data">
+              <SelectTrigger class="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem :value="''">无</SelectItem>
+                <SelectItem
+                  v-for="model in data?.models ?? []"
+                  :key="model.modelId"
+                  :value="model.modelId"
+                >
+                  {{ model.displayName }}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+            <p class="text-xs text-muted-foreground">主模型失败/超时自动切到该模型</p>
+          </div>
+          <div class="sm:col-span-2">
+            <Button
+              :disabled="saving || !newModel.modelId.trim() || !newModel.baseUrl.trim()"
+              @click="createModel"
+            >
+              {{ saving ? "创建中…" : "创建模型" }}
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+
+      <!-- 提示 / 错误 -->
+      <CardContent v-if="error && !creating" class="border-t pt-6">
+        <Alert variant="destructive">
+          <CircleAlert class="size-4" />
+          <AlertDescription>{{ error }}</AlertDescription>
+        </Alert>
+      </CardContent>
+      <CardContent v-if="notice" class="border-t pt-6">
+        <p class="flex items-center gap-2 text-sm text-muted-foreground">
+          <CircleCheck class="size-4" />
+          {{ notice }}
+        </p>
+      </CardContent>
+
+      <!-- 列表 -->
+      <CardContent v-if="loading && !data" class="space-y-3 border-t pt-6">
+        <Skeleton v-for="n in 2" :key="n" class="h-16 w-full" />
+      </CardContent>
+
+      <CardContent v-else-if="data && data.models.length" class="border-t">
+        <div class="divide-y">
+          <div
+            v-for="model in data.models"
+            :key="model.modelId"
+            class="py-4 first:pt-6 last:pb-6"
+          >
+            <div v-if="!editing[model.modelId]">
+              <div class="flex flex-wrap items-center gap-2">
+                <Badge :variant="healthBadge(model.modelId).tone">
+                  {{ healthBadge(model.modelId).text }}
+                </Badge>
+                <span class="text-sm font-medium">{{ model.displayName }}</span>
+                <code class="font-mono text-xs text-muted-foreground">
+                  {{ model.modelId }}
+                </code>
+                <Badge v-if="!model.enabled" variant="outline">已禁用</Badge>
+                <span class="grow" />
+                <Button variant="ghost" size="sm" @click="startEdit(model)">
+                  编辑
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="text-destructive hover:text-destructive"
+                  :disabled="saving"
+                  @click="removeModel(model)"
+                >
+                  删除
+                </Button>
+              </div>
+              <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                <span>{{ model.baseUrl }}</span>
+                <span>
+                  {{ model.capabilities.map((c) => CAPABILITY_LABELS[c] ?? c).join(" / ") || "无标签" }}
+                </span>
+                <span v-if="model.failoverTo">故障转移 → {{ model.failoverTo }}</span>
+                <span>超时 {{ Math.round(model.timeoutMs / 1000) }}s</span>
+                <span>{{ model.hasApiKey ? "密钥已配置" : "无密钥" }}</span>
+              </div>
+            </div>
+
+            <!-- 编辑表单 -->
+            <div v-else class="space-y-4">
+              <div class="grid gap-4 sm:grid-cols-2">
+                <div class="space-y-2">
+                  <Label :for="`edit-name-${model.modelId}`">模型名</Label>
+                  <Input
+                    :id="`edit-name-${model.modelId}`"
+                    v-model="editing[model.modelId]!.displayName"
+                  />
+                </div>
+                <div class="space-y-2">
+                  <Label :for="`edit-url-${model.modelId}`">端点 Base URL</Label>
+                  <Input
+                    :id="`edit-url-${model.modelId}`"
+                    v-model="editing[model.modelId]!.baseUrl"
+                  />
+                </div>
+                <div class="space-y-2">
+                  <Label :for="`edit-key-${model.modelId}`">API Key</Label>
+                  <Input
+                    :id="`edit-key-${model.modelId}`"
+                    v-model="editing[model.modelId]!.apiKey"
+                    type="password"
+                    placeholder="留空保持不变"
+                  />
+                  <p class="text-xs text-muted-foreground">
+                    {{ model.hasApiKey ? "已配置；留空保持不变" : "未配置" }}
+                  </p>
+                </div>
+                <div class="space-y-2">
+                  <Label>能力标签</Label>
+                  <div class="flex gap-4 pt-1">
+                    <label
+                      v-for="cap in CAPABILITIES"
+                      :key="cap"
+                      class="flex items-center gap-2 text-sm"
+                    >
+                      <Checkbox
+                        :checked="(editing[model.modelId]!.capabilities ?? []).includes(cap)"
+                        @update:checked="
+                          (checked: boolean | 'indeterminate') => {
+                            const caps = editing[model.modelId]!.capabilities ?? [];
+                            editing[model.modelId]!.capabilities = checked
+                              ? [...caps, cap]
+                              : caps.filter((c) => c !== cap);
+                          }
+                        "
+                      />
+                      {{ CAPABILITY_LABELS[cap] }}
+                    </label>
+                  </div>
+                </div>
+                <div class="space-y-2">
+                  <Label>故障转移</Label>
+                  <Select v-model="editing[model.modelId]!.failoverTo">
+                    <SelectTrigger class="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem :value="''">无</SelectItem>
+                      <SelectItem
+                        v-for="other in data!.models.filter((m) => m.modelId !== model.modelId)"
+                        :key="other.modelId"
+                        :value="other.modelId"
+                      >
+                        {{ other.displayName }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div class="flex items-center gap-2">
+                  <Switch
+                    :id="`edit-enabled-${model.modelId}`"
+                    v-model="editing[model.modelId]!.enabled as unknown as boolean"
+                  />
+                  <Label :for="`edit-enabled-${model.modelId}`">启用</Label>
+                </div>
+              </div>
+              <div class="flex justify-end gap-2">
+                <Button variant="outline" size="sm" @click="cancelEdit(model.modelId)">
+                  取消
+                </Button>
+                <Button size="sm" :disabled="saving" @click="saveModel(model)">
+                  {{ saving ? "保存中…" : "保存" }}
+                </Button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-      <div v-else-if="data" class="wf-settings-body">
-        <div class="wf-empty wf-empty-compact">
-          <div>
-            <strong>注册表为空</strong>
-            <p>新建模型并绑定槽位；未绑定时回落 .env 首次种子配置（仅首次部署生效）。</p>
-          </div>
+      </CardContent>
+
+      <!-- 空状态 -->
+      <CardContent v-else-if="data" class="border-t">
+        <div class="flex flex-col items-center gap-1 py-10 text-center">
+          <CircleX class="size-8 text-muted-foreground/60" />
+          <p class="text-sm font-medium">注册表为空</p>
+          <p class="text-sm text-muted-foreground">
+            新建模型并绑定槽位；未绑定时回落 .env 首次种子配置（仅首次部署生效）。
+          </p>
         </div>
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   </div>
 </template>
-
-<style scoped>
-@import "./settings-shared.css";
-.wf-model-item {
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
-  border-radius: 10px;
-  padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.wf-model-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.wf-model-line strong {
-  font-size: 13px;
-}
-.wf-model-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  font-size: 12px;
-  color: var(--wf-text-secondary, #5f6368);
-}
-.wf-cap-row {
-  display: flex;
-  gap: 12px;
-}
-.wf-cap {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12.5px;
-}
-.wf-edit-form {
-  padding: 8px 0 0;
-  border-top: 1px dashed var(--wf-border, rgba(0, 0, 0, 0.08));
-}
-.wf-status {
-  font-size: 12px;
-}
-.wf-status.good {
-  color: #137333;
-}
-.wf-status.bad {
-  color: #d93025;
-}
-.wf-status.warn {
-  color: #b26a00;
-}
-</style>

@@ -5,6 +5,20 @@
  * WeKnora 为预设模板；配置存扩展设置 knowledgeConnector 键。
  */
 import { onMounted, ref } from "vue";
+import { CircleAlert, CircleCheck, Wand2 } from "lucide-vue-next";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import {
   readPipelineSettings,
   writePipelineSettings,
@@ -42,6 +56,12 @@ const DEFAULTS: ConnectorConfig = {
   responseMapping: "",
   adminUrl: "",
 };
+
+const AUTH_MODES: Array<{ value: ConnectorConfig["authMode"]; label: string }> = [
+  { value: "none", label: "无" },
+  { value: "bearer", label: "Bearer Token" },
+  { value: "header", label: "自定义 Header" },
+];
 
 const config = ref<ConnectorConfig>({ ...DEFAULTS });
 const rawSettings = ref<Record<string, unknown>>({});
@@ -123,105 +143,124 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="wf-section">
-    <section class="wf-settings-card">
-      <div class="wf-settings-card-head">
-        <strong>知识库连接器</strong>
-        <span class="spacer" />
-        <button class="wf-button compact" @click="applyTemplate">
-          填充 WeKnora 预设
-        </button>
-        <span v-if="notice" class="wf-settings-notice">{{ notice }}</span>
-        <span v-if="error" class="wf-settings-error">{{ error }}</span>
-      </div>
-      <div v-if="loading" class="wf-settings-body">
-        <span class="wf-skeleton">正在加载连接器配置…</span>
-      </div>
-      <div v-else class="wf-settings-body">
-        <p class="wf-settings-hint">
+  <div class="space-y-6">
+    <Card>
+      <CardHeader>
+        <CardTitle>知识库连接器</CardTitle>
+        <CardDescription>
           通用 RESTful 连接器：AI 检索时按下方端点与字段映射调用外部知识库。
           知识库内容管理（上传/文档/分块）请使用外部知识库原生界面（会话工作台的
           「知识库」页为只读验证视图）。
-        </p>
-        <div class="wf-form-row">
-          <label>
-            <strong>连接器类型</strong>
-            <span>标识用途；weknora 为预设模板。</span>
-          </label>
-          <input v-model="config.type" class="wf-input" placeholder="weknora / custom-rest" />
+        </CardDescription>
+        <CardAction>
+          <Button variant="outline" size="sm" @click="applyTemplate">
+            <Wand2 class="size-4" />
+            填充 WeKnora 预设
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <div v-if="loading" class="space-y-4">
+          <Skeleton v-for="n in 5" :key="n" class="h-9 w-full" />
         </div>
-        <div class="wf-form-row">
-          <label>
-            <strong>检索端点 URL</strong>
-            <span>接收 {query, knowledgeBaseIds} 的 POST 端点；留空 = 不接外部知识库。</span>
-          </label>
-          <input v-model="config.retrieveUrl" class="wf-input" placeholder="https://kb.example.com/api/search" />
-        </div>
-        <div class="wf-form-row">
-          <label>
-            <strong>认证方式</strong>
-          </label>
-          <div class="wf-cap-row">
-            <label class="wf-cap">
-              <input v-model="config.authMode" type="radio" value="none" /> 无
-            </label>
-            <label class="wf-cap">
-              <input v-model="config.authMode" type="radio" value="bearer" /> Bearer Token
-            </label>
-            <label class="wf-cap">
-              <input v-model="config.authMode" type="radio" value="header" /> 自定义 Header
-            </label>
+        <form v-else class="space-y-5" @submit.prevent="save">
+          <Alert v-if="error" variant="destructive">
+            <CircleAlert class="size-4" />
+            <AlertDescription>{{ error }}</AlertDescription>
+          </Alert>
+          <p
+            v-if="notice && !error"
+            class="flex items-center gap-2 text-sm text-muted-foreground"
+          >
+            <CircleCheck class="size-4" />
+            {{ notice }}
+          </p>
+
+          <div class="grid gap-5 sm:grid-cols-2">
+            <div class="space-y-2">
+              <Label for="kb-type">连接器类型</Label>
+              <Input
+                id="kb-type"
+                v-model="config.type"
+                placeholder="weknora / custom-rest"
+              />
+              <p class="text-xs text-muted-foreground">标识用途；weknora 为预设模板。</p>
+            </div>
+            <div class="space-y-2 sm:col-span-2">
+              <Label for="kb-url">检索端点 URL</Label>
+              <Input
+                id="kb-url"
+                v-model="config.retrieveUrl"
+                placeholder="https://kb.example.com/api/search"
+              />
+              <p class="text-xs text-muted-foreground">
+                接收 {query, knowledgeBaseIds} 的 POST 端点；留空 = 不接外部知识库。
+              </p>
+            </div>
+            <div class="space-y-2">
+              <Label>认证方式</Label>
+              <div class="flex gap-4 pt-1">
+                <label
+                  v-for="mode in AUTH_MODES"
+                  :key="mode.value"
+                  class="flex items-center gap-2 text-sm"
+                >
+                  <input
+                    v-model="config.authMode"
+                    type="radio"
+                    :value="mode.value"
+                    class="size-4 accent-[var(--primary)]"
+                  />
+                  {{ mode.label }}
+                </label>
+              </div>
+            </div>
+            <div v-if="config.authMode === 'header'" class="space-y-2">
+              <Label for="kb-header">Header 名</Label>
+              <Input id="kb-header" v-model="config.authHeader" placeholder="X-Api-Key" />
+            </div>
+            <div v-if="config.authMode !== 'none'" class="space-y-2">
+              <Label for="kb-cred">凭据</Label>
+              <Input
+                id="kb-cred"
+                v-model="config.authValue"
+                type="password"
+                placeholder="留空保持不变"
+              />
+              <p class="text-xs text-muted-foreground">保存后不回显；留空保持原值。</p>
+            </div>
+            <div class="space-y-2 sm:col-span-2">
+              <Label for="kb-req">请求字段映射 JSON</Label>
+              <Textarea id="kb-req" v-model="config.requestMapping" rows="2" class="font-mono text-xs" />
+              <p class="text-xs text-muted-foreground">
+                本地查询 → 上游请求体（JSONPath 风格声明）。
+              </p>
+            </div>
+            <div class="space-y-2 sm:col-span-2">
+              <Label for="kb-resp">响应字段映射 JSON</Label>
+              <Textarea id="kb-resp" v-model="config.responseMapping" rows="2" class="font-mono text-xs" />
+              <p class="text-xs text-muted-foreground">上游响应 → 本地证据结构。</p>
+            </div>
+            <div class="space-y-2 sm:col-span-2">
+              <Label for="kb-admin">管理端点 URL（可选）</Label>
+              <Input
+                id="kb-admin"
+                v-model="config.adminUrl"
+                placeholder="https://kb.example.com/api"
+              />
+              <p class="text-xs text-muted-foreground">
+                RESTful 管理接口；当前版本仅登记，不在界面内管理内容。
+              </p>
+            </div>
           </div>
-        </div>
-        <div v-if="config.authMode === 'header'" class="wf-form-row">
-          <label><strong>Header 名</strong></label>
-          <input v-model="config.authHeader" class="wf-input" placeholder="X-Api-Key" />
-        </div>
-        <div v-if="config.authMode !== 'none'" class="wf-form-row">
-          <label><strong>凭据</strong><span>保存后不回显；留空保持原值。</span></label>
-          <input v-model="config.authValue" type="password" class="wf-input" placeholder="留空保持不变" />
-        </div>
-        <div class="wf-form-row">
-          <label>
-            <strong>请求字段映射 JSON</strong>
-            <span>本地查询 → 上游请求体（JSONPath 风格声明）。</span>
-          </label>
-          <textarea v-model="config.requestMapping" rows="2" class="wf-input" />
-        </div>
-        <div class="wf-form-row">
-          <label>
-            <strong>响应字段映射 JSON</strong>
-            <span>上游响应 → 本地证据结构。</span>
-          </label>
-          <textarea v-model="config.responseMapping" rows="2" class="wf-input" />
-        </div>
-        <div class="wf-form-row">
-          <label>
-            <strong>管理端点 URL（可选）</strong>
-            <span>RESTful 管理接口；当前版本仅登记，不在界面内管理内容。</span>
-          </label>
-          <input v-model="config.adminUrl" class="wf-input" placeholder="https://kb.example.com/api" />
-        </div>
-        <div class="wf-form-actions">
-          <button class="wf-button primary" :disabled="saving" @click="save">
-            {{ saving ? "保存中…" : "保存连接器" }}
-          </button>
-        </div>
-      </div>
-    </section>
+
+          <div>
+            <Button type="submit" :disabled="saving">
+              {{ saving ? "保存中…" : "保存连接器" }}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   </div>
 </template>
-
-<style scoped>
-@import "./settings-shared.css";
-.wf-cap-row {
-  display: flex;
-  gap: 12px;
-}
-.wf-cap {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12.5px;
-}
-</style>

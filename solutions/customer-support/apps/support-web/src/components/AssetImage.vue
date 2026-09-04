@@ -3,8 +3,10 @@
  * Authenticated asset thumbnail.
  * assetId → authenticated fetch → Blob → object URL → <img>.
  * 失败时回落为文件图标占位（文件类素材不加载预览）。
+ * 根元素铺满父容器（父级负责裁切圆角）；加载中显示 Skeleton 式底色。
  */
 import { onMounted, onUnmounted, ref } from "vue";
+import { FileText } from "lucide-vue-next";
 import { assetContentUrl } from "@/assets/api";
 
 const props = defineProps<{ assetId: string; name?: string }>();
@@ -38,29 +40,19 @@ onUnmounted(() => {
 <template>
   <img
     v-if="state === 'ready'"
-    class="wf-asset-thumb-img"
+    class="block h-full w-full object-cover"
     :src="objectUrl"
     :alt="name || '素材预览'"
     loading="lazy"
   />
-  <span v-else-if="state === 'loading'" class="wf-asset-thumb-fallback">…</span>
-  <span v-else class="wf-asset-thumb-fallback">🖼</span>
+  <span
+    v-else-if="state === 'loading'"
+    class="flex h-full w-full items-center justify-center bg-muted/50 text-xs text-muted-foreground"
+  >…</span>
+  <span
+    v-else
+    class="flex h-full w-full items-center justify-center text-muted-foreground/60"
+  >
+    <FileText class="size-8" />
+  </span>
 </template>
-
-<style scoped>
-.wf-asset-thumb-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.wf-asset-thumb-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  color: var(--wf-text-muted, #8a93a6);
-  font-size: 13px;
-}
-</style>
