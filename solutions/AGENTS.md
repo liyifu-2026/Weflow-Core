@@ -20,11 +20,14 @@
 ```text
 solutions/
 └─ <solution>/
-   ├─ solution.manifest.json   # 声明 plugins、backend、applications 等
    ├─ apps/<app>               # 产品/业务 UI（support-web、mobile）
-   ├─ plugins/                 # 业务 Agent 插件（Skill / Execution Strategy）
-   └─ backend/                 # 业务 BFF / 后端
+   ├─ plugins/<name>/          # 业务 Agent 插件（Skill / Execution Strategy），
+   │                           #   由 Core 从 WEFLOW_PLUGIN_DIR/plugins/<name>/dist 直读
+   └─ backend/<key>/index.js   # 业务 BFF（registerRoutes(server, ctx) 契约），
+                               #   由 Core 从 WEFLOW_PLUGIN_DIR/backend 直读
 ```
+
+R3 平台化拆除：`solution.manifest.json` / `solution.lock.json` / `signature.json` / `artifacts/` 已删除；插件不再打包安装，Core 通过 `WEFLOW_PLUGIN_DIR` 环境变量直读本仓库的插件目录。
 
 ## 绝对禁止
 
@@ -69,5 +72,4 @@ solutions/
 ## 验证
 
 - support-web：`npx vue-tsc --noEmit` + `npx vite build` 必须绿（`pnpm build`）。
-- Solution 包一致性：`node scripts/verify-solution.mjs solutions/customer-support`（manifest + lock + signature 三方一致）。
-- 涉及插件时按 README 的门禁流程验证（快捷注入 + Solution Pack 安装 + e2e gate）。
+- e2e gate：`node scripts/e2e-gate.mjs`（平台运行中直接种子会话 + Turn 验证 Agent 链路）。

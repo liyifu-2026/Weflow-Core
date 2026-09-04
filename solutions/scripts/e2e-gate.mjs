@@ -1,12 +1,12 @@
 /**
  * E2E gate: run one Agent turn through a live Weflow platform instance.
  *
- * This is the "dev → platform" gate: the platform instance (usually
- * Weflow-Core's release/platform-core) must be running with the plugins from
- * THIS repo injected via SKILL_PLUGIN_PATH / STRATEGY_PLUGIN_PATH and a
- * configured MODEL_API_KEY. The script seeds one conversation + inbound
- * message + queued Agent Turn directly (bypassing the Channel Host), enqueues
- * the turn into Redis, waits for the worker, prints the outcome and cleans up.
+ * This is the "dev → platform" gate: the platform instance must be running
+ * with the plugins from THIS repo loaded (R3 后 worker 直接从插件目录加载，
+ * 或显式注入 SKILL_PLUGIN_PATH / STRATEGY_PLUGIN_PATH) and a configured
+ * MODEL_API_KEY. The script seeds one conversation + inbound message +
+ * queued Agent Turn directly (bypassing the Channel Host), enqueues the
+ * turn into Redis, waits for the worker, prints the outcome and cleans up.
  *
  * Usage:
  *   node scripts/e2e-gate.mjs [--message "…"] [--expect reply|handoff|any]
