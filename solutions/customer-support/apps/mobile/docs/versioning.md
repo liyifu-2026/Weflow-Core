@@ -37,3 +37,27 @@ Mobile 通过版本号和变更记录向客服、运维人员、Core 集成方�
 5. 不发布未在 Changelog 说明的用户或契约变化。
 
 紧急修复也遵循此流程，只是使用 PATCH 版本并在 `Fixed` 或 `Security` 中说明风险和影响。
+
+## OTA 更新边界（EAS Update）
+
+移动端启用 expo-updates（runtimeVersion 策略：`fingerprint`）。JS 层变更可经 OTA 热更新，无需重新分发 APK；边界如下：
+
+**可以走 OTA**（`runtimeVersion` 指纹不变）：
+
+- `app/`、`src/` 下的 TS/TSX 代码与资源（图片、字体）变更；
+- 不影响原生行为的 `app.json` 字段（如 `extra`、文案类配置）。
+
+**必须发新 APK**（指纹变化，OTA 对旧安装自动失效）：
+
+- `package.json` 任何依赖增删或升级（expo-updates 依赖参与指纹计算，谨慎对待）；
+- `app.json` 的 plugins、权限、图标、splash、原生构建属性（`expo-build-properties`）变化；
+- 任何需要新原生模块能力的功能。
+
+**操作流程**：
+
+1. `npx eas-cli login`（账号为 EAS owner `leaif` 下的成员）；
+2. 确认本次变更属于「可以走 OTA」范围，且 CHANGELOG 已按上文要求更新；
+3. 推送：`npx eas-cli update --channel production -m "<变更说明>"`（内测用 `--channel preview`）；
+4. fingerprint 不一致的设备不会拉取本次更新（服务端按 runtimeVersion 匹配），这是预期保护，不是故障；
+5. OTA 只覆盖 JS：Core 契约变更若依赖新原生能力，必须走完整发版，不得用 OTA 强推。
+

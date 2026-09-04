@@ -34,6 +34,12 @@
         "projectId": "bf04db66-a706-40eb-aa9c-b0a5dcb4ae13"
       }
     },
+    "updates": {
+      "url": "https://u.expo.dev/bf04db66-a706-40eb-aa9c-b0a5dcb4ae13"
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
     "plugins": [
       "expo-router",
       [
