@@ -11,6 +11,11 @@ import { apiBaseUrl } from "@/api/config";
 import type { ThemeColors } from "@/ui/theme";
 import { useThemedStyles } from "@/ui/theme-context";
 
+/** 首字母占位：取首个字符大写；空名回退 "?"（各头像降级块共用） */
+export function initialFor(name: string | null | undefined): string {
+  return (name || "?").trim().slice(0, 1).toUpperCase();
+}
+
 export function UserAvatar({
   contactId,
   fallbackName,
@@ -24,7 +29,7 @@ export function UserAvatar({
 }) {
   const styles = useThemedStyles(createStyles);
   const [failed, setFailed] = useState(false);
-  const letter = (fallbackName || "?").trim().slice(0, 1).toUpperCase();
+  const letter = initialFor(fallbackName);
 
   if (!contactId || failed) {
     return (

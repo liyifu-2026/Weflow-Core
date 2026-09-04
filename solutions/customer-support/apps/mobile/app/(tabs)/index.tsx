@@ -45,7 +45,7 @@ import { ContactSheet } from "@/handoffs/contact-sheet";
 import { LoadState } from "@/ui/load-state";
 import type { ThemeColors } from "@/ui/theme";
 import { useTheme, useThemedStyles } from "@/ui/theme-context";
-import { UserAvatar } from "@/ui/user-avatar";
+import { initialFor, UserAvatar } from "@/ui/user-avatar";
 import { uiTokens } from "@/ui/tokens";
 
 type GroupTone = "orange" | "blue" | "gray" | "none";
@@ -266,13 +266,11 @@ export default function HandoffInboxScreen() {
                 ) : (
                   <View style={styles.avatarFallback}>
                     <Text style={styles.avatarFallbackText}>
-                      {(
+                      {initialFor(
                         session?.user.displayName ||
-                        session?.user.username ||
-                        "客"
-                      )
-                        .slice(0, 1)
-                        .toUpperCase()}
+                          session?.user.username ||
+                          "客",
+                      )}
                     </Text>
                   </View>
                 )}
@@ -469,13 +467,16 @@ function ContactsPage({
   const styles = useThemedStyles(createStyles);
   const [rows, setRows] = useState<ContactListRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(async () => {
     if (!session) return;
+    setLoadFailed(false);
     try {
       setRows((await listContacts(session)).contacts);
     } catch {
-      // 静默；下拉重试
+      // 失败显式呈现 + 重试入口，不再静默吞掉
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -525,6 +526,22 @@ function ContactsPage({
         loading ? (
           <View style={styles.center}>
             <Text style={styles.emptyTitle}>正在读取</Text>
+          </View>
+        ) : loadFailed ? (
+          <View style={styles.center}>
+            <Text style={styles.emptyTitle}>联系人加载失败</Text>
+            <Text style={styles.emptyHint}>网络不给力，稍后再试</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="重试加载联系人"
+              onPress={() => {
+                setLoading(true);
+                void load();
+              }}
+              style={styles.retryButton}
+            >
+              <Text style={styles.retryText}>重试</Text>
+            </Pressable>
           </View>
         ) : (
           <View style={styles.center}>
@@ -637,7 +654,7 @@ function InboxRow({
           ) : (
             <View style={styles.avatarFallbackRow}>
               <Text style={styles.avatarFallbackRowText}>
-                {item.name.slice(0, 1).toUpperCase()}
+                {initialFor(item.name)}
               </Text>
             </View>
           )}
@@ -851,6 +868,15 @@ const createStyles = (colors: ThemeColors) =>
     contactPreview: { color: colors.muted, fontSize: 13, marginTop: 4 },
     empty: { alignItems: "center", paddingTop: 90, paddingHorizontal: 24 },
     emptyTitle: { color: colors.muted, fontSize: 15, fontWeight: "600" },
+    emptyHint: { color: colors.muted, fontSize: 13, marginTop: 6 },
+    retryButton: {
+      marginTop: 14,
+      paddingHorizontal: 18,
+      paddingVertical: 8,
+      borderRadius: 999,
+      backgroundColor: colors.subtle,
+    },
+    retryText: { color: colors.ink, fontSize: 14, fontWeight: "600" },
     center: { alignItems: "center", paddingTop: 80 },
   });
 

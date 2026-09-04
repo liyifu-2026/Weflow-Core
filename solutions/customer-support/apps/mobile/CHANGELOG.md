@@ -11,6 +11,7 @@
 
 ### Changed
 
+- 工程卫生批次：`app.json` 版本号对齐 package.json（0.8.0，修复「安全与关于」页显示旧版本）；移除 5 个零引用依赖（@ronradtke/react-native-markdown-display、expo-font、expo-web-browser、expo-device、expo-linking）；会话详情页日期分组与首字母头像的时间/字符工具收敛到 `src/ui/format.ts` 与 `initialFor()`，消除三处重复实现。
 - 全量对齐 Expo SDK 57 官方期望版本（19 个包，含 `expo` 57.0.20、`react-native` 0.86.3、`expo-notifications` 57.0.17、`expo-router` 57.0.19 等），消除生成代码的实验性 API 编译错误；此变更会改变 runtimeVersion 指纹（OTA 对旧安装自动失效，需安装新 APK 一次）。
 - 手机端实体目录迁移至 `C:\dev\mobile`（原 `apps\mobile` 位置留 junction 兼容），根治 Windows 构建工具链长路径限制；`nodeLinker: hoisted` 固化进 `pnpm-workspace.yaml`。
 - 移除三个未使用的超前沿依赖（@expo/ui、expo-glass-effect、expo-symbols）：业务代码零引用，收紧依赖安装与审计面。

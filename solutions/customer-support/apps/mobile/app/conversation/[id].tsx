@@ -117,7 +117,7 @@ import {
 import { ContactSheet } from "@/handoffs/contact-sheet";
 import { MediaImage } from "@/media/media-image";
 import { MediaFileBubble } from "@/media/media-file-bubble";
-import { formatTime } from "@/ui/format";
+import { formatDate, formatTime, isSameDay } from "@/ui/format";
 import { MediaViewerModal } from "@/media/media-viewer";
 import { uploadMedia } from "@/media/api";
 import { VoiceBubble } from "@/media/voice-bubble";
@@ -2750,22 +2750,6 @@ function classifySendFailure(reason: unknown): SendFailure {
     return "outcome_unknown";
   }
   return "outcome_unknown";
-}
-function isSameDay(first: string, second: string) {
-  const firstDate = new Date(first);
-  const secondDate = new Date(second);
-  return (
-    firstDate.getFullYear() === secondDate.getFullYear() &&
-    firstDate.getMonth() === secondDate.getMonth() &&
-    firstDate.getDate() === secondDate.getDate()
-  );
-}
-function formatDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "会话记录";
-  const today = new Date();
-  if (isSameDay(today.toISOString(), value)) return "今天";
-  return date.toLocaleDateString("zh-CN", { month: "long", day: "numeric" });
 }
 /** 显示操作错误提示弹窗 */
 function showActionError(reason: unknown) {
