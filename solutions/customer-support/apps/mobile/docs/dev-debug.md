@@ -46,3 +46,6 @@ WSL 路线（`~/node22 + ~/Android/Sdk`）曾作为替代探索，最终未采�
 - Android 发布验收被 `docs/android-release-prerequisites.md` 里的 google-services.json 新身份问题阻塞（新包名 `com.weflow.mobile` 的新 Firebase 配置未就位）；此事与 OTA 无关，但发新 APK 前必须解决。
 - **git 操作走旧仓库路径**（`Desktop\We\weflow-solutions`，经 junction）；`C:\dev\mobile` 下 git 找不到仓库根。
 - pnpm 在路径/配置变化后报 `Unexpected virtual store location` → `CI=true pnpm install` 重链。
+- 改 `app.json` 版本号后必须 `npx expo prebuild -p android` 才会进 APK（版本号在 prebuild 时烤进原生工程）。
+- 模拟器挂死/误杀进程后可能回滚到旧快照，**应用会"消失"**——`adb install -r` 重装 APK 即可；构建报 `Unable to delete file ...classes.jar` → `gradlew --stop` + 杀全部 java.exe + 删对应模块 build 目录。
+- app/ 目录下只放路由文件；支撑模块放 `src/`，否则 expo-router 会把 .ts 文件误识别为路由。
