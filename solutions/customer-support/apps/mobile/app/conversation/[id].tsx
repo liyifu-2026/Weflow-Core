@@ -72,14 +72,14 @@ import { useReducedMotion } from "@/ui/use-reduced-motion";
 
 import { answerCollaborationRequest, cancelCollaborationRequest, closeCollaborationRequest, listConversationCollaboration, type CollaborationRequest } from "@/collaboration/api";
 
-import { createStyles } from "./styles";
-import { type DisplayMessage, type SendFailure } from "./types";
-import { classifySendFailure, showActionError } from "./screen-helpers";
-import { TranscriptMessage } from "./message-bubble";
-import { ArchivedDraftPanel, ContactProfileModal, ConversationMenuModal } from "./conversation-modals";
-import { CollaborationResponseModal, CollaborationSummary } from "./collaboration-ui";
-import { Composer } from "./composer";
-import { ActionPanel } from "./action-panel";
+import { createStyles } from "@/conversation/styles";
+import { type DisplayMessage, type SendFailure } from "@/conversation/types";
+import { classifySendFailure, showActionError } from "@/conversation/screen-helpers";
+import { TranscriptMessage } from "@/conversation/message-bubble";
+import { ArchivedDraftPanel, ContactProfileModal, ConversationMenuModal } from "@/conversation/conversation-modals";
+import { CollaborationResponseModal, CollaborationSummary } from "@/conversation/collaboration-ui";
+import { Composer } from "@/conversation/composer";
+import { ActionPanel } from "@/conversation/action-panel";
 
 /** 会话详情页面组件 */
 export default function ConversationScreen() {
