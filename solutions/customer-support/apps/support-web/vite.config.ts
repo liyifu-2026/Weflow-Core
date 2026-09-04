@@ -21,6 +21,8 @@ export default defineConfig({
     port: 5174,
     host: true,
     cors: true,
+    // frpc 隧道公网入口（web.leaif.com → 本机 5174）需要显式放行
+    allowedHosts: ["web.leaif.com", "localhost", ".leaif.com"],
     proxy: {
       "/api": {
         target: CORE_API_TARGET,
