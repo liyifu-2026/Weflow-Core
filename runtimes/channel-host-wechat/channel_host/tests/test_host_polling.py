@@ -139,6 +139,68 @@ class HostPollingTests(unittest.TestCase):
             self.assertEqual(store.pull().events, [])
             store.close()
 
+    def test_new_conversation_first_message_is_captured_when_post_boot(self):
+        """全新客户的首条消息（晚于进程启动）必须被捕获，不得被占坑吞掉。"""
+        with tempfile.TemporaryDirectory() as directory:
+            db = FakeWeChatDb()
+            store = EventStore(str(Path(directory) / "events.sqlite3"))
+            host = WeChatChannelHost(db, store, boot_epoch=1_700_000_500)
+            host.bootstrap()
+
+            db.messages["room-new"] = [
+                {
+                    "local_id": 9,
+                    "type": "文本",
+                    "sender_id": "wxid-new-customer",
+                    "create_time": 1_700_000_600,
+                    "content": "你好，咨询一下",
+                    "sort_seq": 30,
+                }
+            ]
+
+            self.assertEqual(host.poll_once(), 1)
+            self.assertEqual(
+                [event["content"] for event in store.pull().events],
+                ["你好，咨询一下"],
+            )
+            self.assertEqual(store.source_checkpoint("room-new"), 30)
+            store.close()
+
+    def test_revived_conversation_captures_only_post_boot_messages(self):
+        """归档会话运行期复活：启动前的历史不重放，启动后的新消息照常捕获。"""
+        with tempfile.TemporaryDirectory() as directory:
+            db = FakeWeChatDb()
+            store = EventStore(str(Path(directory) / "events.sqlite3"))
+            host = WeChatChannelHost(db, store, boot_epoch=1_700_000_500)
+            host.bootstrap()
+
+            db.messages["room-old"] = [
+                {
+                    "local_id": 1,
+                    "type": "文本",
+                    "sender_id": "wxid-contact",
+                    "create_time": 1_700_000_100,
+                    "content": "very old history",
+                    "sort_seq": 10,
+                },
+                {
+                    "local_id": 2,
+                    "type": "文本",
+                    "sender_id": "wxid-contact",
+                    "create_time": 1_700_000_600,
+                    "content": "fresh again",
+                    "sort_seq": 11,
+                },
+            ]
+
+            self.assertEqual(host.poll_once(), 1)
+            self.assertEqual(
+                [event["content"] for event in store.pull().events],
+                ["fresh again"],
+            )
+            self.assertEqual(store.source_checkpoint("room-old"), 11)
+            store.close()
+
     def test_bootstrap_skips_history_and_captures_new_text_after_restart(self):
         with tempfile.TemporaryDirectory() as directory:
             db = FakeWeChatDb()

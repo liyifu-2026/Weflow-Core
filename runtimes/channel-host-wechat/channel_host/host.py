@@ -37,6 +37,7 @@ class WeChatChannelHost:
         session_discovery_limit: int = 10000,
         message_chat_discovery_interval_seconds: float = 30.0,
         account: Optional[str] = None,
+        boot_epoch: Optional[float] = None,
     ):
         if session_discovery_limit < 1:
             raise ValueError("session_discovery_limit must be positive")
@@ -57,6 +58,12 @@ class WeChatChannelHost:
         self._self_ref: Optional[str] = None
         self._self_nickname: Optional[str] = None
         self._last_message_chat_discovery = 0.0
+        # 运行期新发现会话的基线时刻（unix 秒，与微信 create_time 同源）：
+        # 早于该时刻的消息视为历史，不导入；晚于该时刻的是真新消息，
+        # 照常捕获。未注入时取构造时刻，与进程启动同义。
+        self._boot_epoch = (
+            float(boot_epoch) if boot_epoch is not None else time.time()
+        )
 
     def bootstrap(self) -> bool:
         if self.event_store.is_bootstrapped():
@@ -107,29 +114,31 @@ class WeChatChannelHost:
             previous_key = self.event_store.discovered_key(conversation_ref)
 
             if checkpoint is None:
-                high_water = (
-                    int(max_sort_seq)
-                    if max_sort_seq is not None
-                    else self._current_high_water(conversation_ref)
-                )
+                # 运行期新发现的会话（bootstrap 基线只覆盖启动时的发现集）。
+                # 以「进程启动时刻」为界做基线：界线之前的历史不导入（归档
+                # 会话复活时不重放旧消息）；界线之后的消息是真新消息——包括
+                # 触发本次发现的那条首条消息——基线后不跳过，继续走下方
+                # 捕获流程，本轮即被捕获（此前直接占坑到当前水位并跳过，
+                # 导致新客户首条消息被吞、无回复）。
+                baseline = self._boot_baseline_high_water(conversation_ref)
                 self.event_store.ensure_conversation(
                     conversation_ref,
-                    high_water,
+                    baseline,
                     discovery_key=discovery_key,
                 )
-                continue
-
-            message_chat_advanced = (
-                max_sort_seq is not None
-                and int(max_sort_seq) > checkpoint
-            )
-            if previous_key is None and not message_chat_advanced:
-                self.event_store.record_discovered(
-                    conversation_ref, discovery_key
+                checkpoint = baseline
+            else:
+                message_chat_advanced = (
+                    max_sort_seq is not None
+                    and int(max_sort_seq) > checkpoint
                 )
-                continue
-            if previous_key == discovery_key and not message_chat_advanced:
-                continue
+                if previous_key is None and not message_chat_advanced:
+                    self.event_store.record_discovered(
+                        conversation_ref, discovery_key
+                    )
+                    continue
+                if previous_key == discovery_key and not message_chat_advanced:
+                    continue
 
             messages = self.db.get_new_messages(
                 conversation_ref, since_seq=checkpoint, limit=200
@@ -400,6 +409,27 @@ class WeChatChannelHost:
         if not rows:
             return 0
         return _required_int(rows[0], "sort_seq")
+
+    def _boot_baseline_high_water(self, conversation_ref: str) -> int:
+        """运行期新发现会话的基线水位：进程启动前最后一条消息的 sort_seq。
+
+        get_messages 按 sort_seq 降序返回（最新在前），从最新往旧找第一条
+        「不是启动后到达」的消息作为界线：create_time 可读且早于启动时刻，
+        或时间戳不可读（按历史处理，宁漏勿重放）。其后的消息全部照常捕获。
+        最新 200 条全部晚于启动时刻（全新会话的常态）时返回 0，即全量捕获。
+        """
+        rows = self.db.get_messages(conversation_ref, limit=200)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            create_time = row.get("create_time")
+            try:
+                timestamp = float(create_time)
+            except (TypeError, ValueError, OverflowError):
+                return _required_int(row, "sort_seq")
+            if timestamp < self._boot_epoch:
+                return _required_int(row, "sort_seq")
+        return 0
 
 
 def _is_video_message(message: dict) -> bool:
