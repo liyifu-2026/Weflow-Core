@@ -1,5 +1,6 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
+import "./styles/tailwind.css";
 import "./styles/console-shared.css";
 import App from "./App.vue";
 import { createSupportRouter } from "./router";

@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { Loader2 } from "lucide-vue-next";
 import { useWeflowAuthStore } from "../auth-store";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 
 const auth = useWeflowAuthStore();
 const router = useRouter();
@@ -10,6 +15,15 @@ const newPassword = ref("");
 const confirm = ref("");
 const error = ref("");
 const loading = ref(false);
+
+// 本页不经 AppShell；过渡期旧 CSS 的 body 背景跟随 data-theme，
+// 需自行同步（第 6 批删除 console-shared.css 后移除）。
+onMounted(() => {
+  const dark = localStorage.getItem("wf-theme") === "dark";
+  document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.style.colorScheme = dark ? "dark" : "light";
+});
 
 async function submit() {
   error.value = "";
@@ -32,64 +46,43 @@ async function submit() {
 </script>
 
 <template>
-  <div class="wf-login-page">
-    <form class="wf-login-box" @submit.prevent="submit">
-      <span class="wf-login-logo"><b>We</b>Flow</span>
-      <h2>设置新密码</h2>
-      <p>密码长度为 12–128 个字符，设置完成后进入工作台。</p>
-      <div v-if="error" class="wf-error" role="alert">{{ error }}</div>
-      <div class="wf-field">
-        <label for="pw-current">当前初始密码</label>
-        <input id="pw-current" v-model="currentPassword" type="password" class="wf-input" />
+  <div class="grid min-h-screen place-items-center bg-background p-8">
+    <form class="w-full max-w-sm space-y-6" @submit.prevent="submit">
+      <div class="space-y-2 text-center">
+        <p class="text-2xl font-semibold tracking-tight">WeFlow</p>
+        <h1 class="text-lg font-medium">设置新密码</h1>
+        <p class="text-sm text-muted-foreground">
+          密码长度为 12–128 个字符，设置完成后进入工作台。
+        </p>
       </div>
-      <div class="wf-field">
-        <label for="pw-new">新密码</label>
-        <input id="pw-new" v-model="newPassword" type="password" class="wf-input" />
+
+      <Alert v-if="error" variant="destructive" role="alert">
+        <AlertDescription>{{ error }}</AlertDescription>
+      </Alert>
+
+      <div class="space-y-4">
+        <div class="space-y-2">
+          <Label for="pw-current">当前初始密码</Label>
+          <Input id="pw-current" v-model="currentPassword" type="password" />
+        </div>
+        <div class="space-y-2">
+          <Label for="pw-new">新密码</Label>
+          <Input id="pw-new" v-model="newPassword" type="password" />
+        </div>
+        <div class="space-y-2">
+          <Label for="pw-confirm">再次输入</Label>
+          <Input id="pw-confirm" v-model="confirm" type="password" />
+        </div>
       </div>
-      <div class="wf-field">
-        <label for="pw-confirm">再次输入</label>
-        <input id="pw-confirm" v-model="confirm" type="password" class="wf-input" />
-      </div>
-      <button
-        class="wf-button primary wf-button-block"
+
+      <Button
+        type="submit"
+        class="w-full"
         :disabled="loading || newPassword.length < 12"
       >
-        <span v-if="loading" class="wf-spinner"></span>
+        <Loader2 v-if="loading" class="size-4 animate-spin" />
         <span>{{ loading ? "保存中" : "完成并进入工作台" }}</span>
-      </button>
+      </Button>
     </form>
   </div>
 </template>
-
-<style scoped>
-.wf-login-page {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 32px;
-  background: var(--wf-bg);
-}
-.wf-login-box {
-  width: min(360px, 100%);
-}
-.wf-login-logo {
-  display: inline-block;
-  margin-bottom: 28px;
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-.wf-login-box h2 {
-  margin: 0 0 8px;
-  font-size: 24px;
-  letter-spacing: -0.02em;
-}
-.wf-login-box > p {
-  margin: 0 0 24px;
-  color: var(--wf-text-secondary);
-  font-size: 13px;
-}
-.wf-login-box .wf-button {
-  margin-top: 4px;
-}
-</style>

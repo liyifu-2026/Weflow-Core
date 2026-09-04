@@ -1,5 +1,6 @@
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 import vue from "@vitejs/plugin-vue";
 
 const CORE_API_TARGET = process.env.CORE_API_TARGET || "http://127.0.0.1:3100";
@@ -8,7 +9,7 @@ const CORE_API_TARGET = process.env.CORE_API_TARGET || "http://127.0.0.1:3100";
 // bundle —— 因此走常规 app 构建（index.html 入口），而不是 lib 模式。
 export default defineConfig({
   base: "/",
-  plugins: [vue()],
+  plugins: [vue(), tailwindcss()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

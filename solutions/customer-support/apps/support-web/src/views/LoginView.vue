@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { Loader2 } from "lucide-vue-next";
 import { useWeflowAuthStore } from "../auth-store";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
 
 const auth = useWeflowAuthStore();
 const router = useRouter();
@@ -10,6 +15,15 @@ const username = ref("");
 const password = ref("");
 const submitting = ref(false);
 const error = ref("");
+
+// 本页不经 AppShell；过渡期旧 CSS 的 body 背景跟随 data-theme，
+// 需自行同步（第 6 批删除 console-shared.css 后移除）。
+onMounted(() => {
+  const dark = localStorage.getItem("wf-theme") === "dark";
+  document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.style.colorScheme = dark ? "dark" : "light";
+});
 
 async function submit() {
   error.value = "";
@@ -32,73 +46,50 @@ async function submit() {
 </script>
 
 <template>
-  <div class="wf-login-page">
-    <form class="wf-login-box" @submit.prevent="submit">
-      <span class="wf-login-logo"><b>We</b>Flow</span>
-      <h2>登录 Weflow</h2>
-      <p>使用由管理员发放的 Weflow 账号</p>
-      <div v-if="error" class="wf-error" role="alert">{{ error }}</div>
-      <div class="wf-field">
-        <label for="login-username">用户名</label>
-        <input
-          id="login-username"
-          v-model="username"
-          class="wf-input"
-          autocomplete="username"
-          placeholder="请输入用户名"
-        />
+  <div class="grid min-h-screen place-items-center bg-background p-8">
+    <form class="w-full max-w-sm space-y-6" @submit.prevent="submit">
+      <div class="space-y-2 text-center">
+        <p class="text-2xl font-semibold tracking-tight">WeFlow</p>
+        <h1 class="text-lg font-medium">登录 Weflow</h1>
+        <p class="text-sm text-muted-foreground">
+          使用由管理员发放的 Weflow 账号
+        </p>
       </div>
-      <div class="wf-field">
-        <label for="login-password">密码</label>
-        <input
-          id="login-password"
-          v-model="password"
-          class="wf-input"
-          type="password"
-          autocomplete="current-password"
-          placeholder="请输入密码"
-        />
+
+      <Alert v-if="error" variant="destructive" role="alert">
+        <AlertDescription>{{ error }}</AlertDescription>
+      </Alert>
+
+      <div class="space-y-4">
+        <div class="space-y-2">
+          <Label for="login-username">用户名</Label>
+          <Input
+            id="login-username"
+            v-model="username"
+            autocomplete="username"
+            placeholder="请输入用户名"
+          />
+        </div>
+        <div class="space-y-2">
+          <Label for="login-password">密码</Label>
+          <Input
+            id="login-password"
+            v-model="password"
+            type="password"
+            autocomplete="current-password"
+            placeholder="请输入密码"
+          />
+        </div>
       </div>
-      <button
-        class="wf-button primary wf-button-block"
+
+      <Button
+        type="submit"
+        class="w-full"
         :disabled="submitting || !username || !password"
       >
-        <span v-if="submitting" class="wf-spinner"></span>
+        <Loader2 v-if="submitting" class="size-4 animate-spin" />
         <span>{{ submitting ? "验证中" : "登录 Weflow" }}</span>
-      </button>
+      </Button>
     </form>
   </div>
 </template>
-
-<style scoped>
-.wf-login-page {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 32px;
-  background: var(--wf-bg);
-}
-.wf-login-box {
-  width: min(360px, 100%);
-}
-.wf-login-logo {
-  display: inline-block;
-  margin-bottom: 28px;
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-.wf-login-box h2 {
-  margin: 0 0 8px;
-  font-size: 24px;
-  letter-spacing: -0.02em;
-}
-.wf-login-box > p {
-  margin: 0 0 24px;
-  color: var(--wf-text-secondary);
-  font-size: 13px;
-}
-.wf-login-box .wf-button {
-  margin-top: 4px;
-}
-</style>
