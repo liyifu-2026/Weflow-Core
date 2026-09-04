@@ -665,59 +665,6 @@ export function listStorageBackends(): Promise<{
   );
 }
 
-// ---------- 受控治理（Core 原生端点，schema 校验，非透传代理） ----------
-
-export function createManagedModel(data: {
-  name: string;
-  type: string;
-  source: string;
-  display_name?: string;
-  description?: string;
-}): Promise<unknown> {
-  return api("/api/v1/admin/knowledge-models", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-
-export function deleteManagedModel(modelId: string): Promise<void> {
-  return api(`/api/v1/admin/knowledge-models/${encodeURIComponent(modelId)}`, {
-    method: "DELETE",
-  });
-}
-
-export function createManagedVectorStore(data: {
-  name: string;
-  engine_type: string;
-  connection_config?: Record<string, unknown>;
-}): Promise<unknown> {
-  return api("/api/v1/admin/knowledge-vector-stores", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-
-export function testManagedVectorStore(data: {
-  name: string;
-  engine_type: string;
-  connection_config?: Record<string, unknown>;
-}): Promise<unknown> {
-  return api("/api/v1/admin/knowledge-vector-stores/test", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-
-export function createManagedStorageBackend(data: {
-  name: string;
-  provider: string;
-}): Promise<unknown> {
-  return api("/api/v1/admin/knowledge-storage-backends", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
-}
-
 // ---------- search (validation mode) ----------
 
 export function searchKnowledge(params: {

@@ -7,7 +7,7 @@
  */
 import { createHandoffService } from "./handoff-service.js";
 import { createAiEmployeesService } from "./ai-employees-service.js";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,11 +20,6 @@ function readJsonFile(path, fallback) {
   } catch {
     return fallback;
   }
-}
-
-function writeJsonFile(path, value) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(value, null, 2) + "\n", "utf8");
 }
 
 export async function registerRoutes(server, ctx) {
@@ -244,23 +239,13 @@ export async function registerRoutes(server, ctx) {
     };
   });
 
+  // prompts.json 自 R2 起降级为「首次部署种子」：运行时提示词的权威源是
+  // customer_support.ai_employee_versions（已发布版本）。端点只读保留供
+  // 排障；写路径已删除——改 Prompt 请走 AI 员工版本管理（/ai-employees）。
   server.get("/customer-support/prompts", async (request, reply) => {
     const user = await requireUser(request, reply);
     if (!user) return;
     return readJsonFile(promptsPath, { default: null, contacts: {}, conversations: {} });
-  });
-
-  server.put("/customer-support/prompts", async (request, reply) => {
-    const user = await requireUser(request, reply);
-    if (!user) return;
-    const body = request.body ?? {};
-    const next = {
-      default: typeof body.default === "string" || body.default === null ? body.default : null,
-      contacts: body.contacts && typeof body.contacts === "object" ? body.contacts : {},
-      conversations: body.conversations && typeof body.conversations === "object" ? body.conversations : {},
-    };
-    writeJsonFile(promptsPath, next);
-    return next;
   });
 
   // -------- AI Employees (definitions, versions, workspace default, bindings) -------

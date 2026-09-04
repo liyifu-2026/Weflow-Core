@@ -27,7 +27,6 @@ const navItems = computed(() => {
   if (auth.isAdmin) {
     items.push(
       { to: "/ai-employees", icon: "agent", label: "AI员工" },
-      { to: "/pipeline", icon: "engine", label: "接待编排" },
       { to: "/admin", icon: "verify", label: "管理" },
       { to: "/settings", icon: "settings", label: "设置" },
       { to: "/system/status", icon: "runtime", label: "系统状态" },

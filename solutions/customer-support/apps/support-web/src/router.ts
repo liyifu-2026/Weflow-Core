@@ -10,7 +10,6 @@ import KnowledgeV2 from "./views/KnowledgeV2.vue";
 import AdminView from "./views/AdminView.vue";
 import AiEmployeesView from "./views/AiEmployeesView.vue";
 import WhitelistView from "./views/WhitelistView.vue";
-import PipelineView from "./views/PipelineView.vue";
 import ProfileView from "./views/ProfileView.vue";
 import AssetsView from "./views/AssetsView.vue";
 import LoginView from "./views/LoginView.vue";
@@ -91,12 +90,6 @@ export function createSupportRouter(pinia?: Pinia): Router {
             path: "whitelist",
             name: "whitelist",
             component: WhitelistView,
-            meta: { admin: true },
-          },
-          {
-            path: "pipeline",
-            name: "pipeline",
-            component: PipelineView,
             meta: { admin: true },
           },
           {

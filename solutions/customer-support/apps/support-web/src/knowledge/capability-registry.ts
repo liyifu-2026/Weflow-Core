@@ -49,14 +49,15 @@ export type ProductState =
   | "unsupported";
 
 /**
- * Baseline from the runtime capability audit (2026-08-11/12):
- * - models / vectorStores / storage: managed endpoints wired (G1) → available;
- *   datasources stays read_only (sync writes pending explicit need).
+ * Baseline from the runtime capability audit (2026-08-11/12), as of R2:
+ * - models / vectorStores / storage: managed admin endpoints were deleted
+ *   in R2 (admin via the upstream knowledge base's own console); the UI
+ *   lists them read-only or marks them not integrated.
+ * - datasources stays read_only (sync writes pending explicit need).
  * - activity: upstream blocks it with an independent scope check (403 even
  *   with full_access) → temporarily_unavailable.
  * - parser: upstream has no parser registry routes → unsupported.
- * - retrieval: upstream 200, Core whitelist missing tenants/kv → fixed by
- *   an explicit retrieval-settings contract (P0.2), then becomes available.
+ * - retrieval: Core /api/v1/admin/retrieval-settings contract → available.
  */
 const BASELINE: Record<KnowledgeCapability, KnowledgeCapabilityState> = {
   validate: {
@@ -118,23 +119,23 @@ const BASELINE: Record<KnowledgeCapability, KnowledgeCapabilityState> = {
   models: {
     capability: "models",
     upstream: "available",
-    serverContract: "available",
-    ui: "implemented",
-    reason: "managed create/delete via /admin/knowledge-models (G1)",
+    serverContract: "missing",
+    ui: "missing",
+    reason: "managed admin endpoints deleted in R2; manage models in the knowledge base console",
   },
   vectorStores: {
     capability: "vectorStores",
     upstream: "available",
-    serverContract: "available",
-    ui: "implemented",
-    reason: "managed create + connection test via /admin/knowledge-vector-stores (G1)",
+    serverContract: "missing",
+    ui: "missing",
+    reason: "managed admin endpoints deleted in R2; manage vector stores in the knowledge base console",
   },
   storage: {
     capability: "storage",
     upstream: "available",
-    serverContract: "available",
-    ui: "implemented",
-    reason: "managed create via /admin/knowledge-storage-backends (G1)",
+    serverContract: "missing",
+    ui: "missing",
+    reason: "managed admin endpoints deleted in R2; manage storage in the knowledge base console",
   },
   activity: {
     capability: "activity",

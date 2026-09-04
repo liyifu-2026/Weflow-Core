@@ -13,7 +13,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .test-dist/reception-plan.test.js"
+    "test": "tsc -p tsconfig.build.json --noEmit"
   },
   "dependencies": {
     "@weflow-leaif/contracts": "^1.0.0"
