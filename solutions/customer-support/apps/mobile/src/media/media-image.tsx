@@ -134,6 +134,7 @@ export function MediaImage({
       ]}
     >
       <Image
+        cachePolicy="memory"
         source={getMediaContentSource(session, mediaId)}
         style={[styles.image, style]}
         contentFit="contain"

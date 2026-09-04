@@ -168,6 +168,7 @@ export default function MeScreen() {
           >
             {session?.user.avatarUrl ? (
               <Image
+                cachePolicy="memory"
                 source={{
                   uri: `${apiBaseUrl}${session.user.avatarUrl}`,
                   headers: {

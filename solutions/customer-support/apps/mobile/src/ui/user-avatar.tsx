@@ -47,6 +47,7 @@ export function UserAvatar({
   }
   return (
     <Image
+      cachePolicy="memory"
       source={{
         uri: `${apiBaseUrl}/api/v1/contacts/${encodeURIComponent(contactId)}/avatar`,
         headers: { authorization: `Bearer ${sessionToken}` },

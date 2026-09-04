@@ -14,6 +14,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import * as Crypto from "expo-crypto";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
+import { prepareImageForUpload } from "@/media/prepare-image";
 import { Image } from "expo-image";
 import { ArrowDown } from "phosphor-react-native/src/icons/ArrowDown";
 import { ArrowLeft } from "phosphor-react-native/src/icons/ArrowLeft";
@@ -1220,12 +1221,13 @@ export default function ConversationScreen() {
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
       setMediaSending(true);
+      const prepared = await prepareImageForUpload(asset);
       const uploaded = await uploadMedia(
         session,
         id,
-        asset.uri,
-        asset.fileName ?? "image.jpg",
-        asset.mimeType ?? "image/jpeg",
+        prepared.uri,
+        prepared.fileName,
+        prepared.mimeType,
       );
       await send({
         mediaId: uploaded.mediaId,
@@ -2685,6 +2687,7 @@ function MessageAvatar({
   ) {
     return (
       <Image
+        cachePolicy="memory"
         source={{
           uri: `${apiBaseUrl}${avatarUrl}`,
           headers: { authorization: `Bearer ${sessionToken}` },
@@ -2710,6 +2713,7 @@ function MessageAvatar({
         <Text style={styles.messageAvatarAgentText}>A</Text>
       ) : kind === "manual" && avatarUrl && sessionToken ? (
         <Image
+          cachePolicy="memory"
           source={{
             uri: `${apiBaseUrl}${avatarUrl}`,
             headers: { authorization: `Bearer ${sessionToken}` },

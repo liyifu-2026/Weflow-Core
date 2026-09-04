@@ -62,6 +62,7 @@ export function MediaViewerModal({
         <View style={styles.mediaViewerStage}>
           {!failed ? (
             <Image
+              cachePolicy="memory"
               key={`${useThumbnail ? "thumb" : "original"}-${String(attempt)}`}
               source={
                 useThumbnail

@@ -257,6 +257,7 @@ export default function HandoffInboxScreen() {
               >
                 {session?.user.avatarUrl ? (
                   <Image
+                    cachePolicy="memory"
                     source={{
                       uri: `${apiBaseUrl}${session.user.avatarUrl}`,
                       headers: { authorization: `Bearer ${session.sessionToken}` },

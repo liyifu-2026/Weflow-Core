@@ -157,6 +157,7 @@ export function AvatarPickerSheet({
                   >
                     {preset.svgUrl && session ? (
                       <Image
+                        cachePolicy="memory"
                         source={{
                           uri: `${apiBaseUrl}${preset.svgUrl}`,
                           headers: {

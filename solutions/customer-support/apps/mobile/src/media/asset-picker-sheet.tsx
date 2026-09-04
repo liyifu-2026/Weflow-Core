@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
+import { prepareImageForUpload } from "./prepare-image";
 import * as DocumentPicker from "expo-document-picker";
 import { File } from "phosphor-react-native/src/icons/File";
 import { FolderOpen } from "phosphor-react-native/src/icons/FolderOpen";
@@ -156,11 +157,12 @@ export function AssetPickerSheet({
     setBusy(true);
     setNotice("");
     try {
+      const prepared = await prepareImageForUpload(asset);
       const uploaded = await uploadAsset(
         session,
-        asset.uri,
-        asset.fileName ?? `图片-${Date.now()}.jpg`,
-        asset.mimeType ?? "image/jpeg",
+        prepared.uri,
+        prepared.fileName,
+        prepared.mimeType,
       );
       onPicked(uploaded);
       onClose();
@@ -388,6 +390,7 @@ export function AssetPickerSheet({
                       >
                         {item.category === "image" ? (
                           <Image
+                            cachePolicy="memory"
                             source={
                               session
                                 ? assetContentSource(session, item.assetId)

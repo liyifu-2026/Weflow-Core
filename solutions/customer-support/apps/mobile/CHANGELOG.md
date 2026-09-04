@@ -11,6 +11,7 @@
 
 ### Changed
 
+- 图片隐私与性能批次：所有来自 Core 的图片（消息图、头像、素材缩略图、全屏查看）显式 `cachePolicy: "memory"`，修复此前磁盘缓存导致登出后客户图片仍留本机的隐私缺口（`clearMemoryCache` 现在完整生效）；上传前长边超 2048px 的图片自动等比压缩并归一化 JPEG（新增 `expo-image-manipulator`，指纹变化）。
 - API 客户端新增默认 20 秒请求超时（弱网下 loading 不再无限挂起；媒体上传单独 60 秒），超时提示「请求超时，网络不给力，请重试」。
 - 工程卫生批次：`app.json` 版本号对齐 package.json（0.8.0，修复「安全与关于」页显示旧版本）；移除 5 个零引用依赖（@ronradtke/react-native-markdown-display、expo-font、expo-web-browser、expo-device、expo-linking）；会话详情页日期分组与首字母头像的时间/字符工具收敛到 `src/ui/format.ts` 与 `initialFor()`，消除三处重复实现。
 - 全量对齐 Expo SDK 57 官方期望版本（19 个包，含 `expo` 57.0.20、`react-native` 0.86.3、`expo-notifications` 57.0.17、`expo-router` 57.0.19 等），消除生成代码的实验性 API 编译错误；此变更会改变 runtimeVersion 指纹（OTA 对旧安装自动失效，需安装新 APK 一次）。

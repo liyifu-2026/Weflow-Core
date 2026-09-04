@@ -297,6 +297,7 @@ export function TransferSheet({
                     >
                       {item.type === "user" && item.avatarUrl && session ? (
                         <Image
+                          cachePolicy="memory"
                           source={{
                             uri: `${apiBaseUrl}${item.avatarUrl}`,
                             headers: { authorization: `Bearer ${session.sessionToken}` },
