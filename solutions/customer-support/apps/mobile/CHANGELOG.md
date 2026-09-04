@@ -11,6 +11,8 @@
 
 ### Changed
 
+- 全量对齐 Expo SDK 57 官方期望版本（19 个包，含 `expo` 57.0.20、`react-native` 0.86.3、`expo-notifications` 57.0.17、`expo-router` 57.0.19 等），消除生成代码的实验性 API 编译错误；此变更会改变 runtimeVersion 指纹（OTA 对旧安装自动失效，需安装新 APK 一次）。
+- 手机端实体目录迁移至 `C:\dev\mobile`（原 `apps\mobile` 位置留 junction 兼容），根治 Windows 构建工具链长路径限制；`nodeLinker: hoisted` 固化进 `pnpm-workspace.yaml`。
 - 移除三个未使用的超前沿依赖（@expo/ui、expo-glass-effect、expo-symbols）：业务代码零引用，收紧依赖安装与审计面。
 - 群聊支持第一版：会话列表/会话头识别群聊（Users 图标 + 「群聊」标注），群聊气泡显示发送者昵称；群内 @ 触发回复三层兜底（@昵称 → @wxid → 群聊含 @ 降级）；接待编排页新增「群聊策略」节点（触发模式 / 关键词 / 冷却护栏 / 群聊附加指令 / 单群覆盖）。未设群名的群显示「群聊 xxxxx」（群号后 5 位），不再露裸 ID。
 - 语音消息气泡改为微信式独立气泡：不再嵌套在文本消息气泡内，转写文字显示在语音气泡下方的独立矩形中；客服/Agent 侧语音气泡为品牌蓝底白字，与文本消息方向一致。
