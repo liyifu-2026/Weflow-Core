@@ -65,6 +65,17 @@ function displayName(item: ContactItem): string {
   );
 }
 
+/**
+ * 最近消息展示兜底（ISS-003）：上游消息原文可能含 HTML 片段或以内部
+ * user_id 开头/整条就是内部 id（ISS C-1），列表里只做纯文本摘要——
+ * 剥标签、隐藏内部 id、超长截断。原文以详情/会话页为准。
+ */
+function latestMessageSummary(text: string): string {
+  const stripped = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  if (/^user_[A-Za-z0-9]+/.test(stripped)) return "消息内容暂不可见";
+  return stripped.length > 60 ? `${stripped.slice(0, 60)}…` : stripped;
+}
+
 async function load(reset = true) {
   if (reset) {
     loading.value = true;
@@ -229,7 +240,7 @@ onMounted(() => {
         </div>
         <div class="flex min-w-0 items-center gap-2">
           <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-            {{ item.latestMessageText || "暂无消息" }}
+            {{ item.latestMessageText ? latestMessageSummary(item.latestMessageText) : "暂无消息" }}
           </span>
           <span v-if="item.latestMessageAt" class="shrink-0 text-xs text-muted-foreground">
             {{ new Date(item.latestMessageAt).toLocaleString() }}

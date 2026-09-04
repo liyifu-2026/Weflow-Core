@@ -7,7 +7,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import { eventTypeLabel } from "../labels";
+import { eventTypeLabel, subjectTypeLabel } from "../labels";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import {
@@ -307,7 +307,7 @@ onMounted(() => {
           </div>
           <div class="space-y-1">
             <p class="text-xs text-muted-foreground">对象</p>
-            <p>{{ selectedEvent.subjectType }}</p>
+            <p>{{ subjectTypeLabel(selectedEvent.subjectType) }}</p>
           </div>
           <div class="space-y-1">
             <p class="text-xs text-muted-foreground">时间</p>

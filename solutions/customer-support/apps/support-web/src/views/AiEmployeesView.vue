@@ -651,7 +651,15 @@ onMounted(load);
             >
               <div class="min-w-0">
                 <p class="truncate text-sm font-medium">{{ contactLabel(contact) }}</p>
-                <p class="truncate font-mono text-xs text-muted-foreground">
+                <!--
+                  contactId 是内部通道标识（contact:channel:wxid_...），对客服无意义：
+                  仅当它是人类可读的短 id（不含冒号）时展示，否则 hover 看原文（ISS C-1）
+                -->
+                <p
+                  v-if="!contact.contactId.includes(':')"
+                  class="truncate font-mono text-xs text-muted-foreground"
+                  :title="contact.contactId"
+                >
                   {{ contact.contactId }}
                 </p>
               </div>

@@ -201,15 +201,10 @@ function contactItemDisplayName(item: Record<string, any>): string {
       <template v-else-if="conversationPermissionsEnabled">
         <div v-for="section in queueSections" :key="section.key">
           <div class="flex items-center gap-1.5 px-3 pb-1 pt-2.5">
+            <!-- Zinc 克制：待办分区用 foreground 强调，destructive 红仅留给错误/危险 -->
             <span
               class="text-xs font-semibold"
-              :class="
-                section.tone === 'attention'
-                  ? 'text-destructive'
-                  : section.tone === 'mine'
-                    ? 'text-foreground'
-                    : 'text-muted-foreground'
-              "
+              :class="section.tone === 'others' ? 'text-muted-foreground' : 'text-foreground'"
             >{{ section.title }}</span>
             <span class="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-muted px-1 text-[11px] font-medium text-muted-foreground">
               {{ section.items.length }}
@@ -233,8 +228,7 @@ function contactItemDisplayName(item: Record<string, any>): string {
                 <span v-if="isGroup(item)" class="shrink-0 rounded-sm bg-secondary px-1 text-[10px] font-medium text-secondary-foreground">群</span>
                 <span
                   v-if="item.handoff?.status === 'pending' || item.riskLevel === 'high'"
-                  class="shrink-0 text-xs font-semibold"
-                  :class="item.handoff?.status === 'pending' ? 'text-destructive' : 'text-destructive/90'"
+                  class="shrink-0 text-xs font-semibold text-foreground"
                 >{{ item.handoff?.status === "pending" ? "待接手" : riskLabel(item.riskLevel) }}</span>
                 <span v-else class="shrink-0 text-xs text-muted-foreground tabular-nums">
                   {{ rowTimeLabel(item.latestMessageAt || item.matchedMessage?.occurredAt) }}
@@ -244,7 +238,7 @@ function contactItemDisplayName(item: Record<string, any>): string {
                 <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">{{ rowSummary(item) }}</span>
                 <span
                   v-if="Number(item.unreadCustomerCount || 0) > 0"
-                  class="inline-flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-white"
+                  class="inline-flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground"
                 >{{ Number(item.unreadCustomerCount) > 99 ? "99+" : item.unreadCustomerCount }}</span>
               </span>
             </span>

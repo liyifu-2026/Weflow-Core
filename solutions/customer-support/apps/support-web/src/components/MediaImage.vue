@@ -8,6 +8,7 @@
  * instead of guessing from text.
  */
 import { onMounted, onUnmounted, ref } from "vue";
+import { X } from "lucide-vue-next";
 
 const props = defineProps<{ mediaId: string; alt?: string }>();
 
@@ -62,45 +63,55 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <span class="wf-media-message">
-    <span v-if="state === 'loading'" class="wf-media-placeholder">
+  <span class="inline-flex">
+    <span
+      v-if="state === 'loading'"
+      class="inline-flex items-center rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground"
+    >
       正在加载图片…
     </span>
-    <span v-else-if="state === 'failed'" class="wf-media-placeholder">
+    <span
+      v-else-if="state === 'failed'"
+      class="inline-flex items-center rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground"
+    >
       图片暂时无法加载
     </span>
     <button
       v-else
-      class="wf-media-thumb"
+      class="block cursor-pointer overflow-hidden rounded-md transition-colors"
       type="button"
       :aria-label="alt || '查看图片'"
       @click="openFullscreen"
     >
-      <img :src="objectUrl" :alt="alt || '客户发送的图片'" />
+      <img
+        :src="objectUrl"
+        :alt="alt || '客户发送的图片'"
+        class="block max-h-48 max-w-60 object-cover"
+      />
     </button>
   </span>
 
-  <button
-    v-if="fullscreen"
-    class="wf-drawer-backdrop"
-    aria-label="关闭图片"
-    @click="fullscreen = false"
-  ></button>
-  <div
-    v-if="fullscreen"
-    class="wf-media-fullscreen"
-    role="dialog"
-    aria-modal="true"
-    @click="fullscreen = false"
-  >
-    <img
-      :src="fullscreenUrl || objectUrl"
-      :alt="alt || '客户发送的图片'"
-      @click.stop
-    />
-    <button class="wf-icon-button wf-media-close" aria-label="关闭" @click="fullscreen = false">
-      ×
-    </button>
-  </div>
+  <Teleport to="body">
+    <div
+      v-if="fullscreen"
+      class="fixed inset-0 z-100 flex items-center justify-center bg-black/70"
+      role="dialog"
+      aria-modal="true"
+      @click="fullscreen = false"
+    >
+      <img
+        :src="fullscreenUrl || objectUrl"
+        :alt="alt || '客户发送的图片'"
+        class="max-h-[86vh] max-w-[90vw] rounded-md object-contain"
+        @click.stop
+      />
+      <button
+        class="absolute top-4 right-4 inline-flex h-9 w-9 items-center justify-center rounded-full bg-background/80 text-foreground transition-colors hover:bg-background"
+        aria-label="关闭"
+        @click="fullscreen = false"
+      >
+        <X :size="18" />
+      </button>
+    </div>
+  </Teleport>
 </template>
-

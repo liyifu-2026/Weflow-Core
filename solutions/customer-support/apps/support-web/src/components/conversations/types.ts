@@ -93,7 +93,10 @@ export function riskLabel(risk?: string | null) {
 
 export function rowSummary(item: Conversation): string {
   const text = item.latestMessage?.text || item.matchedMessage?.text || "";
-  return text.trim() || "暂无消息";
+  const trimmed = text.trim();
+  // 上游偶发把内部 user_id 当消息文本落库（ISS C-1）：列表里不展示原始 id
+  if (/^user_[A-Za-z0-9]+$/.test(trimmed)) return "消息内容暂不可见";
+  return trimmed || "暂无消息";
 }
 
 export function rowTimeLabel(value?: string): string {

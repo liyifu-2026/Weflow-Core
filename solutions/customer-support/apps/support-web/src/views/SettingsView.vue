@@ -111,19 +111,3 @@ function select(key: SectionKey) {
     </div>
   </div>
 </template>
-
-<style>
-/*
- * 兼容垫片（第 6 批删除 console-shared.css 时一并移除）：legacy 样式表中
- * 未分层的 `button { color: inherit }` 优先于 @layer utilities 的工具类，
- * 导致 text-primary-foreground / text-secondary-foreground 在 button 元素上
- * 失效（default 按钮黑底配深字、暗色对比异常）。此处把关键前景色工具类
- * 提升到无层上下文恢复语义色。
- */
-button[data-slot="button"].text-primary-foreground {
-  color: var(--primary-foreground);
-}
-button[data-slot="button"].text-secondary-foreground {
-  color: var(--secondary-foreground);
-}
-</style>

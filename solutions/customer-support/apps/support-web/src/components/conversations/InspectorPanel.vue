@@ -367,7 +367,13 @@ function historyActorLabel(message: Message) {
             <span class="w-12 shrink-0 text-xs text-muted-foreground tabular-nums">
               {{ item.latestMessageAt ? new Date(item.latestMessageAt).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }) : "—" }}
             </span>
-            <span class="min-w-0 flex-1 truncate text-sm">{{ item.latestMessageText || "暂无消息" }}</span>
+            <span class="min-w-0 flex-1 truncate text-sm">{{
+              item.latestMessageText
+                ? /^user_[A-Za-z0-9]+$/.test(item.latestMessageText.trim())
+                  ? "消息内容暂不可见"
+                  : item.latestMessageText
+                : "暂无消息"
+            }}</span>
             <span v-if="item.conversationId === historySelectedId" class="shrink-0 text-xs text-muted-foreground">当前</span>
           </button>
           <Button

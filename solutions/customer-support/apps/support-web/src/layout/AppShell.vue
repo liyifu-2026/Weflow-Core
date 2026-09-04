@@ -65,10 +65,7 @@ watch(
 );
 
 function applyTheme() {
-  // 新样式走 .dark 类策略；data-theme 兼容尚未重写的旧 wf-* 页面，
-  // 第 6 批删除 console-shared.css 后一并移除。
   document.documentElement.classList.toggle("dark", theme.value === "dark");
-  document.documentElement.dataset.theme = theme.value;
   document.documentElement.style.colorScheme = theme.value;
 }
 function toggleTheme() {

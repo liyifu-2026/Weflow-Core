@@ -9,6 +9,7 @@
  * placeholder; the transcription still displays if available.
  */
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { Pause, Play } from "lucide-vue-next";
 
 const props = defineProps<{ mediaId: string; alt?: string }>();
 
@@ -121,7 +122,7 @@ function togglePlay() {
 
 const durationLabel = computed(() =>
   durationSeconds.value == null
-    ? "--″"
+    ? '--″'
     : `${Math.max(1, Math.round(durationSeconds.value))}″`,
 );
 
@@ -133,137 +134,42 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <span class="wf-voice-message">
-    <span v-if="state === 'loading'" class="wf-media-placeholder">
+  <span class="inline-flex max-w-[260px] flex-col gap-1">
+    <span
+      v-if="state === 'loading'"
+      class="inline-flex items-center rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground"
+    >
       正在加载语音…
     </span>
-    <span v-else-if="state === 'failed'" class="wf-media-placeholder">
+    <span
+      v-else-if="state === 'failed'"
+      class="inline-flex items-center rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground"
+    >
       语音暂时无法加载
     </span>
-    <span v-else-if="state === 'silk'" class="wf-media-placeholder"
-      >〔语音消息〕无法播放</span
+    <span
+      v-else-if="state === 'silk'"
+      class="inline-flex items-center rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground"
     >
+      〔语音消息〕无法播放
+    </span>
     <button
       v-else
-      class="wf-voice-bubble"
+      class="inline-flex min-w-24 max-w-55 items-center gap-2 rounded-md bg-muted px-3 py-2 text-foreground transition-colors hover:bg-accent"
       type="button"
       :aria-label="playing ? '暂停语音' : '播放语音'"
       @click="togglePlay"
     >
-      <span class="wf-voice-icon" aria-hidden="true">
-        <svg
-          v-if="!playing"
-          viewBox="0 0 22 22"
-          width="20"
-          height="20"
-          fill="currentColor"
-        >
-          <rect x="2" y="9" width="3" height="4" rx="1" />
-          <rect x="7" y="6" width="3" height="10" rx="1" />
-          <rect x="12" y="3" width="3" height="16" rx="1" />
-          <rect x="17" y="8" width="3" height="6" rx="1" />
-        </svg>
-        <svg
-          v-else
-          class="wf-voice-wave-playing"
-          viewBox="0 0 22 22"
-          width="20"
-          height="20"
-          fill="currentColor"
-        >
-          <rect x="2" y="9" width="3" height="4" rx="1" class="wf-wave-bar b1" />
-          <rect x="7" y="6" width="3" height="10" rx="1" class="wf-wave-bar b2" />
-          <rect x="12" y="3" width="3" height="16" rx="1" class="wf-wave-bar b3" />
-          <rect x="17" y="8" width="3" height="6" rx="1" class="wf-wave-bar b4" />
-        </svg>
-      </span>
-      <span class="wf-voice-duration">{{ durationLabel }}</span>
+      <component
+        :is="playing ? Pause : Play"
+        :size="18"
+        aria-hidden="true"
+        class="shrink-0 text-foreground"
+      />
+      <span class="text-xs tabular-nums text-muted-foreground">{{ durationLabel }}</span>
     </button>
-    <span v-if="transcription" class="wf-voice-transcription">{{
+    <span v-if="transcription" class="text-xs leading-snug text-muted-foreground">{{
       transcription
     }}</span>
   </span>
 </template>
-
-<style scoped>
-.wf-voice-message {
-  display: inline-flex;
-  flex-direction: column;
-  gap: 4px;
-  max-width: 260px;
-}
-.wf-voice-bubble {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 96px;
-  max-width: 220px;
-  padding: 8px 12px;
-  border: 0;
-  border-radius: 12px;
-  background: var(--wf-surface-soft);
-  color: var(--wf-text);
-  cursor: pointer;
-  font: inherit;
-}
-.wf-voice-bubble:hover {
-  background: var(--wf-surface-hover);
-}
-/* 播放中波形动画（微信式） */
-.wf-wave-bar {
-  transform-origin: center;
-  animation: wf-wave-bounce 0.9s ease-in-out infinite;
-}
-.wf-wave-bar.b1 {
-  animation-delay: 0s;
-}
-.wf-wave-bar.b2 {
-  animation-delay: 0.15s;
-}
-.wf-wave-bar.b3 {
-  animation-delay: 0.3s;
-}
-.wf-wave-bar.b4 {
-  animation-delay: 0.45s;
-}
-@keyframes wf-wave-bounce {
-  0%,
-  100% {
-    transform: scaleY(0.55);
-  }
-  50% {
-    transform: scaleY(1);
-  }
-}
-.wf-voice-wave-playing {
-  animation: wf-voice-pulse 0.9s ease-in-out infinite;
-}
-@keyframes wf-voice-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-.wf-voice-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  font-size: 11px;
-}
-.wf-voice-duration {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--wf-text-secondary);
-}
-.wf-voice-transcription {
-  font-size: 12px;
-  color: var(--wf-text-secondary);
-  line-height: 1.4;
-}
-</style>
-

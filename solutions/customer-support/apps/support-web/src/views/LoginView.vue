@@ -16,12 +16,10 @@ const password = ref("");
 const submitting = ref(false);
 const error = ref("");
 
-// 本页不经 AppShell；过渡期旧 CSS 的 body 背景跟随 data-theme，
-// 需自行同步（第 6 批删除 console-shared.css 后移除）。
+// 本页不经 AppShell；独立页需自行恢复主题偏好。
 onMounted(() => {
   const dark = localStorage.getItem("wf-theme") === "dark";
   document.documentElement.classList.toggle("dark", dark);
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
   document.documentElement.style.colorScheme = dark ? "dark" : "light";
 });
 

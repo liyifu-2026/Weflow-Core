@@ -193,7 +193,10 @@ const EVENT_LABELS: Record<string, string> = {
   "handoff.created": "发起人工处理",
   "handoff.transferred": "转交会话",
   "identity.login_failed": "登录失败",
+  // Core identity-service 实际落库枚举是 login_succeeded；login_success 兼容旧数据
+  "identity.login_succeeded": "登录成功",
   "identity.login_success": "登录成功",
+  "identity.logout": "退出登录",
   "identity.password_changed": "修改密码",
   "knowledge.workspace_search": "检索知识",
   "knowledge.evidence_viewed": "查看回答依据",
@@ -208,6 +211,38 @@ const EVENT_LABELS: Record<string, string> = {
 export function eventTypeLabel(eventType: string | undefined | null): string {
   if (!eventType) return "执行了操作";
   return EVENT_LABELS[eventType.toLowerCase()] ?? `执行了 ${eventType}`;
+}
+
+// ---------- audit subject types ----------
+// 与 Core 各模块 audit 落库枚举对齐（session/user/message/...）
+
+const SUBJECT_LABELS: Record<string, string> = {
+  asset: "素材",
+  collaboration_request: "协作请求",
+  contact_profile: "客户资料",
+  conversation: "会话",
+  handoff_event: "人工处理事件",
+  knowledge_chat: "知识对话",
+  knowledge_draft: "知识草稿",
+  knowledge_feedback: "知识反馈",
+  knowledge_provider: "知识提供方",
+  knowledge_retrieval: "知识检索",
+  knowledge_search: "知识搜索",
+  knowledge_thread: "知识线程",
+  memory: "记忆",
+  message: "消息",
+  model_registry: "模型注册",
+  model_settings: "模型设置",
+  model_slot: "模型槽位",
+  runtime_settings: "运行时设置",
+  session: "登录会话",
+  user: "用户账号",
+  user_login: "用户登录",
+};
+
+export function subjectTypeLabel(subjectType: string | undefined | null): string {
+  if (!subjectType) return "—";
+  return SUBJECT_LABELS[subjectType.toLowerCase()] ?? subjectType;
 }
 
 // ---------- health ----------

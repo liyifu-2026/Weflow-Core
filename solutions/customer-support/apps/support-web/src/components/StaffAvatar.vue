@@ -5,8 +5,7 @@
  * 优先级（与平台默认头像体系一致）：
  * 1. avatarUrl / GET /api/v1/users/:userId/avatar（cookie 鉴权）→ Blob → <img>
  * 2. 平台预设头像（DiceBear Blobs，GET /api/v1/users/avatar-presets），
- *    按显示名哈希稳定分配 —— 与 Console DefaultAvatar、Core
- *    identity/application/avatar-presets 同源同算法。
+ *    按显示名哈希稳定分配 —— 与 Core identity/application/avatar-presets 同源同算法。
  * 3. 预设清单不可用时降级为首字母占位。
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
@@ -40,7 +39,7 @@ onMounted(() => {
       presets.value = list;
     })
     .catch(() => {
-      // 预设清单不可用：保持首字母占位（与 Console DefaultAvatar 一致）
+      // 预设清单不可用：保持首字母占位
     });
 });
 
@@ -91,14 +90,14 @@ onUnmounted(() => {
 
 <template>
   <span
-    class="wf-staff-avatar"
+    class="inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted"
     :style="{ width: `${size}px`, height: `${size}px` }"
   >
     <img
       v-if="state === 'ready'"
       :src="objectUrl"
       :alt="fallbackText"
-      class="wf-staff-avatar-img"
+      class="block h-full w-full rounded-full object-cover"
     />
     <img
       v-else-if="presetImage"
@@ -106,43 +105,14 @@ onUnmounted(() => {
       :width="size"
       :height="size"
       alt=""
-      class="wf-staff-avatar-img"
+      class="block h-full w-full rounded-full object-cover"
     />
     <span
       v-else
-      class="wf-staff-avatar-fallback"
-      :style="{ width: `${size}px`, height: `${size}px` }"
+      class="inline-flex items-center justify-center rounded-full font-semibold text-primary"
+      :style="{ width: `${size}px`, height: `${size}px`, fontSize: `${Math.max(10, Math.round(size * 0.42))}px` }"
     >
       {{ fallbackLetter }}
     </span>
   </span>
 </template>
-
-<style scoped>
-.wf-staff-avatar {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  border-radius: 50%;
-}
-.wf-staff-avatar-img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  object-fit: cover;
-}
-.wf-staff-avatar-fallback {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: #e8f0fe;
-  color: #1a56c4;
-  font-weight: 700;
-  font-size: 0.7em;
-  line-height: 1;
-}
-</style>

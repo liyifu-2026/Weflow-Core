@@ -4,8 +4,8 @@
  *
  * contactId → authenticated fetch (cookie) → Blob → object URL → <img>.
  * Missing contactId or any fetch failure renders the first character of
- * fallbackText in the standard .wf-avatar letter block, keeping the same
- * placeholder look as before. The object URL is revoked on unmount.
+ * fallbackText as a muted letter block, keeping the same placeholder look.
+ * The object URL is revoked on unmount.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 
@@ -56,37 +56,20 @@ onUnmounted(() => {
 
 <template>
   <span
-    class="wf-avatar-image"
+    class="inline-flex shrink-0 items-center justify-center overflow-hidden"
     :style="{ width: `${size}px`, height: `${size}px` }"
   >
     <img
       v-if="state === 'ready'"
       :src="objectUrl"
       :alt="fallbackText"
-      class="wf-avatar-img"
+      class="block h-full w-full rounded-md object-cover"
     />
     <span
       v-else
-      class="wf-avatar"
-      :style="{ width: `${size}px`, height: `${size}px` }"
+      class="inline-flex h-full w-full items-center justify-center rounded-md bg-muted font-semibold text-muted-foreground"
+      :style="{ fontSize: `${Math.max(10, Math.round(size * 0.42))}px` }"
       >{{ fallbackLetter }}</span
     >
   </span>
 </template>
-
-<style scoped>
-.wf-avatar-image {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-.wf-avatar-img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border-radius: 9px;
-  object-fit: cover;
-}
-</style>

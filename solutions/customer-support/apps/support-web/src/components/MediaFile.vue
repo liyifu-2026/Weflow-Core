@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Authenticated file message card（微信式文件卡片 + 圆形下载进度）.
+ * Authenticated file message card（文件卡片 + 圆形下载进度）.
  *
  * mediaId → authenticated fetch（流式读取）→ Blob → 下载/打开。
  * 圆形进度环：content-length 可用时按字节推进，不可用时转圈不定进度。
@@ -8,6 +8,7 @@
  * 提供「打开预览」。
  */
 import { computed, onMounted, ref } from "vue";
+import { Download } from "lucide-vue-next";
 
 const props = defineProps<{
   mediaId: string;
@@ -174,52 +175,58 @@ onMounted(loadMetadata);
 </script>
 
 <template>
-  <div class="wf-file-wrap">
+  <div class="flex min-w-0 flex-col gap-1">
     <button
-      class="wf-file-card"
+      class="flex w-60 max-w-full items-center gap-2.5 rounded-md border border-border bg-background p-2.5 text-left transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-85"
       type="button"
       :aria-label="alt || `下载文件 ${fileName || ''}`"
       :disabled="state === 'loading'"
       @click="download"
     >
-      <span class="wf-file-icon-wrap">
-        <span class="wf-file-icon" data-type>{{ iconGlyph }}</span>
-        <!-- 圆形进度环（微信式）：下载中覆盖在图标上 -->
+      <span class="relative inline-flex h-9 w-9 shrink-0 items-center justify-center">
+        <span
+          class="inline-flex h-9 w-9 items-center justify-center rounded-md bg-primary text-[11px] font-semibold text-primary-foreground"
+        >{{ iconGlyph }}</span>
+        <!-- 圆形进度环：下载中覆盖在图标上 -->
         <svg
           v-if="state === 'loading'"
-          class="wf-file-progress"
+          class="absolute -inset-0.75 h-11 w-11"
           viewBox="0 0 36 36"
           aria-hidden="true"
         >
           <circle
-            class="wf-file-progress-track"
+            class="stroke-border"
             cx="18"
             cy="18"
             r="15.5"
             fill="none"
+            stroke-width="2.5"
           />
           <circle
             v-if="percent !== null"
-            class="wf-file-progress-bar"
+            class="stroke-foreground"
             cx="18"
             cy="18"
             r="15.5"
             fill="none"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            transform="rotate(-90 18 18)"
             :stroke-dasharray="`${2 * Math.PI * 15.5}`"
             :stroke-dashoffset="`${2 * Math.PI * 15.5 * (1 - (progress ?? 0))}`"
           />
           <text
             v-if="percent !== null"
-            class="wf-file-progress-text"
+            class="fill-foreground text-[9px] font-semibold"
             x="18"
             y="22"
             text-anchor="middle"
           >{{ percent }}%</text>
         </svg>
       </span>
-      <span class="wf-file-body">
-        <span class="wf-file-name">{{ fileName || "附件" }}</span>
-        <span class="wf-file-meta">
+      <span class="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span class="truncate text-[13px] leading-tight text-foreground">{{ fileName || "附件" }}</span>
+        <span class="text-xs text-muted-foreground">
           {{
             state === "loading"
               ? percent === null
@@ -231,11 +238,16 @@ onMounted(loadMetadata);
           }}
         </span>
       </span>
-      <span v-if="state !== 'loading'" class="wf-file-arrow" aria-hidden="true">↓</span>
+      <Download
+        v-if="state !== 'loading'"
+        :size="16"
+        aria-hidden="true"
+        class="shrink-0 text-muted-foreground"
+      />
     </button>
     <button
       v-if="state === 'ready' && canPreview"
-      class="wf-file-preview"
+      class="self-start px-0.5 text-xs text-muted-foreground underline-offset-4 transition-colors hover:text-foreground hover:underline"
       type="button"
       @click="preview"
     >
@@ -243,114 +255,3 @@ onMounted(loadMetadata);
     </button>
   </div>
 </template>
-
-<style scoped>
-.wf-file-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-.wf-file-card {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 240px;
-  max-width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--wf-border, #e5e6eb);
-  border-radius: 8px;
-  background: var(--wf-surface, #fff);
-  cursor: pointer;
-  text-align: left;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
-}
-.wf-file-card:hover {
-  background: var(--wf-surface-hover, #f7f8fa);
-}
-.wf-file-card:disabled {
-  cursor: default;
-  opacity: 0.85;
-}
-.wf-file-icon-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 38px;
-  height: 38px;
-}
-.wf-file-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 6px;
-  background: #4f7cff;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-.wf-file-progress {
-  position: absolute;
-  inset: -3px;
-  width: 44px;
-  height: 44px;
-}
-.wf-file-progress-track {
-  stroke: rgba(79, 124, 255, 0.25);
-  stroke-width: 2.5;
-}
-.wf-file-progress-bar {
-  stroke: #4f7cff;
-  stroke-width: 2.5;
-  stroke-linecap: round;
-  transform: rotate(-90deg);
-  transform-origin: center;
-  transition: stroke-dashoffset 0.2s ease;
-}
-.wf-file-progress-text {
-  fill: #4f7cff;
-  font-size: 9px;
-  font-weight: 600;
-}
-.wf-file-body {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-.wf-file-name {
-  font-size: 13px;
-  line-height: 1.35;
-  color: var(--wf-text, #1f2329);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.wf-file-meta {
-  font-size: 11px;
-  color: var(--wf-text-secondary, #8a8f99);
-}
-.wf-file-arrow {
-  flex: 0 0 auto;
-  color: var(--wf-text-secondary, #8a8f99);
-  font-size: 14px;
-}
-.wf-file-preview {
-  align-self: flex-start;
-  border: none;
-  background: none;
-  padding: 0 2px;
-  font-size: 11px;
-  color: #4f7cff;
-  cursor: pointer;
-}
-.wf-file-preview:hover {
-  text-decoration: underline;
-}
-</style>

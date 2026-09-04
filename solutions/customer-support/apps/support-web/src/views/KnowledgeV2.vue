@@ -241,6 +241,18 @@ onMounted(() => {
         </AlertDescription>
       </Alert>
 
+      <!-- 未发起验证时的空态兜底（避免大片空白） -->
+      <div
+        v-if="!searching && !searched && !error"
+        class="flex flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border py-16 text-center"
+      >
+        <Search class="size-6 text-muted-foreground/60" />
+        <p class="text-sm font-medium">输入客户问题开始验证</p>
+        <p class="max-w-sm text-xs text-muted-foreground">
+          系统将检索知识库并返回可引用的回答依据，用于核对 Agent 回答是否有出处。
+        </p>
+      </div>
+
       <section v-if="searching || result || searched" class="flex flex-col gap-3">
         <div>
           <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">回答依据</p>
