@@ -34,6 +34,10 @@ export function actionErrorCopy(
       message: "无需重复提交",
     },
     queue_not_found: { title: "协作组不可用" },
+    network_timeout: {
+      title: "请求超时",
+      message: "网络不给力，请重试",
+    },
     not_queue_member: { title: "你不在该协作组" },
     revision_conflict: {
       title: "会话已有新内容",

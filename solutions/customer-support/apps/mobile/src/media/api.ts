@@ -50,6 +50,9 @@ export function getMediaOriginalContentSource(
   };
 }
 
+/** 上传超时：图片/文件在网络差时耗时显著高于普通请求，取宽松值 */
+const UPLOAD_TIMEOUT_MS = 60_000;
+
 /** 上传媒体文件到 POST /api/v1/media，返回 mediaId 和媒体元信息 */
 export async function uploadMedia(
   session: MobileSession,
@@ -66,15 +69,28 @@ export async function uploadMedia(
   } as unknown as Blob);
   formData.append("conversationId", conversationId);
 
-  const response = await fetch(`${apiBaseUrl}/api/v1/media`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${session.sessionToken}`,
-      accept: "application/json",
-      // FormData 会自动设置 Content-Type 及 boundary，不可手动指定
-    },
-    body: formData,
-  });
+  const timeoutController = new AbortController();
+  const timer = setTimeout(() => timeoutController.abort(), UPLOAD_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl}/api/v1/media`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.sessionToken}`,
+        accept: "application/json",
+        // FormData 会自动设置 Content-Type 及 boundary，不可手动指定
+      },
+      body: formData,
+      signal: timeoutController.signal,
+    });
+  } catch (error) {
+    if (timeoutController.signal.aborted) {
+      throw new Error("media_upload_timeout");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as {
       error?: string;
