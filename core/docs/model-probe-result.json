@@ -1,0 +1,142 @@
+{
+  "probedAt": "2026-09-04T21:12:10.509Z",
+  "baseUrl": "https://api.deepseek.com",
+  "model": "deepseek-v4-flash",
+  "results": [
+    {
+      "label": "baseline-current-glm-thinking+json+8k",
+      "ok": true,
+      "latencyMs": 246,
+      "finishReason": "stop",
+      "contentLength": 152,
+      "contentPreview": "{\"next_action\":\"reply\",\"reply_text\":\"别着急，新买的耳机出现这种情况确实挺烦心的。建议您先试试重新配对蓝牙，或者清理一下耳机和充电盒的触点。如果还是不行，因为才买几天，直接联系卖家或官方售后申请退换货就好",
+      "hasReasoning": true,
+      "reasoningLength": 401,
+      "usage": {
+        "prompt_tokens": 145,
+        "completion_tokens": 287,
+        "total_tokens": 432,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 208
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 145
+      }
+    },
+    {
+      "label": "no-thinking-param+json+8k",
+      "ok": true,
+      "latencyMs": 169,
+      "finishReason": "stop",
+      "contentLength": 142,
+      "contentPreview": "{\"next_action\":\"reply\",\"reply_text\":\"您先别着急。请问耳机是什么品牌的呢？一般来说，如果是质量问题且在保修期内，可以联系官方售后申请退换或维修。建议您先尝试重新配对、清洁触点，排除临时故障。如果无效，保留",
+      "hasReasoning": true,
+      "reasoningLength": 29,
+      "usage": {
+        "prompt_tokens": 145,
+        "completion_tokens": 87,
+        "total_tokens": 232,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 16
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 17
+      }
+    },
+    {
+      "label": "glm-thinking-disabled+json+8k",
+      "ok": true,
+      "latencyMs": 88,
+      "finishReason": "stop",
+      "contentLength": 86,
+      "contentPreview": "{\"next_action\":\"reply\",\"reply_text\":\"别担心，先检查一下是不是没电或连接问题。如果不行，建议联系卖家申请售后，三天内一般可以退换的。\"}",
+      "hasReasoning": false,
+      "reasoningLength": 0,
+      "usage": {
+        "prompt_tokens": 66,
+        "completion_tokens": 40,
+        "total_tokens": 106,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 66
+      }
+    },
+    {
+      "label": "enable_thinking+json+8k",
+      "ok": true,
+      "latencyMs": 89,
+      "finishReason": "stop",
+      "contentLength": 129,
+      "contentPreview": "{\"next_action\":\"reply\",\"reply_text\":\"建议立即联系卖家处理，三天的耳机出现单侧无声大概率是质量问题，可以直接要求退换货。如果是在线上购买的，在订单里申请售后即可；实体店也可以拿着小票回去处理。别自己拆修，",
+      "hasReasoning": true,
+      "reasoningLength": 570,
+      "usage": {
+        "prompt_tokens": 145,
+        "completion_tokens": 348,
+        "total_tokens": 493,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 284
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 17
+      }
+    },
+    {
+      "label": "max_tokens-16384",
+      "ok": true,
+      "latencyMs": 87,
+      "finishReason": "stop",
+      "contentLength": 102,
+      "contentPreview": "{\"next_action\":\"reply\",\"reply_text\":\"别着急，可以先试试把耳机重新配对或清洁一下触点；如果确定是质量问题，因为才买一周还在退换期内，建议直接联系商家申请换新或退货。\"}",
+      "hasReasoning": true,
+      "reasoningLength": 318,
+      "usage": {
+        "prompt_tokens": 125,
+        "completion_tokens": 222,
+        "total_tokens": 347,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 173
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 125
+      }
+    },
+    {
+      "label": "complex-scenario-8k",
+      "ok": true,
+      "latencyMs": 87,
+      "finishReason": "stop",
+      "contentLength": 259,
+      "contentPreview": "{\"next_action\":\"handoff\",\"reply_text\":\"非常抱歉让您多次失望！我已经将您提到的情况加急记录：1. 您现在购买的破损商品，我会立即为您申请全额退款，退款按原路返回；2. 考虑到这是第三次投诉，我已将您的账",
+      "hasReasoning": true,
+      "reasoningLength": 3009,
+      "usage": {
+        "prompt_tokens": 175,
+        "completion_tokens": 1376,
+        "total_tokens": 1551,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 1238
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 175
+      }
+    }
+  ]
+}
