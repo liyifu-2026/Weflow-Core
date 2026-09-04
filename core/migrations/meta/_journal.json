@@ -470,6 +470,13 @@
       "when": 1788690000005,
       "tag": "0069_model_registry",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1788690000006,
+      "tag": "0070_retire_solution_platform",
+      "breakpoints": true
     }
   ]
 }

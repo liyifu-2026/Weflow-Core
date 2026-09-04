@@ -21,7 +21,6 @@ import {
   integer,
   jsonb,
   pgSchema,
-  primaryKey,
   serial,
   text,
   timestamp,
@@ -41,156 +40,18 @@ export const runtimeMetadata = systemSchema.table("runtime_metadata", {
     .notNull(),
 });
 
+/**
+ * R3 平台化拆除后，solution schema 仅保留 extension_settings 一张表，
+ * 作为设置中心的通用 JSON 设置存储（pipeline/群聊/行为参数等键）。
+ * installations/versions/operations 等平台化表已随机制删除（0070 迁移）。
+ */
 export const solutionSchema = pgSchema("solution");
-
-export const solutionInstallations = solutionSchema.table("installations", {
-  solutionId: varchar("solution_id", { length: 200 }).primaryKey(),
-  version: varchar("version", { length: 50 }).notNull(),
-  desiredState: varchar("desired_state", { length: 20 })
-    .default("disabled")
-    .notNull(),
-  observedState: varchar("observed_state", { length: 20 })
-    .default("absent")
-    .notNull(),
-  healthState: varchar("health_state", { length: 20 })
-    .default("unknown")
-    .notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-});
-
-export const solutionVersions = solutionSchema.table(
-  "versions",
-  {
-    solutionId: varchar("solution_id", { length: 200 }).notNull(),
-    version: varchar("version", { length: 50 }).notNull(),
-    manifestDigest: varchar("manifest_digest", { length: 80 }).notNull(),
-    lockDigest: varchar("lock_digest", { length: 80 }).notNull(),
-    signatureKeyId: varchar("signature_key_id", { length: 200 }),
-    status: varchar("status", { length: 20 }).default("installed").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [primaryKey({ columns: [table.solutionId, table.version] })],
-);
-
-export const solutionOperations = solutionSchema.table(
-  "operations",
-  {
-    operationId: varchar("operation_id", { length: 100 }).primaryKey(),
-    solutionId: varchar("solution_id", { length: 200 }).notNull(),
-    type: varchar("type", { length: 20 }).notNull(),
-    state: varchar("state", { length: 20 }).notNull(),
-    idempotencyKey: varchar("idempotency_key", { length: 200 }).notNull(),
-    planDigest: varchar("plan_digest", { length: 80 }),
-    attempt: integer("attempt").default(0).notNull(),
-    claimedAt: timestamp("claimed_at", { withTimezone: true }),
-    leaseUntil: timestamp("lease_until", { withTimezone: true }),
-    checkpoint: varchar("checkpoint", { length: 200 }),
-    errorCode: varchar("error_code", { length: 100 }),
-    actor: varchar("actor", { length: 200 }).notNull(),
-    runnerId: varchar("runner_id", { length: 200 }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [
-    unique("solution_operations_idempotency_key_unique").on(
-      table.idempotencyKey,
-    ),
-    index("solution_operations_state_idx").on(table.state),
-    index("solution_operations_solution_idx").on(table.solutionId),
-  ],
-);
-
-export const solutionOperationPayloads = solutionSchema.table(
-  "operation_payloads",
-  {
-    operationId: varchar("operation_id", { length: 100 })
-      .primaryKey()
-      .references(() => solutionOperations.operationId, {
-        onDelete: "cascade",
-      }),
-    manifestJson: jsonb("manifest_json")
-      .$type<Record<string, unknown>>()
-      .notNull(),
-    lockJson: jsonb("lock_json").$type<Record<string, unknown>>().notNull(),
-    signatureJson: jsonb("signature_json")
-      .$type<Record<string, unknown>>()
-      .notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-);
-
-export const solutionResourceOwnership = solutionSchema.table(
-  "resource_ownership",
-  {
-    resourceId: varchar("resource_id", { length: 300 }).notNull(),
-    solutionId: varchar("solution_id", { length: 200 }).notNull(),
-    resourceType: varchar("resource_type", { length: 50 }).notNull(),
-    resourceRef: varchar("resource_ref", { length: 500 }).notNull(),
-    archivedAt: timestamp("archived_at", { withTimezone: true }),
-  },
-  (table) => [primaryKey({ columns: [table.resourceId, table.solutionId] })],
-);
-
-export const solutionEvents = solutionSchema.table(
-  "events",
-  {
-    eventId: varchar("event_id", { length: 100 }).primaryKey(),
-    solutionId: varchar("solution_id", { length: 200 }).notNull(),
-    operationId: varchar("operation_id", { length: 100 }),
-    eventType: varchar("event_type", { length: 60 }).notNull(),
-    payload: jsonb("payload")
-      .$type<Record<string, unknown>>()
-      .default({})
-      .notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [
-    index("solution_events_solution_created_idx").on(
-      table.solutionId,
-      table.createdAt,
-    ),
-  ],
-);
-
-export const solutionSecretAssignments = solutionSchema.table(
-  "secret_assignments",
-  {
-    solutionId: varchar("solution_id", { length: 200 })
-      .notNull()
-      .references(() => solutionInstallations.solutionId, {
-        onDelete: "cascade",
-      }),
-    slotName: varchar("slot_name", { length: 200 }).notNull(),
-    refType: varchar("ref_type", { length: 20 }).notNull(),
-    refValue: varchar("ref_value", { length: 1000 }).notNull(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-  (table) => [primaryKey({ columns: [table.solutionId, table.slotName] })],
-);
 
 export const solutionExtensionSettings = solutionSchema.table(
   "extension_settings",
   {
-    solutionId: varchar("solution_id", { length: 200 })
-      .notNull()
-      .references(() => solutionInstallations.solutionId, {
-        onDelete: "cascade",
-      }),
-    extensionId: varchar("extension_id", { length: 200 }).notNull(),
+    scope: varchar("scope", { length: 200 }).primaryKey(),
+    key: varchar("key", { length: 200 }).primaryKey(),
     settingsJson: jsonb("settings_json")
       .$type<Record<string, unknown>>()
       .default({})
@@ -200,7 +61,6 @@ export const solutionExtensionSettings = solutionSchema.table(
       .defaultNow()
       .notNull(),
   },
-  (table) => [primaryKey({ columns: [table.solutionId, table.extensionId] })],
 );
 
 export const conversationSchema = pgSchema("conversation");

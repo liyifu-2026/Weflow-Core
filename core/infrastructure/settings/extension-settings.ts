@@ -1,14 +1,18 @@
 /**
- * Solution 扩展设置读取（solution.extension_settings 表）。
+ * 扩展设置读取（solution.extension_settings 表，R3 后成为通用设置存储）。
  *
- * Console 侧业务扩展通过通用设置路由写入 JSON；Core 侧消费方（如
- * agent-worker 的 pipeline 策略）以带内存缓存的读取器消费，
+ * 设置中心（support-web）通过通用设置路由写入 JSON；Core 侧消费方（如
+ * agent-worker 的 pipeline 策略、行为参数）以带内存缓存的读取器消费，
  * 默认 TTL 30 秒，避免每个 Turn 都打库。
+ *
+ * R3 平台化拆除：表的主键从 (solution_id, extension_id) 收敛为
+ * (scope, key)，调用侧的 "weflow.customer-support" / "support-pipeline"
+ * 参数语义不变，只是列名更通用。
  */
 
 import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import * as schema from "../../../infrastructure/postgres/schema.js";
+import * as schema from "../postgres/schema.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
@@ -22,8 +26,8 @@ export async function readSolutionExtensionSettings(
     .from(schema.solutionExtensionSettings)
     .where(
       and(
-        eq(schema.solutionExtensionSettings.solutionId, input.solutionId),
-        eq(schema.solutionExtensionSettings.extensionId, input.extensionId),
+        eq(schema.solutionExtensionSettings.scope, input.solutionId),
+        eq(schema.solutionExtensionSettings.key, input.extensionId),
       ),
     )
     .limit(1);
@@ -59,4 +63,35 @@ export function createCachedExtensionSettingsReader(
       });
     return inflight;
   };
+}
+
+/** 写入（upsert）一份扩展设置；updatedBy 记录操作者 */
+export async function writeSolutionExtensionSettings(
+  db: Database,
+  input: {
+    solutionId: string;
+    extensionId: string;
+    settingsJson: Record<string, unknown>;
+    updatedBy?: string;
+  },
+): Promise<void> {
+  await db
+    .insert(schema.solutionExtensionSettings)
+    .values({
+      scope: input.solutionId,
+      key: input.extensionId,
+      settingsJson: input.settingsJson,
+      ...(input.updatedBy !== undefined ? { updatedBy: input.updatedBy } : {}),
+    })
+    .onConflictDoUpdate({
+      target: [
+        schema.solutionExtensionSettings.scope,
+        schema.solutionExtensionSettings.key,
+      ],
+      set: {
+        settingsJson: input.settingsJson,
+        ...(input.updatedBy !== undefined ? { updatedBy: input.updatedBy } : {}),
+        updatedAt: new Date(),
+      },
+    });
 }

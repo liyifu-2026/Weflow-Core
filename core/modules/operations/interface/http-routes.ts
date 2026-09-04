@@ -47,14 +47,16 @@ import {
   type ModelRegistryPatch,
 } from "../application/model-gateway.js";
 import { readModelHealth } from "../application/model-failover.js";
-import { buildDashboardCards } from "../application/dashboard-cards.js";
+import {
+  readSolutionExtensionSettings,
+  writeSolutionExtensionSettings,
+} from "../../../infrastructure/settings/extension-settings.js";
 import {
   readAdminOverview,
   readRuntimeStatuses,
   readAuditEvents,
   readAuditOptions,
   readAgentTurns,
-  listStoreOverviews,
 } from "../application/admin-overview.js";
 
 const runtimeSettingsPatchSchema = z.object({
@@ -353,6 +355,56 @@ export function registerOperationsRoutes(
     return { events: await readRuntimeSettingsAudit(db) };
   });
 
+  // 扩展设置（R3：原 solution store-routes 的通用设置端点收编至此）。
+  // 设置中心各分区读写 JSON；读取走 application 层的读取器。
+  server.get(
+    "/api/v1/admin/solutions/:solutionId/extensions/:extensionId/settings",
+    async (request, reply) => {
+      if (!(await requireAdminIdentity(db, request, reply))) return;
+      const params = z
+        .object({
+          solutionId: z.string().trim().min(1).max(200),
+          extensionId: z.string().trim().min(1).max(200),
+        })
+        .safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const settings = await readSolutionExtensionSettings(db, {
+        solutionId: params.data.solutionId,
+        extensionId: params.data.extensionId,
+      });
+      return { settings: settings ?? {} };
+    },
+  );
+
+  server.put(
+    "/api/v1/admin/solutions/:solutionId/extensions/:extensionId/settings",
+    async (request, reply) => {
+      const identity = await requireAdminIdentity(db, request, reply);
+      if (!identity) return;
+      const params = z
+        .object({
+          solutionId: z.string().trim().min(1).max(200),
+          extensionId: z.string().trim().min(1).max(200),
+        })
+        .safeParse(request.params);
+      const body = z
+        .object({
+          settings: z.record(z.string(), z.unknown()),
+        })
+        .safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      await writeSolutionExtensionSettings(db, {
+        solutionId: params.data.solutionId,
+        extensionId: params.data.extensionId,
+        settingsJson: body.data.settings,
+        updatedBy: identity.user.userId,
+      });
+      return { ok: true };
+    },
+  );
+
   server.get("/api/v1/admin/operator-status", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
     return readOperatorStatus(db);
@@ -365,21 +417,8 @@ export function registerOperationsRoutes(
 
   server.get("/api/v1/admin/console/home", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
-    const [solutions, systemStatus] = await Promise.all([
-      listStoreOverviews(),
-      buildSystemStatus(capabilities),
-    ]);
-    return { solutions, cards: [], systemStatus };
-  });
-
-  server.get("/api/v1/admin/dashboard/cards", async (request, reply) => {
-    if (!(await requireAdminIdentity(db, request, reply))) return;
-    return { cards: await buildDashboardCards(db) };
-  });
-
-  server.get("/api/v1/admin/solutions/health", async (request, reply) => {
-    if (!(await requireAdminIdentity(db, request, reply))) return;
-    return { solutions: [] };
+    const systemStatus = await buildSystemStatus(capabilities);
+    return { solutions: [], cards: [], systemStatus };
   });
 
   server.get("/api/v1/admin/stream", async (request, reply) => {

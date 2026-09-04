@@ -17,7 +17,7 @@
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../../../infrastructure/postgres/schema.js";
-import { createCachedExtensionSettingsReader } from "../../solution/application/read-extension-settings.js";
+import { createCachedExtensionSettingsReader } from "../../../infrastructure/settings/extension-settings.js";
 
 /** 出厂默认：与会话模式引擎交付时的代码常量逐字节一致。 */
 export const DEFAULT_BEHAVIOR_SETTINGS = {

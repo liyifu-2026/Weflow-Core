@@ -14,12 +14,6 @@ importers:
       '@weflow-leaif/contracts':
         specifier: link:../packages/contracts
         version: link:../packages/contracts
-      '@weflow-leaif/solution-sdk':
-        specifier: link:../packages/solution-sdk
-        version: link:../packages/solution-sdk
-      adm-zip:
-        specifier: 0.5.16
-        version: 0.5.16
       argon2:
         specifier: 0.45.1
         version: 0.45.1
@@ -29,9 +23,6 @@ importers:
       drizzle-orm:
         specifier: 0.45.2
         version: 0.45.2(@types/pg@8.15.5)(pg@8.22.0)
-      esbuild:
-        specifier: 0.25.6
-        version: 0.25.6
       fastify:
         specifier: 5.10.0
         version: 5.10.0
@@ -44,12 +35,6 @@ importers:
       pino:
         specifier: 10.3.1
         version: 10.3.1
-      semver:
-        specifier: 7.7.2
-        version: 7.7.2
-      tar:
-        specifier: 7.4.3
-        version: 7.4.3
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -57,18 +42,12 @@ importers:
       '@eslint/js':
         specifier: 10.0.1
         version: 10.0.1(eslint@10.0.1)
-      '@types/adm-zip':
-        specifier: 0.5.7
-        version: 0.5.7
       '@types/node':
         specifier: 24.1.0
         version: 24.1.0
       '@types/pg':
         specifier: 8.15.5
         version: 8.15.5
-      '@types/semver':
-        specifier: ^7.8.0
-        version: 7.8.0
       drizzle-kit:
         specifier: 0.31.10
         version: 0.31.10
@@ -89,7 +68,7 @@ importers:
         version: 8.65.0(eslint@10.0.1)(typescript@5.9.3)
       vitest:
         specifier: 4.1.10
-        version: 4.1.10(@types/node@24.1.0)(vite@8.1.5(@types/node@24.1.0)(esbuild@0.25.6)(tsx@4.20.3))
+        version: 4.1.10(@types/node@24.1.0)(vite@8.1.5(@types/node@24.1.0)(esbuild@0.28.1)(tsx@4.20.3))
 
 packages:
 
@@ -649,10 +628,6 @@ packages:
   '@ioredis/commands@1.10.0':
     resolution: {integrity: sha512-UmeW7z4LfctwoQ5wkhVzgq8tXkreED2xZGpX+Bg+zA+WJFZCT6c062AfCK/Dfk81xZnnwdhJCUMkitihRaoC2Q==}
 
-  '@isaacs/fs-minipass@4.0.1':
-    resolution: {integrity: sha512-wgm9Ehl2jpeqP3zw/7mo3kRHFp5MEDhqAdwy1fTGkHAwnkGOVsgpvQhL8B5n1qlb01jV3n/bI0ZfZp5lWA1k4w==}
-    engines: {node: '>=18.0.0'}
-
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
 
@@ -807,9 +782,6 @@ packages:
   '@tybys/wasm-util@0.10.3':
     resolution: {integrity: sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg==}
 
-  '@types/adm-zip@0.5.7':
-    resolution: {integrity: sha512-DNEs/QvmyRLurdQPChqq0Md4zGvPwHerAJYWk9l2jCbD1VPpnzRJorOdiq4zsw09NFbYnhfsoEhWtxIzXpn2yw==}
-
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -830,9 +802,6 @@ packages:
 
   '@types/pg@8.15.5':
     resolution: {integrity: sha512-LF7lF6zWEKxuT3/OR8wAZGzkg4ENGXFNyiV/JeOt9z5B+0ZVwbql9McqX5c/WStFq1GaGso7H1AzP/qSzmlCKQ==}
-
-  '@types/semver@7.8.0':
-    resolution: {integrity: sha512-1mAINjtQCXXeLkJ9ehXkwOcBpqtLxiVtKhpUf83DdRNdQKV0iXZpaHYqRr7nj+wvxuJzoAmAwXI+sCNMv1CzLQ==}
 
   '@typescript-eslint/eslint-plugin@8.65.0':
     resolution: {integrity: sha512-IEgob78X12rHpUmtcwFsXhZdVGJtwTVP8FiCLZkR6GlYVrl2PcuB+KhCE5BlVC/eQpQnu8WXRtkHZuPar+gCRA==}
@@ -935,10 +904,6 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  adm-zip@0.5.16:
-    resolution: {integrity: sha512-TGw5yVi4saajsSEgz25grObGHEUaDrniwvA2qwSC060KfqGPdglhvPMA2lPIoxs3PQIItj2iag35fONcQqgUaQ==}
-    engines: {node: '>=12.0'}
-
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
     peerDependencies:
@@ -990,10 +955,6 @@ packages:
 
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
-    engines: {node: '>=18'}
-
-  chownr@3.0.0:
-    resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
     engines: {node: '>=18'}
 
   cluster-key-slot@1.1.1:
@@ -1429,19 +1390,6 @@ packages:
     resolution: {integrity: sha512-vpLQEs+VLCr1nU0BXS07maYoFwlDAH0gngQuuttxIwutDFEMHq2blX+8vpgxDdK3J1PwjCJiep77OitTZ4Ll1A==}
     engines: {node: 18 || 20 || >=22}
 
-  minipass@7.1.3:
-    resolution: {integrity: sha512-tEBHqDnIoM/1rXME1zgka9g6Q2lcoCkxHLuc7ODJ5BxbP5d4c2Z5cGgtXAku59200Cx7diuHTOYfSBD8n6mm8A==}
-    engines: {node: '>=16 || 14 >=14.17'}
-
-  minizlib@3.1.0:
-    resolution: {integrity: sha512-KZxYo1BUkWD2TVFLr0MQoM8vUUigWD3LlD83a/75BqC+4qE0Hb1Vo5v1FgcfaNXvfXzr+5EhQ6ing/CaBijTlw==}
-    engines: {node: '>= 18'}
-
-  mkdirp@3.0.1:
-    resolution: {integrity: sha512-+NsyUUAZDmo6YVHzL/stxSu3t9YS1iljliy3BSDrXJ/dkn1KYdmtZODGGjLcc9XLgVVpH4KshHB8XmZgMhaBXg==}
-    engines: {node: '>=10'}
-    hasBin: true
-
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
@@ -1699,10 +1647,6 @@ packages:
   std-env@4.2.0:
     resolution: {integrity: sha512-oCUKSupKTHX53EyjDtuZQ64pjLJ6yYCtpmEw0goYxtjG9KpbRe8KAsl2tBUGU9DyMcJ0RwJ8GqJAFzMXcXW1Rw==}
 
-  tar@7.4.3:
-    resolution: {integrity: sha512-5S7Va8hKfV7W5U6g3aYxXmlPoZVAwUMy9AOKyF2fVuZa2UD3qZjg578OrLRt8PcNN1PleVaL/5/yYATNL0ICUw==}
-    engines: {node: '>=18'}
-
   thread-stream@4.2.0:
     resolution: {integrity: sha512-e2zZ96wSChazBsbENf/Pcm/4swHt2cEKQ92rhUjkL9GCKiTDJIaTBenjE/m9DXi0QBmTMDkFDdOomUy20A1tDQ==}
     engines: {node: '>=20'}
@@ -1868,10 +1812,6 @@ packages:
   xtend@4.0.2:
     resolution: {integrity: sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ==}
     engines: {node: '>=0.4'}
-
-  yallist@5.0.0:
-    resolution: {integrity: sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==}
-    engines: {node: '>=18'}
 
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
@@ -2221,10 +2161,6 @@ snapshots:
 
   '@ioredis/commands@1.10.0': {}
 
-  '@isaacs/fs-minipass@4.0.1':
-    dependencies:
-      minipass: 7.1.3
-
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
@@ -2316,10 +2252,6 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@types/adm-zip@0.5.7':
-    dependencies:
-      '@types/node': 24.1.0
-
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -2342,8 +2274,6 @@ snapshots:
       '@types/node': 24.1.0
       pg-protocol: 1.15.0
       pg-types: 2.2.0
-
-  '@types/semver@7.8.0': {}
 
   '@typescript-eslint/eslint-plugin@8.65.0(@typescript-eslint/parser@8.65.0(eslint@10.0.1)(typescript@5.9.3))(eslint@10.0.1)(typescript@5.9.3)':
     dependencies:
@@ -2445,13 +2375,13 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.1
 
-  '@vitest/mocker@4.1.10(vite@8.1.5(@types/node@24.1.0)(esbuild@0.25.6)(tsx@4.20.3))':
+  '@vitest/mocker@4.1.10(vite@8.1.5(@types/node@24.1.0)(esbuild@0.28.1)(tsx@4.20.3))':
     dependencies:
       '@vitest/spy': 4.1.10
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.1.5(@types/node@24.1.0)(esbuild@0.25.6)(tsx@4.20.3)
+      vite: 8.1.5(@types/node@24.1.0)(esbuild@0.28.1)(tsx@4.20.3)
 
   '@vitest/pretty-format@4.1.10':
     dependencies:
@@ -2484,8 +2414,6 @@ snapshots:
       acorn: 8.18.0
 
   acorn@8.18.0: {}
-
-  adm-zip@0.5.16: {}
 
   ajv-formats@3.0.1(ajv@8.20.0):
     optionalDependencies:
@@ -2541,8 +2469,6 @@ snapshots:
       - supports-color
 
   chai@6.2.2: {}
-
-  chownr@3.0.0: {}
 
   cluster-key-slot@1.1.1: {}
 
@@ -2950,14 +2876,6 @@ snapshots:
     dependencies:
       brace-expansion: 5.0.8
 
-  minipass@7.1.3: {}
-
-  minizlib@3.1.0:
-    dependencies:
-      minipass: 7.1.3
-
-  mkdirp@3.0.1: {}
-
   ms@2.1.3: {}
 
   msgpackr-extract@3.0.4:
@@ -3189,15 +3107,6 @@ snapshots:
 
   std-env@4.2.0: {}
 
-  tar@7.4.3:
-    dependencies:
-      '@isaacs/fs-minipass': 4.0.1
-      chownr: 3.0.0
-      minipass: 7.1.3
-      minizlib: 3.1.0
-      mkdirp: 3.0.1
-      yallist: 5.0.0
-
   thread-stream@4.2.0:
     dependencies:
       real-require: 1.0.0
@@ -3257,7 +3166,7 @@ snapshots:
     dependencies:
       punycode: 2.3.1
 
-  vite@8.1.5(@types/node@24.1.0)(esbuild@0.25.6)(tsx@4.20.3):
+  vite@8.1.5(@types/node@24.1.0)(esbuild@0.28.1)(tsx@4.20.3):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.5
@@ -3266,14 +3175,14 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 24.1.0
-      esbuild: 0.25.6
+      esbuild: 0.28.1
       fsevents: 2.3.3
       tsx: 4.20.3
 
-  vitest@4.1.10(@types/node@24.1.0)(vite@8.1.5(@types/node@24.1.0)(esbuild@0.25.6)(tsx@4.20.3)):
+  vitest@4.1.10(@types/node@24.1.0)(vite@8.1.5(@types/node@24.1.0)(esbuild@0.28.1)(tsx@4.20.3)):
     dependencies:
       '@vitest/expect': 4.1.10
-      '@vitest/mocker': 4.1.10(vite@8.1.5(@types/node@24.1.0)(esbuild@0.25.6)(tsx@4.20.3))
+      '@vitest/mocker': 4.1.10(vite@8.1.5(@types/node@24.1.0)(esbuild@0.28.1)(tsx@4.20.3))
       '@vitest/pretty-format': 4.1.10
       '@vitest/runner': 4.1.10
       '@vitest/snapshot': 4.1.10
@@ -3290,7 +3199,7 @@ snapshots:
       tinyexec: 1.2.4
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.1
-      vite: 8.1.5(@types/node@24.1.0)(esbuild@0.25.6)(tsx@4.20.3)
+      vite: 8.1.5(@types/node@24.1.0)(esbuild@0.28.1)(tsx@4.20.3)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 24.1.0
@@ -3309,8 +3218,6 @@ snapshots:
   word-wrap@1.2.5: {}
 
   xtend@4.0.2: {}
-
-  yallist@5.0.0: {}
 
   yocto-queue@0.1.0: {}
 

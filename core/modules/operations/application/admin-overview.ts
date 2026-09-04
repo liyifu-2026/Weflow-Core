@@ -19,9 +19,6 @@ import {
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { RuntimeCapabilities } from "./system-status.js";
-import { listStoreOverviews } from "../../../infrastructure/solutions/solution-store.js";
-
-export { listStoreOverviews };
 
 export type AdminOverview = {
   conversations: number;
