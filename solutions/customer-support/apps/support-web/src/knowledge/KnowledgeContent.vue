@@ -2,8 +2,42 @@
 import { confirmDialog } from "../components/confirm-dialog";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import {
+  ArrowRight,
+  Ellipsis,
+  MoreVertical,
+  Search,
+  Upload,
+} from "lucide-vue-next";
 import { useWeflowAuthStore } from "../auth-store";
-import WfIcon from "../components/WfIcon.vue";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { sourceTypeLabel, stateLabel } from "../labels";
 import { originQuery } from "../navigation-context";
 import { useEscClose } from "../composables/use-esc-close";
@@ -29,7 +63,6 @@ import {
 import KnowledgeBaseEditorDialog from "./KnowledgeBaseEditorDialog.vue";
 import KnowledgeFaq from "./KnowledgeFaq.vue";
 import KnowledgePreviewDrawer from "./KnowledgePreviewDrawer.vue";
-import WfInspector from "../components/WfInspector.vue";
 import KnowledgeStats from "./KnowledgeStats.vue";
 import KnowledgeUploadDialog from "./KnowledgeUploadDialog.vue";
 import KnowledgeWiki from "./KnowledgeWiki.vue";
@@ -47,8 +80,9 @@ const loading = ref(true);
 const loadingDocs = ref(false);
 const error = ref("");
 const keyword = ref("");
-const fileType = ref("");
-const parseStatus = ref("");
+// 「全部」用 "all" 占位（shadcn Select 不允许空串选项），请求时还原为 undefined。
+const fileType = ref("all");
+const parseStatus = ref("all");
 const selectedIds = ref<string[]>([]);
 const editingBase = ref<KnowledgeBase | null | undefined>(null);
 const createOpen = ref(false);
@@ -181,8 +215,9 @@ async function loadDocuments(reset = true) {
   try {
     const page = await listKnowledgeFiles(selectedBaseId.value, {
       keyword: keyword.value.trim() || undefined,
-      file_type: fileType.value || undefined,
-      parse_status: parseStatus.value || undefined,
+      // Select 的「全部」用 "all" 占位（shadcn 不允许空串选项），请求时还原为 undefined。
+      file_type: fileType.value && fileType.value !== "all" ? fileType.value : undefined,
+      parse_status: parseStatus.value && parseStatus.value !== "all" ? parseStatus.value : undefined,
       page: docsPage.value,
       page_size: PAGE_SIZE,
     });
@@ -247,6 +282,12 @@ function documentSource(item: KnowledgeDocument) {
 
 function documentState(item: KnowledgeDocument) {
   return item.parse_status || item.status || item.sync_status || "ready";
+}
+
+function stateBadgeVariant(state: string): "secondary" | "outline" | "destructive" {
+  if (state === "failed") return "destructive";
+  if (["pending", "processing", "finalizing"].includes(state)) return "outline";
+  return "secondary";
 }
 
 async function removeSelected() {
@@ -434,6 +475,13 @@ function openPlatformManage() {
   });
 }
 
+function duplicateSelectedBase() {
+  if (!selectedBase.value) return;
+  duplicateKnowledgeBase(selectedBase.value.id)
+    .then(loadBases)
+    .catch((reason) => (error.value = reason instanceof Error ? reason.message : String(reason)));
+}
+
 onMounted(loadBases);
 onUnmounted(() => {
   stopParsePolling();
@@ -442,105 +490,126 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="wf-content-workspace">
+  <div class="flex flex-col gap-4">
     <KnowledgeStats />
-    <div class="wf-content-toolbar">
-      <select
-        v-model="selectedBaseId"
-        class="wf-select wf-kb-select"
+
+    <!-- 工具栏：知识库选择 + 搜索 + 筛选 + 主操作 -->
+    <div class="flex flex-wrap items-center gap-2">
+      <Select
+        :model-value="selectedBaseId"
         :disabled="loading"
-        @change="selectBase(selectedBaseId)"
+        @update:model-value="(value) => selectBase(String(value))"
       >
-        <option v-for="item in bases" :key="item.id" :value="item.id">
-          {{ item.name }}
-        </option>
-      </select>
-      <button
+        <SelectTrigger class="w-56">
+          <SelectValue placeholder="选择知识库" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem v-for="item in bases" :key="item.id" :value="item.id">
+            {{ item.name }}
+          </SelectItem>
+        </SelectContent>
+      </Select>
+
+      <Button
         v-if="selectedBase"
-        class="wf-button compact"
+        variant="ghost"
+        size="sm"
         title="在外部知识库完整界面中管理此知识库"
         @click="openPlatformManage"
       >
-        完整管理 →
-      </button>
-      <details class="wf-row-menu wf-kb-menu">
-        <summary class="wf-icon-button" title="知识库操作">···</summary>        <div>
-          <button @click="editingBase = selectedBase">编辑设置</button>
-          <button @click="createOpen = true">新建知识库</button>
-          <button
-            v-if="selectedBase"
-            @click="
-              duplicateKnowledgeBase(selectedBase.id)
-                .then(loadBases)
-                .catch((reason) => (error = reason instanceof Error ? reason.message : String(reason)))
-            "
-          >
+        完整管理 <ArrowRight class="size-3.5" />
+      </Button>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger as-child>
+          <Button variant="ghost" size="icon" title="知识库操作">
+            <Ellipsis class="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem @click="editingBase = selectedBase">编辑设置</DropdownMenuItem>
+          <DropdownMenuItem @click="createOpen = true">新建知识库</DropdownMenuItem>
+          <DropdownMenuItem :disabled="!selectedBase" @click="duplicateSelectedBase">
             复制知识库
-          </button>
-          <button @click="togglePin">置顶知识库</button>
-          <button @click="openTags">标签管理</button>
-          <button @click="openActivity">活动记录</button>
-        </div>
-      </details>
-      <div class="wf-search">
-        <WfIcon name="search" :size="15" />
+          </DropdownMenuItem>
+          <DropdownMenuItem @click="togglePin">置顶知识库</DropdownMenuItem>
+          <DropdownMenuItem @click="openTags">标签管理</DropdownMenuItem>
+          <DropdownMenuItem @click="openActivity">活动记录</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <div class="flex min-w-48 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 focus-within:ring-1 focus-within:ring-ring">
+        <Search class="size-3.5 shrink-0 text-muted-foreground" />
         <input
           v-model="keyword"
-          class="wf-input"
+          class="h-8 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           placeholder="搜索内容…"
           @keyup.enter="loadDocuments()"
         />
       </div>
-      <select v-model="fileType" class="wf-select wf-filter-select" @change="loadDocuments()">
-        <option value="">类型</option>
-        <option value="pdf">PDF</option>
-        <option value="docx">Word</option>
-        <option value="pptx">PPT</option>
-        <option value="xlsx">Excel</option>
-        <option value="md">Markdown</option>
-        <option value="txt">文本</option>
-        <option value="web">网页</option>
-        <option value="manual">在线文本</option>
-        <option value="url">URL</option>
-      </select>
-      <details class="wf-row-menu wf-filter-menu wf-filter-trigger">
-        <summary class="wf-button compact">{{ parseStatus ? `状态 · ${parseStatus}` : "筛选" }}</summary>
-        <div>
-          <select v-model="parseStatus" class="wf-select" @change="loadDocuments()">
-            <option value="">全部状态</option>
-            <option value="completed">已解析</option>
-            <option value="pending">等待解析</option>
-            <option value="processing">解析中</option>
-            <option value="failed">解析失败</option>
-            <option value="cancelled">已停止</option>
-          </select>
-          <button class="wf-button compact" @click="parseStatus = ''; loadDocuments()">
-            清除
-          </button>
-        </div>
-      </details>
-      <div class="wf-spacer"></div>
-      <button
-        v-if="auth.isAdmin"
-        class="wf-button primary"
-        @click="uploadOpen = true"
-        :disabled="!selectedBaseId"
-      >
-        <WfIcon name="upload" :size="15" />添加知识
-      </button>
+
+      <Select v-model="fileType">
+        <SelectTrigger class="w-28">
+          <SelectValue placeholder="类型" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">全部类型</SelectItem>
+          <SelectItem value="pdf">PDF</SelectItem>
+          <SelectItem value="docx">Word</SelectItem>
+          <SelectItem value="pptx">PPT</SelectItem>
+          <SelectItem value="xlsx">Excel</SelectItem>
+          <SelectItem value="md">Markdown</SelectItem>
+          <SelectItem value="txt">文本</SelectItem>
+          <SelectItem value="web">网页</SelectItem>
+          <SelectItem value="manual">在线文本</SelectItem>
+          <SelectItem value="url">URL</SelectItem>
+        </SelectContent>
+      </Select>
+
+      <Select v-model="parseStatus">
+        <SelectTrigger class="w-28">
+          <SelectValue :placeholder="parseStatus !== 'all' ? `状态 · ${parseStatus}` : '状态'" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">全部状态</SelectItem>
+          <SelectItem value="completed">已解析</SelectItem>
+          <SelectItem value="pending">等待解析</SelectItem>
+          <SelectItem value="processing">解析中</SelectItem>
+          <SelectItem value="failed">解析失败</SelectItem>
+          <SelectItem value="cancelled">已停止</SelectItem>
+        </SelectContent>
+      </Select>
+
+      <div class="flex-1"></div>
+
+      <Button v-if="auth.isAdmin" :disabled="!selectedBaseId" @click="uploadOpen = true">
+        <Upload class="size-4" />添加知识
+      </Button>
     </div>
 
-    <div v-if="error" class="wf-error">
-      <span>{{ error }}</span
-      ><button class="wf-button compact" @click="loadDocuments()">重试</button>
-    </div>
+    <p v-if="uploadNotice" class="text-sm text-muted-foreground">{{ uploadNotice }}</p>
 
-    <div class="wf-queue-tabs wf-content-tabs" v-if="contentTabs.length > 1">
+    <Alert v-if="error" variant="destructive" class="items-center">
+      <AlertDescription class="flex items-center justify-between gap-3">
+        <span>{{ error }}</span>
+        <Button variant="outline" size="sm" @click="loadDocuments()">重试</Button>
+      </AlertDescription>
+    </Alert>
+
+    <!-- 内容类型页签：文档 / FAQ / Wiki -->
+    <div
+      v-if="contentTabs.length > 1"
+      class="inline-flex w-fit rounded-md border border-border bg-muted p-0.5"
+    >
       <button
         v-for="item in contentTabs"
         :key="item.key"
-        class="wf-tab"
-        :class="{ active: contentTab === item.key }"
+        class="rounded-[5px] px-3 py-1.5 text-sm transition-colors"
+        :class="
+          contentTab === item.key
+            ? 'bg-background text-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground'
+        "
         @click="contentTab = item.key"
       >
         {{ item.label }}
@@ -548,92 +617,199 @@ onUnmounted(() => {
     </div>
 
     <template v-if="contentTab === 'documents'">
-    <div v-if="selectedIds.length" class="wf-batch-bar">
-      <span class="wf-section-caption">已选 {{ selectedIds.length }} 项</span>
-      <button class="wf-button compact" @click="reparseSelected">
-        重新解析
-      </button>
-      <button class="wf-button compact danger" @click="removeSelected">
-        删除选中
-      </button>
-      <button class="wf-button compact" @click="selectedIds = []">取消</button>
-    </div>
+      <!-- 批量操作栏 -->
+      <div
+        v-if="selectedIds.length"
+        class="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/50 px-3 py-2"
+      >
+        <span class="text-xs font-medium text-muted-foreground">已选 {{ selectedIds.length }} 项</span>
+        <Separator orientation="vertical" class="h-4" />
+        <Button variant="outline" size="sm" @click="reparseSelected">重新解析</Button>
+        <Button variant="outline" size="sm" class="text-destructive hover:text-destructive" @click="removeSelected">
+          删除选中
+        </Button>
+        <Button variant="ghost" size="sm" @click="selectedIds = []">取消</Button>
+      </div>
 
-    <section class="wf-content-list">
-      <template v-if="loadingDocs">
-        <div v-for="i in 5" :key="i" class="wf-content-row">
-          <div class="wf-skeleton wf-skeleton-title"></div>
-          <div class="wf-skeleton wf-skeleton-line"></div>
-        </div>
-      </template>
-      <template v-else>
-        <div
-          v-for="item in documents"
-          :key="docId(item)"
-          class="wf-content-row"
-          @click="openPreview(item)"
-        >
-          <span
-            v-if="auth.isAdmin"
-            class="wf-check"
-            :class="{ checked: selectedIds.includes(docId(item)) }"
-            role="checkbox"
-            :aria-checked="selectedIds.includes(docId(item))"
-            @click.stop="toggleSelect(docId(item))"
-            >{{ selectedIds.includes(docId(item)) ? "✓" : "" }}</span
+      <!-- 文档列表 -->
+      <section class="flex flex-col" aria-label="文档列表">
+        <template v-if="loadingDocs">
+          <div v-for="i in 5" :key="i" class="flex items-center gap-3 px-2 py-3">
+            <Skeleton class="h-4 w-64" />
+            <Skeleton class="h-3 w-24" />
+          </div>
+        </template>
+        <template v-else>
+          <div
+            v-for="item in documents"
+            :key="docId(item)"
+            class="group flex cursor-pointer items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-muted/50"
+            @click="openPreview(item)"
           >
-          <span class="wf-content-name">
-            <strong>{{ documentTitle(item) }}</strong>
-            <span class="wf-muted">
-              {{ documentSource(item) }}
-              <template v-if="typeof item.chunk_count === 'number'">
-                · {{ item.chunk_count }} 个切片
-              </template>
+            <Checkbox
+              v-if="auth.isAdmin"
+              :model-value="selectedIds.includes(docId(item))"
+              aria-label="选择文档"
+              @click.stop
+              @update:model-value="() => toggleSelect(docId(item))"
+            />
+            <span class="min-w-0 flex-1">
+              <strong class="block truncate text-sm font-medium">{{ documentTitle(item) }}</strong>
+              <span class="text-xs text-muted-foreground">
+                {{ documentSource(item) }}
+                <template v-if="typeof item.chunk_count === 'number'">
+                  · {{ item.chunk_count }} 个切片
+                </template>
+              </span>
             </span>
-          </span>
-          <span class="wf-content-state" :class="documentState(item)">
-            {{ stateLabel(documentState(item)) }}          </span>
-          <span class="wf-content-time">{{
-            item.updated_at
-              ? new Date(item.updated_at).toLocaleDateString()
-              : "—"
-          }}</span>
-          <details
-            v-if="auth.isAdmin"
-            class="wf-row-menu wf-content-menu"
-            @click.stop
+            <Badge :variant="stateBadgeVariant(documentState(item))" class="shrink-0">
+              {{ stateLabel(documentState(item)) }}
+            </Badge>
+            <span class="hidden w-24 shrink-0 text-right text-xs text-muted-foreground md:block">
+              {{ item.updated_at ? new Date(item.updated_at).toLocaleDateString() : "—" }}
+            </span>
+            <DropdownMenu v-if="auth.isAdmin" @click.stop>
+              <DropdownMenuTrigger as-child>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="size-7 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                  title="更多操作"
+                  @click.stop
+                >
+                  <MoreVertical class="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem @click="reparseOne(item)">重新解析</DropdownMenuItem>
+                <DropdownMenuItem v-if="canCancelParse(item)" @click="cancelParseOne(item)">
+                  停止解析
+                </DropdownMenuItem>
+                <DropdownMenuItem @click="openMove(item)">移动到…</DropdownMenuItem>
+                <DropdownMenuItem
+                  class="text-destructive focus:text-destructive"
+                  @click="removeOne(item)"
+                >
+                  删除
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          <Button
+            v-if="hasMoreDocs && documents.length"
+            variant="ghost"
+            size="sm"
+            class="mx-auto mt-2"
+            :disabled="loadingMoreDocs"
+            @click="loadDocuments(false)"
           >
-            <summary class="wf-icon-button" title="更多操作">···</summary>
-            <div>
-              <button @click="reparseOne(item)">重新解析</button>
-              <button
-                v-if="canCancelParse(item)"
-                @click="cancelParseOne(item)"
-              >
-                停止解析
-              </button>
-              <button @click="openMove(item)">移动到…</button>
-              <button class="danger" @click="removeOne(item)">删除</button>
-            </div>
-          </details>
-        </div>
-        <button
-          v-if="hasMoreDocs && documents.length"
-          class="wf-load-more"
-          :disabled="loadingMoreDocs"
-          @click="loadDocuments(false)"
-        >
-          {{ loadingMoreDocs ? "正在加载…" : "加载更多" }}
-        </button>
-        <div v-if="!documents.length" class="wf-empty">
-          <div>
-            <strong>当前知识库还没有内容</strong>
-            <p v-if="auth.isAdmin">点击「添加知识」上传文件、URL 或在线文本。</p>
-            <p v-else>管理员添加内容后，Agent 才能检索到依据。</p>
+            {{ loadingMoreDocs ? "正在加载…" : "加载更多" }}
+          </Button>
+
+          <div v-if="!documents.length" class="rounded-md border border-dashed border-border p-8 text-center">
+            <p class="text-sm font-medium">当前知识库还没有内容</p>
+            <p class="mt-1 text-sm text-muted-foreground">
+              <template v-if="auth.isAdmin">点击「添加知识」上传文件、URL 或在线文本。</template>
+              <template v-else>管理员添加内容后，Agent 才能检索到依据。</template>
+            </p>
+          </div>
+        </template>
+      </section>
+    </template>
+
+    <KnowledgeFaq
+      v-else-if="contentTab === 'faq' && selectedBaseId"
+      :kb-id="selectedBaseId"
+      @error="error = $event"
+    />
+    <KnowledgeWiki
+      v-else-if="contentTab === 'wiki' && selectedBaseId"
+      :kb-id="selectedBaseId"
+      @error="error = $event"
+    />
+
+    <!-- 标签管理 -->
+    <Dialog :open="tagsOpen" @update:open="(value) => (tagsOpen = value)">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>标签管理</DialogTitle>
+        </DialogHeader>
+        <div class="space-y-4">
+          <div class="flex gap-2">
+            <Input v-model="newTagName" placeholder="新标签名称…" @keyup.enter="createTag" />
+            <Button :disabled="!newTagName.trim()" @click="createTag">创建</Button>
+          </div>
+          <div v-for="tag in tags" :key="tag.id" class="flex items-center justify-between gap-2">
+            <Badge variant="secondary">{{ tag.name }}</Badge>
+            <Button variant="ghost" size="sm" class="text-destructive hover:text-destructive" @click="removeTag(tag)">
+              删除
+            </Button>
+          </div>
+          <div v-if="!tags.length" class="py-4 text-center">
+            <p class="text-sm font-medium">还没有标签</p>
+            <p class="mt-1 text-sm text-muted-foreground">创建标签后，上传内容时可选择标签归类。</p>
           </div>
         </div>
-      </template>
-    </section>
+      </DialogContent>
+    </Dialog>
+
+    <!-- 移动到… -->
+    <Dialog :open="moveOpen" @update:open="(value) => (moveOpen = value)">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>移动到…</DialogTitle>
+          <DialogDescription>
+            {{ moveDocument ? documentTitle(moveDocument) : "" }} 将移动到：
+          </DialogDescription>
+        </DialogHeader>
+        <Select v-model="moveTarget">
+          <SelectTrigger>
+            <SelectValue placeholder="选择目标知识库…" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem v-for="item in moveTargets" :key="item.id" :value="item.id">
+              {{ item.name }}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <DialogFooter>
+          <Button variant="outline" @click="moveOpen = false">取消</Button>
+          <Button :disabled="!moveTarget" @click="confirmMove">确认移动</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- 活动记录 -->
+    <Dialog :open="activityOpen" @update:open="(value) => (activityOpen = value)">
+      <DialogContent class="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>活动记录</DialogTitle>
+        </DialogHeader>
+        <div class="max-h-96 space-y-3 overflow-y-auto">
+          <Skeleton v-if="activityLoading" class="h-4 w-3/4" />
+          <template v-else>
+            <div v-for="(event, index) in activity" :key="index" class="space-y-0.5">
+              <p class="text-sm">{{ String(event.action ?? event.event_type ?? "操作") }}</p>
+              <p class="text-xs text-muted-foreground">
+                {{ String(event.actor_name ?? event.actor ?? "") }}
+                {{
+                  event.created_at
+                    ? new Date(String(event.created_at)).toLocaleString()
+                    : ""
+                }}
+              </p>
+            </div>
+            <Alert v-if="activityError" variant="destructive">
+              <AlertDescription>{{ activityError }}</AlertDescription>
+            </Alert>
+            <div v-if="!activity.length && !activityError" class="py-4 text-center">
+              <p class="text-sm text-muted-foreground">暂无活动记录</p>
+            </div>
+          </template>
+        </div>
+      </DialogContent>
+    </Dialog>
 
     <KnowledgeUploadDialog
       v-if="uploadOpen"
@@ -669,129 +845,5 @@ onUnmounted(() => {
       @changed="loadDocuments()"
       @revalidate="revalidateFromChunkEdit"
     />
-    </template>
-
-    <KnowledgeFaq
-      v-else-if="contentTab === 'faq' && selectedBaseId"
-      :kb-id="selectedBaseId"
-      @error="error = $event"
-    />
-    <KnowledgeWiki
-      v-else-if="contentTab === 'wiki' && selectedBaseId"
-      :kb-id="selectedBaseId"
-      @error="error = $event"
-    />
-
-    <WfInspector
-      variant="overlay"
-      :open="tagsOpen"
-      title="标签管理"
-      @close="tagsOpen = false"
-    >
-      <template v-if="tagsOpen">
-          <div class="wf-question-form">
-            <input
-              v-model="newTagName"
-              class="wf-input"
-              placeholder="新标签名称…"
-              @keyup.enter="createTag"
-            />
-            <button
-              class="wf-button compact primary"
-              :disabled="!newTagName.trim()"
-              @click="createTag"
-            >
-              创建
-            </button>
-          </div>
-          <div v-for="tag in tags" :key="tag.id" class="wf-tag-manage-row">
-            <span class="wf-tag-chip">{{ tag.name }}</span>
-            <button
-              class="wf-button compact danger"
-              @click="removeTag(tag)"
-            >
-              删除
-            </button>
-          </div>
-          <div v-if="!tags.length" class="wf-empty wf-empty-compact">
-            <div>
-              <strong>还没有标签</strong>
-              <p>创建标签后，上传内容时可选择标签归类。</p>
-            </div>
-          </div>
-      </template>
-    </WfInspector>
-
-    <div
-      v-if="moveOpen"
-      class="wf-modal-mask"
-      @click.self="moveOpen = false"
-    >
-      <div class="wf-modal wf-modal-narrow">
-        <div class="wf-modal-head">
-          <h3>移动到…</h3>
-          <button class="wf-icon-button" @click="moveOpen = false">×</button>
-        </div>
-        <div class="wf-modal-body">
-          <p class="wf-muted">
-            {{ moveDocument ? documentTitle(moveDocument) : "" }} 将移动到：
-          </p>
-          <select v-model="moveTarget" class="wf-select">
-            <option value="">选择目标知识库…</option>
-            <option
-              v-for="item in moveTargets"
-              :key="item.id"
-              :value="item.id"
-            >
-              {{ item.name }}
-            </option>
-          </select>
-        </div>
-        <div class="wf-modal-foot">
-          <button class="wf-button" @click="moveOpen = false">取消</button>
-          <button
-            class="wf-button primary"
-            :disabled="!moveTarget"
-            @click="confirmMove"
-          >
-            确认移动
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <WfInspector
-      variant="overlay"
-      :open="activityOpen"
-      title="活动记录"
-      @close="activityOpen = false"
-    >
-      <template v-if="activityOpen">
-          <div v-if="activityLoading" class="wf-skeleton wf-skeleton-title"></div>
-          <div
-            v-for="(event, index) in activity"
-            :key="index"
-            class="wf-inspector-section"
-          >
-            <p class="wf-brief-text">
-              {{ String(event.action ?? event.event_type ?? "操作") }}
-            </p>
-            <p class="wf-muted">
-              {{ String(event.actor_name ?? event.actor ?? "") }}
-              {{
-                event.created_at
-                  ? new Date(String(event.created_at)).toLocaleString()
-                  : ""
-              }}
-            </p>
-          </div>
-          <div v-if="!activityLoading && !activity.length" class="wf-empty">
-            <div>
-              <strong>暂无活动记录</strong>
-            </div>
-          </div>
-      </template>
-    </WfInspector>
   </div>
 </template>
-

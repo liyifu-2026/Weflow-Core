@@ -2,6 +2,25 @@
 import { onMounted, ref } from "vue";
 import { useEscClose } from "../composables/use-esc-close";
 import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   createFAQEntry,
   createKnowledgeFromURL,
   createManualKnowledge,
@@ -74,10 +93,6 @@ function buildProcessConfig(): Record<string, unknown> | undefined {
   return config;
 }
 
-function onAdvancedToggle(event: Event) {
-  advancedOpen.value = (event.target as HTMLDetailsElement).open;
-}
-
 onMounted(async () => {
   try {
     tags.value = await listKnowledgeTags(props.kbId);
@@ -137,53 +152,68 @@ async function submit() {
 </script>
 
 <template>
-  <div class="wf-modal-mask" @click.self="emit('close')">
-    <div class="wf-modal wf-modal-upload">
-      <div class="wf-modal-head">
-        <h3>添加知识</h3>
-        <button class="wf-icon-button" @click="emit('close')">×</button>
-      </div>
-      <div class="wf-modal-body">
-        <template v-if="!source">
-          <p class="wf-muted wf-upload-hint">选择内容来源</p>
-          <div class="wf-source-grid">
-            <button class="wf-source-card" @click="source = 'file'">
-              <strong>上传文件</strong>
-              <span class="wf-muted">PDF、Word、PPT 等</span>
-            </button>
-            <button class="wf-source-card" @click="source = 'url'">
-              <strong>添加网页</strong>
-              <span class="wf-muted">按 URL 抓取内容</span>
-            </button>
-            <button class="wf-source-card" @click="source = 'manual'">
-              <strong>输入文本</strong>
-              <span class="wf-muted">直接粘贴在线内容</span>
-            </button>
-            <button
-              v-if="faqEnabled"
-              class="wf-source-card"
-              @click="source = 'faq'"
-            >
-              <strong>添加 FAQ</strong>
-              <span class="wf-muted">标准问题与答案</span>
-            </button>
-          </div>
-        </template>
+  <Dialog :open="true" @update:open="(value) => !value && emit('close')">
+    <DialogContent class="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+      <DialogHeader>
+        <DialogTitle>添加知识</DialogTitle>
+      </DialogHeader>
 
-        <template v-else>
-          <button class="wf-link wf-link-button wf-upload-back" @click="source = null">
-            ← 更换来源
+      <template v-if="!source">
+        <p class="text-sm text-muted-foreground">选择内容来源</p>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button
+            class="rounded-md border border-border p-4 text-left transition-colors hover:bg-muted/50"
+            @click="source = 'file'"
+          >
+            <strong class="block text-sm">上传文件</strong>
+            <span class="text-xs text-muted-foreground">PDF、Word、PPT 等</span>
           </button>
-          <div v-if="error" class="wf-error">{{ error }}</div>
-          <div v-if="tags.length" class="wf-field">
-            <label>标签</label>
-            <div class="wf-tag-picker">
+          <button
+            class="rounded-md border border-border p-4 text-left transition-colors hover:bg-muted/50"
+            @click="source = 'url'"
+          >
+            <strong class="block text-sm">添加网页</strong>
+            <span class="text-xs text-muted-foreground">按 URL 抓取内容</span>
+          </button>
+          <button
+            class="rounded-md border border-border p-4 text-left transition-colors hover:bg-muted/50"
+            @click="source = 'manual'"
+          >
+            <strong class="block text-sm">输入文本</strong>
+            <span class="text-xs text-muted-foreground">直接粘贴在线内容</span>
+          </button>
+          <button
+            v-if="faqEnabled"
+            class="rounded-md border border-border p-4 text-left transition-colors hover:bg-muted/50"
+            @click="source = 'faq'"
+          >
+            <strong class="block text-sm">添加 FAQ</strong>
+            <span class="text-xs text-muted-foreground">标准问题与答案</span>
+          </button>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="space-y-4">
+          <Button variant="link" size="sm" class="h-auto p-0" @click="source = null">
+            ← 更换来源
+          </Button>
+
+          <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
+
+          <div v-if="tags.length" class="space-y-2">
+            <Label>标签</Label>
+            <div class="flex flex-wrap gap-2">
               <button
                 v-for="tag in tags"
                 :key="tag.id"
                 type="button"
-                class="wf-tag-chip"
-                :class="{ active: selectedTagIds.includes(tag.id) }"
+                class="rounded-full border px-2.5 py-0.5 text-xs transition-colors"
+                :class="
+                  selectedTagIds.includes(tag.id)
+                    ? 'border-transparent bg-primary text-primary-foreground'
+                    : 'border-border text-muted-foreground hover:text-foreground'
+                "
                 @click="toggleTag(tag.id)"
               >
                 {{ tag.name }}
@@ -192,142 +222,153 @@ async function submit() {
           </div>
 
           <template v-if="source === 'file'">
-            <div class="wf-field">
-              <label>文件（最大 25 MB）</label>
-              <input
-                class="wf-input"
+            <div class="space-y-2">
+              <Label for="upload-file">文件（最大 25 MB）</Label>
+              <Input
+                id="upload-file"
                 type="file"
                 @change="
                   file = ($event.target as HTMLInputElement).files?.[0] || null
                 "
               />
             </div>
-            <p class="wf-muted">
+            <p class="text-xs text-muted-foreground">
               上传后进入解析队列；达到可用状态后才参与 Agent 检索。
             </p>
+
             <details
-              class="wf-upload-advanced"
               :open="advancedOpen"
-              @toggle="onAdvancedToggle"
+              @toggle="advancedOpen = ($event.target as HTMLDetailsElement).open"
             >
-              <summary>高级设置 ></summary>
-              <div class="wf-advanced-body">
-                <div class="wf-grid">
-                  <div class="wf-field wf-span-4">
-                    <label>分块策略</label>
-                    <select v-model="chunkStrategy" class="wf-select">
-                      <option value="auto">自动</option>
-                      <option value="heading">按标题</option>
-                      <option value="heuristic">启发式</option>
-                    </select>
+              <summary class="cursor-pointer text-sm text-muted-foreground select-none hover:text-foreground">
+                高级设置
+              </summary>
+              <div class="mt-3 space-y-4">
+                <div class="grid grid-cols-3 gap-3">
+                  <div class="space-y-2">
+                    <Label>分块策略</Label>
+                    <Select v-model="chunkStrategy">
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">自动</SelectItem>
+                        <SelectItem value="heading">按标题</SelectItem>
+                        <SelectItem value="heuristic">启发式</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <div class="wf-field wf-span-4">
-                    <label>块大小</label>
-                    <input v-model.number="chunkSize" type="number" min="64" class="wf-input" />
+                  <div class="space-y-2">
+                    <Label for="chunk-size">块大小</Label>
+                    <Input id="chunk-size" v-model.number="chunkSize" type="number" min="64" />
                   </div>
-                  <div class="wf-field wf-span-4">
-                    <label>重叠</label>
-                    <input v-model.number="chunkOverlap" type="number" min="0" class="wf-input" />
+                  <div class="space-y-2">
+                    <Label for="chunk-overlap">重叠</Label>
+                    <Input id="chunk-overlap" v-model.number="chunkOverlap" type="number" min="0" />
                   </div>
                 </div>
-                <label class="wf-checkbox-row">
-                  <input v-model="enableParentChild" type="checkbox" />Parent-child
-                  父子分块
+
+                <label class="flex items-center gap-2 text-sm">
+                  <Checkbox v-model="enableParentChild" />
+                  Parent-child 父子分块
                 </label>
-                <div v-if="enableParentChild" class="wf-grid">
-                  <div class="wf-field wf-span-6">
-                    <label>父块大小</label>
-                    <input v-model.number="parentChunkSize" type="number" min="256" class="wf-input" />
+                <div v-if="enableParentChild" class="grid grid-cols-2 gap-3">
+                  <div class="space-y-2">
+                    <Label for="parent-chunk-size">父块大小</Label>
+                    <Input id="parent-chunk-size" v-model.number="parentChunkSize" type="number" min="256" />
                   </div>
-                  <div class="wf-field wf-span-6">
-                    <label>子块大小</label>
-                    <input v-model.number="childChunkSize" type="number" min="64" class="wf-input" />
+                  <div class="space-y-2">
+                    <Label for="child-chunk-size">子块大小</Label>
+                    <Input id="child-chunk-size" v-model.number="childChunkSize" type="number" min="64" />
                   </div>
                 </div>
-                <div class="wf-grid">
-                  <div class="wf-field wf-span-4">
-                    <label>PDF 解析引擎</label>
-                    <select v-model="pdfEngine" class="wf-select">
-                      <option value="builtin">内置</option>
-                      <option value="markitdown">MarkItDown</option>
-                    </select>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div class="space-y-2">
+                    <Label>PDF 解析引擎</Label>
+                    <Select v-model="pdfEngine">
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="builtin">内置</SelectItem>
+                        <SelectItem value="markitdown">MarkItDown</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
-                  <div class="wf-field wf-span-8">
-                    <label>问题生成</label>
-                    <div class="wf-advanced-inline">
-                      <label class="wf-checkbox-row">
-                        <input v-model="questionEnabled" type="checkbox" />启用
+                  <div class="space-y-2">
+                    <Label>问题生成</Label>
+                    <div class="flex items-center gap-2">
+                      <label class="flex items-center gap-2 text-sm">
+                        <Checkbox v-model="questionEnabled" />
+                        启用
                       </label>
-                      <input
+                      <Input
                         v-if="questionEnabled"
                         v-model.number="questionCount"
                         type="number"
                         min="1"
                         max="10"
-                        class="wf-input wf-question-count"
+                        class="w-16"
                       />
                     </div>
                   </div>
                 </div>
-                <label class="wf-checkbox-row">
-                  <input v-model="graphEnabled" type="checkbox" />提取实体关系
-                  （Graph）
+
+                <label class="flex items-center gap-2 text-sm">
+                  <Checkbox v-model="graphEnabled" />
+                  提取实体关系（Graph）
                 </label>
               </div>
             </details>
           </template>
 
           <template v-else-if="source === 'url'">
-            <div class="wf-field">
-              <label>网页地址</label>
-              <input v-model="url" class="wf-input" placeholder="https://…" />
+            <div class="space-y-2">
+              <Label for="upload-url">网页地址</Label>
+              <Input id="upload-url" v-model="url" placeholder="https://…" />
             </div>
           </template>
 
           <template v-else-if="source === 'manual'">
-            <div class="wf-field">
-              <label>标题</label>
-              <input v-model="title" class="wf-input" />
+            <div class="space-y-2">
+              <Label for="upload-title">标题</Label>
+              <Input id="upload-title" v-model="title" />
             </div>
-            <div class="wf-field">
-              <label>内容</label>
-              <textarea v-model="content" class="wf-textarea" rows="8"></textarea>
+            <div class="space-y-2">
+              <Label for="upload-content">内容</Label>
+              <Textarea id="upload-content" v-model="content" :rows="8" />
             </div>
           </template>
 
           <template v-else>
-            <div class="wf-field">
-              <label>标准问题</label>
-              <input v-model="faqQuestion" class="wf-input" />
+            <div class="space-y-2">
+              <Label for="faq-question">标准问题</Label>
+              <Input id="faq-question" v-model="faqQuestion" />
             </div>
-            <div class="wf-field">
-              <label>答案</label>
-              <textarea v-model="faqAnswer" class="wf-textarea" rows="4"></textarea>
+            <div class="space-y-2">
+              <Label for="faq-answer">答案</Label>
+              <Textarea id="faq-answer" v-model="faqAnswer" :rows="4" />
             </div>
-            <div class="wf-field">
-              <label>相似问题（每行一条）</label>
-              <textarea
+            <div class="space-y-2">
+              <Label for="faq-similar">相似问题（每行一条）</Label>
+              <Textarea
+                id="faq-similar"
                 v-model="faqSimilar"
-                class="wf-textarea"
-                rows="3"
+                :rows="3"
                 placeholder="客户可能换一种问法…"
-              ></textarea>
+              />
             </div>
           </template>
-        </template>
-      </div>
-      <div class="wf-modal-foot">
-        <button class="wf-button" @click="emit('close')">取消</button>
-        <button
-          v-if="source"
-          class="wf-button primary"
-          :disabled="submitting"
-          @click="submit"
-        >
-          {{ submitting ? "提交中" : "开始导入" }}
-        </button>
-      </div>
-    </div>
-  </div>
-</template>
+        </div>
+      </template>
 
+      <DialogFooter>
+        <Button variant="outline" @click="emit('close')">取消</Button>
+        <Button v-if="source" :disabled="submitting" @click="submit">
+          {{ submitting ? "提交中" : "开始导入" }}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
+</template>

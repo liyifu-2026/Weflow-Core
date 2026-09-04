@@ -1,7 +1,27 @@
 <script setup lang="ts">
 import { confirmDialog } from "../components/confirm-dialog";
 import { onMounted, ref } from "vue";
+import { MoreVertical, Plus, Search } from "lucide-vue-next";
 import { useEscClose } from "../composables/use-esc-close";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   createFAQEntry,
   deleteFAQEntries,
@@ -113,96 +133,106 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="wf-content-workspace">
-    <div class="wf-content-toolbar">
-      <div class="wf-search">
+  <div class="flex flex-col gap-4">
+    <div class="flex items-center gap-2">
+      <div class="flex min-w-48 flex-1 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 sm:max-w-sm">
+        <Search class="size-3.5 shrink-0 text-muted-foreground" />
         <input
           v-model="keyword"
-          class="wf-input"
+          class="h-8 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           placeholder="搜索 FAQ…"
           @keyup.enter="load()"
         />
       </div>
-      <div class="wf-spacer"></div>
-      <button class="wf-button primary" @click="openCreate">添加 FAQ</button>
+      <div class="flex-1"></div>
+      <Button size="sm" @click="openCreate">
+        <Plus class="size-4" />添加 FAQ
+      </Button>
     </div>
-    <section class="wf-content-list">
+
+    <section class="flex flex-col" aria-label="FAQ 列表">
       <template v-if="loading">
-        <div v-for="i in 4" :key="i" class="wf-content-row">
-          <div class="wf-skeleton wf-skeleton-title"></div>
+        <div v-for="i in 4" :key="i" class="px-2 py-3">
+          <Skeleton class="h-4 w-2/3" />
         </div>
       </template>
       <template v-else>
-        <div v-for="item in entries" :key="entryId(item)" class="wf-faq-row">
-          <div class="wf-content-name">
-            <strong>{{ entryQuestion(item) }}</strong>
-            <span class="wf-muted">{{ item.answer || "无答案" }}</span>
+        <div
+          v-for="item in entries"
+          :key="entryId(item)"
+          class="group flex items-start gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-muted/50"
+        >
+          <div class="min-w-0 flex-1">
+            <strong class="block text-sm font-medium">{{ entryQuestion(item) }}</strong>
+            <span class="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">{{ item.answer || "无答案" }}</span>
           </div>
-          <span class="wf-faq-state">
-            <span v-if="item.is_enabled === false" class="wf-status inactive"
-              >已停用</span
-            >
-            <span v-else-if="item.is_recommended" class="wf-muted"
-              >· 推荐</span
-            >
-          </span>
-          <details class="wf-row-menu wf-content-menu">
-            <summary class="wf-icon-button" title="更多操作">···</summary>
-            <div>
-              <button @click="openEdit(item)">编辑</button>
-              <button @click="toggleEnabled(item)">{{
-                item.is_enabled === false ? "启用" : "停用"
-              }}</button>
-              <button class="danger" @click="remove(item)">删除</button>
-            </div>
-          </details>
+          <div class="flex shrink-0 items-center gap-2">
+            <Badge v-if="item.is_enabled === false" variant="outline">已停用</Badge>
+            <span v-else-if="item.is_recommended" class="text-xs text-muted-foreground">· 推荐</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="size-7 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                  title="更多操作"
+                >
+                  <MoreVertical class="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem @click="openEdit(item)">编辑</DropdownMenuItem>
+                <DropdownMenuItem @click="toggleEnabled(item)">
+                  {{ item.is_enabled === false ? "启用" : "停用" }}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  class="text-destructive focus:text-destructive"
+                  @click="remove(item)"
+                >
+                  删除
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
-        <div v-if="!entries.length" class="wf-empty">
-          <div>
-            <strong>还没有 FAQ</strong>
-            <p>添加标准问题与答案，Agent 会优先使用 FAQ 回答。</p>
-          </div>
+        <div v-if="!entries.length" class="rounded-md border border-dashed border-border p-8 text-center">
+          <p class="text-sm font-medium">还没有 FAQ</p>
+          <p class="mt-1 text-sm text-muted-foreground">添加标准问题与答案，Agent 会优先使用 FAQ 回答。</p>
         </div>
       </template>
     </section>
 
-    <div v-if="editOpen" class="wf-modal-mask" @click.self="editOpen = false">
-      <div class="wf-modal">
-        <div class="wf-modal-head">
-          <h3>{{ editing ? "编辑 FAQ" : "添加 FAQ" }}</h3>
-          <button class="wf-icon-button" @click="editOpen = false">×</button>
-        </div>
-        <div class="wf-modal-body">
-          <div class="wf-field">
-            <label>标准问题</label>
-            <input v-model="question" class="wf-input" />
+    <Dialog :open="editOpen" @update:open="(value) => (editOpen = value)">
+      <DialogContent class="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{{ editing ? "编辑 FAQ" : "添加 FAQ" }}</DialogTitle>
+        </DialogHeader>
+        <div class="space-y-4">
+          <div class="space-y-2">
+            <Label for="faq-edit-question">标准问题</Label>
+            <Input id="faq-edit-question" v-model="question" />
           </div>
-          <div class="wf-field">
-            <label>答案</label>
-            <textarea v-model="answer" class="wf-textarea" rows="5"></textarea>
+          <div class="space-y-2">
+            <Label for="faq-edit-answer">答案</Label>
+            <Textarea id="faq-edit-answer" v-model="answer" :rows="5" />
           </div>
-          <div class="wf-field">
-            <label>相似问题（每行一条）</label>
-            <textarea
+          <div class="space-y-2">
+            <Label for="faq-edit-similar">相似问题（每行一条）</Label>
+            <Textarea
+              id="faq-edit-similar"
               v-model="similar"
-              class="wf-textarea"
-              rows="3"
+              :rows="3"
               placeholder="客户可能换一种问法…"
-            ></textarea>
+            />
           </div>
         </div>
-        <div class="wf-modal-foot">
-          <button class="wf-button" @click="editOpen = false">取消</button>
-          <button
-            class="wf-button primary"
-            :disabled="submitting || !question.trim()"
-            @click="save"
-          >
+        <DialogFooter>
+          <Button variant="outline" @click="editOpen = false">取消</Button>
+          <Button :disabled="submitting || !question.trim()" @click="save">
             {{ submitting ? "保存中" : "保存" }}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
-

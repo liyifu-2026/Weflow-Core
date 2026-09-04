@@ -3,6 +3,24 @@ import { confirmDialog } from "../components/confirm-dialog";
 import { ref } from "vue";
 import { useEscClose } from "../composables/use-esc-close";
 import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   createKnowledgeBase,
   deleteKnowledgeBase,
   updateKnowledgeBase,
@@ -68,58 +86,61 @@ async function remove() {
 </script>
 
 <template>
-  <div class="wf-modal-mask" @click.self="emit('close')">
-    <div class="wf-modal">
-      <div class="wf-modal-head">
-        <h3>{{ base ? "知识库设置" : "新建知识库" }}</h3>
-        <button class="wf-icon-button" @click="emit('close')">×</button>
-      </div>
-      <div class="wf-modal-body">
-        <div v-if="error" class="wf-error">{{ error }}</div>
-        <div class="wf-field">
-          <label>名称</label>
-          <input v-model="name" class="wf-input" placeholder="例如：产品售后手册" />
+  <Dialog :open="true" @update:open="(value) => !value && emit('close')">
+    <DialogContent class="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>{{ base ? "知识库设置" : "新建知识库" }}</DialogTitle>
+      </DialogHeader>
+
+      <div class="space-y-4">
+        <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
+        <div class="space-y-2">
+          <Label for="kb-name">名称</Label>
+          <Input id="kb-name" v-model="name" placeholder="例如：产品售后手册" />
         </div>
-        <div class="wf-field">
-          <label>用途说明</label>
-          <textarea
+        <div class="space-y-2">
+          <Label for="kb-description">用途说明</Label>
+          <Textarea
+            id="kb-description"
             v-model="description"
-            class="wf-textarea"
-            rows="3"
+            :rows="3"
             placeholder="说明 Agent 应在什么问题下使用这里的资料"
-          ></textarea>
+          />
         </div>
-        <div v-if="!base" class="wf-field">
-          <label>类型</label>
-          <select v-model="type" class="wf-select">
-            <option value="document">文档</option>
-            <option value="faq">FAQ</option>
-          </select>
+        <div v-if="!base" class="space-y-2">
+          <Label>类型</Label>
+          <Select v-model="type">
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="document">文档</SelectItem>
+              <SelectItem value="faq">FAQ</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
-        <p v-if="base" class="wf-muted">
+        <p v-if="base" class="text-xs text-muted-foreground">
           解析、分块与模型等高级配置将在后续版本开放。
         </p>
       </div>
-      <div class="wf-modal-foot">
-        <button
+
+      <DialogFooter class="sm:justify-between">
+        <Button
           v-if="base"
-          class="wf-button danger"
+          variant="ghost"
+          class="text-destructive hover:bg-destructive/10 hover:text-destructive"
           :disabled="submitting"
           @click="remove"
         >
           删除知识库
-        </button>
-        <div class="wf-spacer"></div>
-        <button class="wf-button" @click="emit('close')">取消</button>
-        <button
-          class="wf-button primary"
-          :disabled="submitting || !name.trim()"
-          @click="save"
-        >
-          {{ submitting ? "保存中" : base ? "保存" : "创建知识库" }}
-        </button>
-      </div>
-    </div>
-  </div>
+        </Button>
+        <div class="flex gap-2 sm:ml-auto">
+          <Button variant="outline" @click="emit('close')">取消</Button>
+          <Button :disabled="submitting || !name.trim()" @click="save">
+            {{ submitting ? "保存中" : base ? "保存" : "创建知识库" }}
+          </Button>
+        </div>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 </template>
-

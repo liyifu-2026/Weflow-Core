@@ -2,8 +2,27 @@
 import { confirmDialog } from "../components/confirm-dialog";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { ArrowRight, Ellipsis } from "lucide-vue-next";
 import { useWeflowAuthStore } from "../auth-store";
-import WfInspector from "../components/WfInspector.vue";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { renderMiniMarkdown } from "./mini-markdown";
 import type { NavigationOrigin } from "../navigation-context";
 import { returnToOrigin } from "../navigation-context";
@@ -290,231 +309,287 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <WfInspector
-    variant="overlay"
-    :open="true"
-    :title="title"
-    :depth="view === 'chunks' ? 1 : 0"
-    @back="view = 'preview'"
-    @close="emit('close')"
-  >
-    <template #actions>
-      <details v-if="view === 'preview' && auth.isAdmin" class="wf-row-menu">
-        <summary class="wf-icon-button" title="更多">···</summary>
-        <div>
-          <button @click="openTrace">处理详情</button>
+  <Sheet :open="true" @update:open="(value) => !value && emit('close')">
+    <SheetContent side="right" class="flex w-full max-w-xl flex-col gap-0 overflow-y-auto sm:max-w-xl">
+      <SheetHeader class="gap-1 text-left">
+        <SheetTitle class="truncate pr-6">{{ title }}</SheetTitle>
+        <SheetDescription class="sr-only">文档预览与切片编辑</SheetDescription>
+        <div class="flex flex-wrap items-center gap-2">
+          <Button
+            v-if="view === 'chunks'"
+            variant="ghost"
+            size="sm"
+            class="h-7 px-2"
+            @click="view = 'preview'"
+          >
+            ← 返回预览
+          </Button>
+          <span class="text-xs text-muted-foreground">
+            {{ sourceLabel }} ·
+            {{ document.updated_at ? new Date(document.updated_at).toLocaleString() : "—" }}
+          </span>
         </div>
-      </details>
-      <button
-        v-if="origin.type !== 'standalone'"
-        class="wf-button compact"
-        @click="backToOrigin"
-      >
-        返回会话
-      </button>
-    </template>
+      </SheetHeader>
 
-    <template v-if="view === 'preview'">
-      <div class="wf-preview-surface">
-        <p class="wf-preview-meta">
-          {{ sourceLabel }} · {{ document.updated_at ? new Date(document.updated_at).toLocaleString() : "—" }}
-        </p>
-        <div v-if="previewError" class="wf-error">{{ previewError }}</div>
-        <div v-if="previewLoading" class="wf-skeleton wf-skeleton-title"></div>
-        <article
-          v-else-if="previewHtml"
-          class="wf-wiki-content"
-          v-html="previewHtml"
-        ></article>
-        <pre v-else-if="previewText" class="wf-doc-preview">{{ previewText }}</pre>
-        <iframe
-          v-else-if="previewUrl"
-          class="wf-doc-frame"
-          :src="previewUrl"
-          title="文档预览"
-        ></iframe>
-        <div v-else-if="parsedFallback" class="wf-preview-fallback">
-          <div class="wf-preview-fallback-head">
-            <strong>原始预览不可用</strong>
-            <span class="wf-muted">该格式仅提供原始文件，已解析内容仍可阅读。</span>
+      <div class="flex flex-1 flex-col gap-4 px-4 pb-6">
+        <!-- 头部操作行 -->
+        <div class="flex items-center gap-2">
+          <Button
+            v-if="origin.type !== 'standalone'"
+            variant="outline"
+            size="sm"
+            @click="backToOrigin"
+          >
+            返回会话
+          </Button>
+          <div class="flex-1"></div>
+          <DropdownMenu v-if="view === 'preview' && auth.isAdmin">
+            <DropdownMenuTrigger as-child>
+              <Button variant="ghost" size="icon" title="更多">
+                <Ellipsis class="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem @click="openTrace">处理详情</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <!-- 预览视图 -->
+        <template v-if="view === 'preview'">
+          <div v-if="previewError" class="text-sm text-destructive">{{ previewError }}</div>
+          <Skeleton v-if="previewLoading" class="h-6 w-2/3" />
+          <article
+            v-else-if="previewHtml"
+            class="md-body max-w-none"
+            v-html="previewHtml"
+          ></article>
+          <pre
+            v-else-if="previewText"
+            class="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted p-4 font-mono text-xs leading-relaxed"
+          >{{ previewText }}</pre>
+          <iframe
+            v-else-if="previewUrl"
+            class="h-[60vh] w-full rounded-md border border-border"
+            :src="previewUrl"
+            title="文档预览"
+          ></iframe>
+          <div v-else-if="parsedFallback" class="space-y-3">
+            <div class="rounded-md border border-dashed border-border p-4">
+              <p class="text-sm font-medium">原始预览不可用</p>
+              <p class="mt-1 text-sm text-muted-foreground">
+                该格式仅提供原始文件，已解析内容仍可阅读。
+              </p>
+            </div>
+            <Skeleton v-if="chunksLoading" class="h-16 w-full" />
+            <div v-else-if="chunks.length" class="space-y-2">
+              <p class="rounded-md bg-muted p-3 text-sm leading-relaxed">{{ chunks[0].content }}</p>
+              <Button variant="link" size="sm" class="h-auto p-0" @click="view = 'chunks'; loadChunks()">
+                查看全部 {{ chunks.length }} 个切片 <ArrowRight class="size-3" />
+              </Button>
+            </div>
+            <div v-else class="rounded-md border border-dashed border-border p-6 text-center">
+              <p class="text-sm font-medium">没有可展示的解析内容</p>
+              <p class="mt-1 text-sm text-muted-foreground">
+                该文件可能仍在解析，或解析结果不可用。
+              </p>
+            </div>
           </div>
-          <div v-if="chunksLoading" class="wf-skeleton wf-skeleton-title"></div>
-          <div v-else-if="chunks.length" class="wf-fallback-chunks">
-            <p class="wf-fallback-chunk">{{ chunks[0].content }}</p>
-            <button
-              class="wf-link wf-link-button"
+          <div v-else class="rounded-md border border-dashed border-border p-6 text-center">
+            <p class="text-sm font-medium">暂不支持预览此格式</p>
+            <p class="mt-1 text-sm text-muted-foreground">当前类型：{{ previewType || "未知" }}</p>
+          </div>
+
+          <div v-if="traceOpen" class="space-y-2 rounded-md border border-border p-3">
+            <p class="text-xs font-medium text-muted-foreground">处理详情</p>
+            <Skeleton v-if="traceLoading" class="h-4 w-1/2" />
+            <div v-for="(span, index) in trace" :key="index" class="flex items-center justify-between text-sm">
+              <span>{{ String(span.name ?? span.stage ?? "阶段") }}</span>
+              <span class="text-muted-foreground">{{ String(span.status ?? "") }}</span>
+            </div>
+            <p v-if="!traceLoading && !trace.length" class="text-sm text-muted-foreground">
+              没有可展示的处理过程。
+            </p>
+          </div>
+
+          <div class="mt-auto flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
+            <Button
+              v-if="auth.isAdmin"
+              variant="link"
+              size="sm"
+              class="h-auto p-0"
               @click="view = 'chunks'; loadChunks()"
             >
-              查看全部 {{ chunks.length }} 个切片 →
-            </button>
-          </div>
-          <div v-else class="wf-empty wf-empty-compact">
-            <div>
-              <strong>没有可展示的解析内容</strong>
-              <p>该文件可能仍在解析，或解析结果不可用。</p>
-            </div>
-          </div>
-        </div>
-        <div v-else class="wf-empty wf-empty-compact">
-          <div>
-            <strong>暂不支持预览此格式</strong>
-            <p>当前类型：{{ previewType || "未知" }}</p>
-          </div>
-        </div>
-
-        <div v-if="traceOpen" class="wf-inline-section">
-          <span class="wf-brief-label">处理详情</span>
-          <div v-if="traceLoading" class="wf-skeleton wf-skeleton-title"></div>
-          <div v-for="(span, index) in trace" :key="index" class="wf-trace-row">
-            <span>{{ String(span.name ?? span.stage ?? "阶段") }}</span>
-            <span class="wf-muted">{{ String(span.status ?? "") }}</span>
-          </div>
-          <div v-if="!traceLoading && !trace.length" class="wf-muted">
-            没有可展示的处理过程。
-          </div>
-        </div>
-
-        <div class="wf-preview-footer">
-          <button
-            v-if="auth.isAdmin"
-            class="wf-link wf-link-button"
-            @click="view = 'chunks'; loadChunks()"
-          >
-            {{ chunks.length ? `${chunks.length} 个切片` : "查看切片" }} →
-          </button>
-          <span v-else class="wf-muted">{{ chunks.length ? `${chunks.length} 个切片` : "" }}</span>
-          <span class="wf-muted">{{ document.parse_status || document.status || "" }}</span>
-        </div>
-      </div>
-    </template>
-
-    <template v-else>
-      <div>
-        <div v-if="chunksError" class="wf-error">{{ chunksError }}</div>
-        <div v-if="chunksLoading" class="wf-skeleton wf-skeleton-title"></div>
-        <template v-else>
-          <div class="wf-chunk-list wf-chunk-list-drawer">
-            <div
-              v-for="item in chunks"
-              :key="chunkId(item)"
-              class="wf-chunk-row"
-              :class="{
-                selected: selectedChunkId === chunkId(item),
-                'wf-target-highlight': selectedChunkId === chunkId(item),
-              }"
-              @click="selectChunk(item)"
-            >
-              <span class="wf-mono wf-subtle">{{ chunkId(item).slice(0, 12) }}</span>
-              <p>{{ item.content || "空切片" }}</p>
-              <span
-                v-if="item.parent_chunk_id"
-                class="wf-subtle wf-chunk-parent"
-                title="父切片"
-                >parent {{ item.parent_chunk_id.slice(0, 8) }}</span
-              >
-            </div>
-            <div v-if="!chunks.length" class="wf-empty wf-empty-compact">
-              <div>
-                <strong>未返回可编辑切片</strong>
-                <p>上游没有提供切片列表。</p>
-              </div>
-            </div>
-          </div>
-          <div v-if="selectedChunk" class="wf-chunk-editor">
-            <span class="wf-brief-label">修正切片</span>
-            <textarea
-              v-model="editingContent"
-              class="wf-textarea"
-              rows="7"
-            ></textarea>
-            <label class="wf-checkbox-row">
-              <input v-model="editingEnabled" type="checkbox" />启用此切片
-            </label>
-            <div class="wf-actions">
-              <button
-                class="wf-button compact"
-                :disabled="saving"
-                @click="saveChunk(false)"
-              >
-                {{ saving ? "保存中" : "保存" }}
-              </button>
-              <button
-                class="wf-button compact primary"
-                :disabled="saving"
-                @click="saveChunk(true)"
-              >
-                保存并重新验证
-              </button>
-              <button
-                class="wf-button compact"
-                :disabled="questionBusy"
-                @click="openRevisions"
-              >
-                {{ revisionsOpen ? "收起版本" : "版本历史" }}
-              </button>
-            </div>
-
-            <div v-if="revisionsOpen" class="wf-inline-section">
-              <span class="wf-brief-label">版本历史</span>
-              <div v-if="revisionsLoading" class="wf-skeleton wf-skeleton-title"></div>
-              <div
-                v-for="revision in revisions"
-                :key="revision.content_revision"
-                class="wf-revision-row"
-              >
-                <div>
-                  <strong>revision {{ revision.content_revision }}</strong>
-                  <span class="wf-muted">
-                    {{ revision.created_at ? new Date(revision.created_at).toLocaleString() : "" }}
-                  </span>
-                </div>
-                <p>{{ revision.content || "空切片" }}</p>
-                <button class="wf-button compact" @click="revertTo(revision)">
-                  回滚到此版本
-                </button>
-              </div>
-              <div v-if="!revisionsLoading && !revisions.length" class="wf-muted">
-                没有版本记录。
-              </div>
-            </div>
-
-            <template v-if="(selectedChunk.generated_questions?.length || 0) > 0">
-              <span class="wf-brief-label">已生成问题</span>
-              <ul class="wf-question-list">
-                <li
-                  v-for="(item, index) in selectedChunk.generated_questions"
-                  :key="index"
-                >
-                  {{ item.question }}
-                </li>
-              </ul>
-            </template>
-            <div class="wf-question-form">
-              <input
-                v-model="newQuestion"
-                class="wf-input"
-                placeholder="添加生成问题…"
-                @keyup.enter="addQuestion"
-              />
-              <button
-                class="wf-button compact"
-                :disabled="questionBusy || !newQuestion.trim()"
-                @click="addQuestion"
-              >
-                添加
-              </button>
-              <button
-                class="wf-button compact"
-                :disabled="questionBusy"
-                @click="regenerateQuestions"
-              >
-                重新生成
-              </button>
-            </div>
+              {{ chunks.length ? `${chunks.length} 个切片` : "查看切片" }} <ArrowRight class="size-3" />
+            </Button>
+            <span v-else>{{ chunks.length ? `${chunks.length} 个切片` : "" }}</span>
+            <span>{{ document.parse_status || document.status || "" }}</span>
           </div>
         </template>
+
+        <!-- 切片视图 -->
+        <template v-else>
+          <div v-if="chunksError" class="text-sm text-destructive">{{ chunksError }}</div>
+          <Skeleton v-if="chunksLoading" class="h-6 w-2/3" />
+          <template v-else>
+            <div class="space-y-2">
+              <button
+                v-for="item in chunks"
+                :key="chunkId(item)"
+                class="w-full rounded-md border p-3 text-left transition-colors"
+                :class="
+                  selectedChunkId === chunkId(item)
+                    ? 'border-ring ring-1 ring-ring'
+                    : 'border-border hover:bg-muted/50'
+                "
+                @click="selectChunk(item)"
+              >
+                <span class="font-mono text-xs text-muted-foreground">{{ chunkId(item).slice(0, 12) }}</span>
+                <p class="mt-1 line-clamp-3 text-sm">{{ item.content || "空切片" }}</p>
+                <span
+                  v-if="item.parent_chunk_id"
+                  class="mt-1 block font-mono text-xs text-muted-foreground"
+                  title="父切片"
+                >parent {{ item.parent_chunk_id.slice(0, 8) }}</span>
+              </button>
+              <div v-if="!chunks.length" class="rounded-md border border-dashed border-border p-6 text-center">
+                <p class="text-sm font-medium">未返回可编辑切片</p>
+                <p class="mt-1 text-sm text-muted-foreground">上游没有提供切片列表。</p>
+              </div>
+            </div>
+
+            <div v-if="selectedChunk" class="space-y-4 border-t border-border pt-4">
+              <Label>修正切片</Label>
+              <Textarea v-model="editingContent" :rows="7" />
+              <label class="flex items-center gap-2 text-sm">
+                <Checkbox v-model="editingEnabled" />
+                启用此切片
+              </label>
+              <div class="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" :disabled="saving" @click="saveChunk(false)">
+                  {{ saving ? "保存中" : "保存" }}
+                </Button>
+                <Button size="sm" :disabled="saving" @click="saveChunk(true)">
+                  保存并重新验证
+                </Button>
+                <Button variant="outline" size="sm" :disabled="questionBusy" @click="openRevisions">
+                  {{ revisionsOpen ? "收起版本" : "版本历史" }}
+                </Button>
+              </div>
+
+              <div v-if="revisionsOpen" class="space-y-3 rounded-md bg-muted/50 p-3">
+                <p class="text-xs font-medium text-muted-foreground">版本历史</p>
+                <Skeleton v-if="revisionsLoading" class="h-4 w-2/3" />
+                <div
+                  v-for="revision in revisions"
+                  :key="revision.content_revision"
+                  class="space-y-1 rounded-md border border-border bg-background p-3"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <strong class="text-sm">revision {{ revision.content_revision }}</strong>
+                    <Button variant="ghost" size="sm" @click="revertTo(revision)">
+                      回滚到此版本
+                    </Button>
+                  </div>
+                  <span class="text-xs text-muted-foreground">
+                    {{ revision.created_at ? new Date(revision.created_at).toLocaleString() : "" }}
+                  </span>
+                  <p class="text-sm">{{ revision.content || "空切片" }}</p>
+                </div>
+                <p v-if="!revisionsLoading && !revisions.length" class="text-sm text-muted-foreground">
+                  没有版本记录。
+                </p>
+              </div>
+
+              <template v-if="(selectedChunk.generated_questions?.length || 0) > 0">
+                <Label>已生成问题</Label>
+                <ul class="ml-4 list-disc space-y-1 text-sm">
+                  <li
+                    v-for="(item, index) in selectedChunk.generated_questions"
+                    :key="index"
+                  >
+                    {{ item.question }}
+                  </li>
+                </ul>
+              </template>
+
+              <div class="flex gap-2">
+                <Input
+                  v-model="newQuestion"
+                  placeholder="添加生成问题…"
+                  @keyup.enter="addQuestion"
+                />
+                <Button variant="outline" :disabled="questionBusy || !newQuestion.trim()" @click="addQuestion">
+                  添加
+                </Button>
+                <Button variant="outline" :disabled="questionBusy" @click="regenerateQuestions">
+                  重新生成
+                </Button>
+              </div>
+            </div>
+          </template>
+        </template>
       </div>
-    </template>
-  </WfInspector>
+    </SheetContent>
+  </Sheet>
 </template>
 
+<style scoped>
+/* renderMiniMarkdown 输出原生标签（v-html 不带 scoped 属性），需语义化排版 */
+.md-body :deep(h1),
+.md-body :deep(h2),
+.md-body :deep(h3),
+.md-body :deep(h4) {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+  margin: 1.25em 0 0.5em;
+}
+.md-body :deep(h1) { font-size: 1.25rem; }
+.md-body :deep(h2) { font-size: 1.125rem; }
+.md-body :deep(h3),
+.md-body :deep(h4) { font-size: 1rem; }
+.md-body :deep(p) {
+  margin: 0.5em 0;
+  line-height: 1.7;
+  color: var(--foreground);
+}
+.md-body :deep(ul) {
+  margin: 0.5em 0;
+  padding-left: 1.25em;
+  list-style: disc;
+  color: var(--foreground);
+}
+.md-body :deep(li) { margin: 0.25em 0; line-height: 1.6; }
+.md-body :deep(a) {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.md-body :deep(code) {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.875em;
+  background: var(--muted);
+  border-radius: 4px;
+  padding: 0.1em 0.3em;
+}
+.md-body :deep(pre) {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+.md-body :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+.md-body :deep(hr) {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 1.25em 0;
+}
+</style>

@@ -4,6 +4,9 @@
  * 数据来自现有只读端点（知识库列表）与本地检索计数，不新增后端依赖。
  */
 import { computed, onMounted, ref } from "vue";
+import { Database } from "lucide-vue-next";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { listKnowledgeBases } from "./api";
 import { getValidateSearchCount } from "./search-stats";
 
@@ -63,54 +66,22 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="wf-knowledge-stats" aria-label="知识库概览">
-    <div v-if="failed" class="wf-knowledge-stats-error">
+  <section aria-label="知识库概览" class="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <div v-if="failed" class="col-span-full flex items-center gap-2 text-sm text-muted-foreground">
+      <Database class="size-4" />
       概览数据暂不可用
     </div>
     <template v-else>
-      <div v-for="card in cards" :key="card.label" class="wf-stat-card">
+      <Card v-for="card in cards" :key="card.label" class="gap-1 px-4 py-3">
         <template v-if="loading">
-          <div class="wf-skeleton wf-skeleton-title"></div>
-          <div class="wf-skeleton wf-skeleton-line"></div>
+          <Skeleton class="h-5 w-10" />
+          <Skeleton class="h-3 w-14" />
         </template>
         <template v-else>
-          <strong>{{ card.value }}</strong>
-          <span>{{ card.label }}</span>
+          <span class="text-xl font-semibold leading-tight tracking-tight">{{ card.value }}</span>
+          <span class="text-xs text-muted-foreground">{{ card.label }}</span>
         </template>
-      </div>
+      </Card>
     </template>
   </section>
 </template>
-
-<style scoped>
-.wf-knowledge-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.wf-stat-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 14px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
-  border-radius: 12px;
-  background: var(--wf-surface, #fff);
-}
-.wf-stat-card strong {
-  font-size: 20px;
-  line-height: 1.2;
-  color: var(--wf-text, #17181a);
-}
-.wf-stat-card span {
-  font-size: 12px;
-  color: var(--wf-text-secondary, #5f6368);
-}
-.wf-knowledge-stats-error {
-  grid-column: 1 / -1;
-  font-size: 12px;
-  color: var(--wf-text-secondary, #5f6368);
-  padding: 8px 2px;
-}
-</style>
