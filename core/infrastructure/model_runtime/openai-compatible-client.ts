@@ -15,7 +15,13 @@ const responseSchema = z.object({
   choices: z
     .array(
       z.object({
-        message: z.object({ content: z.string() }),
+        message: z.object({
+          content: z.string(),
+          // 思维链（THINKING-PIPELINE-PLAN）：必须显式声明——zod 对象默认
+          // 剥离未知字段，此前 reasoning_content 在 parse 时被剥掉，
+          // extractReasoning 永远拿到 undefined（model_reasoning 恒为空的真凶）。
+          reasoning_content: z.string().nullable().optional(),
+        }),
         finish_reason: z.string().nullable().optional(),
       }),
     )
