@@ -14,12 +14,12 @@ _Avoid_: Agent、业务后端、Core 内部模块
 Weflow 的无界面业务核心，拥有除通道原始事实之外的全部业务事实；Agent 流程由 Execution Strategy 与 Skill 插件驱动。  
 _Avoid_: 客户端、单个 Agent 进程
 
-**Console**:  
-管理与运营工作台，承载会话、知识、记忆、媒体、Agent 治理和系统管理。  
-_Avoid_: Core、旧 CocoCat Console
+**Console（平台壳，R1 退役）**:  
+退役中的平台壳，仅保留登录/改密/审计/用户/系统状态等平台页面；产品唯一网页端是 support-web（weflow-solutions 仓库）。  
+_Avoid_: Core、旧 CocoCat Console、在 Console 承载业务页面
 
 **用户**:  
-获得封闭发放账号、可登录 Console 与 Solution 提供客户端的系统使用者。  
+获得封闭发放账号、可登录产品网页端（support-web）等客户端的系统使用者。  
 _Avoid_: End User、Channel Host 机器身份
 
 **End User**:  
@@ -77,7 +77,7 @@ _Avoid_: 常驻聊天会话、模型调用本身
 _Avoid_: 单次模型调用、常驻聊天会话、队列 Job 本身
 
 **Execution Profile**:  
-决定会话是否及如何运行 Agent 的执行配置，由 Solution 插件安装提供；Core 通过 ExecutionStrategyRegistry 按 active profile 的 strategyRef 选择 Execution Strategy。  
+决定会话是否及如何运行 Agent 的执行配置，由业务插件注册提供；Core 通过 ExecutionStrategyRegistry 按 strategy 选择 Execution Strategy。  
 _Avoid_: 内置业务策略、硬编码 Prompt
 
 ## Relationships
@@ -85,7 +85,7 @@ _Avoid_: 内置业务策略、硬编码 Prompt
 - 一个 **Channel Host** 运行一个通道实例，并连接一个 **Core**
 - 一个 **Core** 当前只有一个 **共享工作空间**
 - 一个 **共享工作空间** 包含多个 **用户** 和多个 **End User**
-- 每个 **用户** 可登录 **Console** 与 Solution 提供的客户端
+- 每个 **用户** 可登录产品网页端（support-web）等客户端
 - **用户** 分为 **operator** 与 **admin**；两者都可处理会话，只有管理员可管理账号、知识、策略和系统
 - 一个 **End User** 对应一个 **Contact Profile**，并拥有零个或多个 **Conversation**
 - 一个 **Conversation** 可引用多个 **Media**
@@ -93,7 +93,7 @@ _Avoid_: 内置业务策略、硬编码 Prompt
 - **Memory** 关联 End User 或会话语境，但不保存完整 **Conversation**
 - **Knowledge** 可被 **Contact Profile** 关联，并在 **Agent Turn** 中按需检索
 - **Handoff** 由策略或用户触发，只能通过客户端处理，不通过通道指令处理
-- 一个 **Execution Profile** 由 Solution 安装提供，引用一个 **Execution Strategy** 与一组 **Skill**（见 Platform vocabulary）
+- 一个 **Execution Profile** 由业务插件注册提供，引用一个 **Execution Strategy** 与一组 **Skill**（见 Platform vocabulary）
 
 ## Example dialogue
 
@@ -114,34 +114,22 @@ _Avoid_: 内置业务策略、硬编码 Prompt
 
 ## Compatibility vocabulary
 
-旧文档、持久化字段和过渡 Adapter 可能仍出现 `Server1`、`Server2`、`Client1`、`Client2`。它们分别对应 Channel Host、Core、Mobile、Console；其中 Mobile 现为 Solution 提供的客户端。新代码和新文档使用正式名称。
+旧文档、持久化字段和过渡 Adapter 可能仍出现 `Server1`、`Server2`、`Client1`、`Client2`。它们分别对应 Channel Host、Core、Mobile、Console；Mobile 现为产品移动端客户端。新代码和新文档使用正式名称。
 
-## Platform vocabulary (Phase 7)
+## Platform vocabulary (Phase 7 → R3 重定性)
 
 **Platform**:  
-Weflow 的可独立发布产品层，包含 Core、Console、Contracts、SDK、weflowctl 与 Solution Runner。  
-_Avoid_: 具体业务方案、单一通道运行单元
+Weflow 的可独立发布产品层，包含 Core、Contracts、plugin-sdk 与 weflowctl。R3 平台化拆除后不再有 Solution Runner / npm 市场 / 方案注册表。  
+_Avoid_: 具体业务方案、单一通道运行单元、Solution Store
 
 **Plugin**:  
-通过公开 SDK 在 Platform seam 上扩展能力的包；分为 Provider、Tool、Skill、Execution Strategy 等类型。  
-_Avoid_: 直接导入 Core 源码的内部模块
-
-**Solution Pack**:  
-一个可安装、可签名、可回滚的业务方案发布单元，由 `solution.manifest.yaml`、`solution.lock.json` 与 `signature.json` 组成；向 Core 注册 Execution Strategy、Skill 等插件能力。  
-_Avoid_: Marketplace 商品、任意脚本包
-
-**Solution App**:  
-Solution Pack 内独立构建、部署和升级的应用（如独立前端、BFF、移动端）。  
-_Avoid_: Console 内嵌页面
+通过公开 SDK 在 Platform seam 上扩展能力的包；分为 Provider、Tool、Skill、Execution Strategy 等类型。业务插件由 Core 从 `WEFLOW_PLUGIN_DIR` 指向的插件目录直读加载，不经打包安装流程。  
+_Avoid_: 直接导入 Core 源码的内部模块、solution pack 安装契约
 
 **Execution Strategy**:  
 决定 Agent 如何构建模型请求、解析模型响应并校验动作的插件化策略；不得直接调用模型、数据库、Channel 或执行工具。  
 _Avoid_: 内置业务 Prompt 兜底
 
-**Solution Installation**:  
-Core 中描述某个 Solution Pack 安装生命周期的权威事实，包含 desiredState、observedState、healthState 与 Operation。  
-_Avoid_: 文件系统上的临时目录
+## Compatibility vocabulary (R3)
 
-**Desired State / Observed State**:  
-Desired State 是管理员期望的方案状态（disabled/active/removed）；Observed State 是 Runner 回报的实际状态（absent/installing/installed/configured/activating/active/degraded/rolling_back/uninstalling/removed/failed）。  
-_Avoid_: 把二者混为一个状态字段
+`Solution Pack`、`Solution App`、`Solution Installation`、`Desired/Observed State`、`consoleExtensions`、`ExtensionHost` 与 npm 市场相关词汇已随 R3 平台化拆除全部退役；旧文档与迁移 journal（0048–0053）中可遇到，新代码与新文档一律不再使用。`solution.extension_settings` 表保留，但语义已重定义为设置中心的通用 JSON 设置存储（主键 scope/key）。

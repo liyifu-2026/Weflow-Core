@@ -10,8 +10,8 @@ altering behaviour.
   channel media access, sending, and delivery operation confirmation.
 - **Core** owns business facts: conversations, messages, Agent Turns,
   handoffs, contact profiles, memory, media metadata, and audits.
-- **Console** and Solution-provided clients are authenticated management
-  clients. They do not own business state or bypass Core APIs.
+- **support-web** (the product web client) and other authenticated management
+  clients do not own business state or bypass Core APIs.
 - There is one shared workspace. An end-user contact is not a logged-in user.
 
 Never move business logic into the Channel Host, use a Redis queue as a source of
@@ -46,7 +46,8 @@ Route handlers in `interface/` are HTTP adapters. They must:
 
 Route handlers must NOT:
 - Import from `infrastructure/postgres/schema` or call Drizzle ORM directly
-- Import from `infrastructure/solutions/*` directly (go through application layer)
+- Import from `infrastructure/settings/*` or other cross-module infrastructure
+  directly when an application-layer equivalent exists
 - Contain business orchestration logic (npm fetch → download → install → activate)
 - Contain business validation logic (package name normalization, error classification)
 - Dynamically import from `tooling/` or `weflowctl/`
@@ -88,7 +89,7 @@ module must be restructured before merging.
 
 ## Agent, strategy, and context
 
-- Execution Strategy (registered in `ExecutionStrategyRegistry` by Solution
+- Execution Strategy (registered in `ExecutionStrategyRegistry` by business
   plugins) decides how a model request is built, how the response is parsed,
   and which actions are validated. It never calls the model, the database, the
   Channel, or tools directly.
@@ -99,7 +100,8 @@ module must be restructured before merging.
   active execution profile at execution time. Queued and running Turns must
   continue with their bound selection even if the profile changes.
 - Skills are looked up through `SkillRegistry` only; they are registered by
-  Solution plugins, never hardcoded into Core. Audit each profile change.
+  business plugins loaded from `WEFLOW_PLUGIN_DIR`, never hardcoded into Core.
+  Audit each profile change.
 - Prompt examples improve style only. Enforce safety, length, segment count,
   state transitions, tool permissions, and idempotency in code.
 - Context must distinguish trusted tool facts, human-confirmed profile data,

@@ -2,7 +2,7 @@
 
 ## Scope
 
-本目录是 Weflow 的干净收敛仓库。进行修改时，优先保持职责清晰、接口稳定和迁移可回滚；不要把旧仓库的临时编号重新带回正式命名。
+本目录是 Weflow 的平台仓库。**Weflow 是一个「单进程部署、配置集中、可高效热更新的 AI 客服产品」**——不是 AI 员工平台，没有方案市场，没有微前端。进行修改时，优先保持职责清晰、接口稳定和迁移可回滚；不要把旧仓库的临时编号重新带回正式命名。
 
 ## Canonical names
 
@@ -10,6 +10,14 @@
 - `apps/console`：退役中的平台壳（R1 收敛后不再承载业务 UI，不新增功能）
 
 `SERVER1_*`、`Server1Client` 等只允许作为短期兼容 alias 或历史数据说明出现。新代码应使用 Channel Host 术语。
+
+## 产品收敛现状（R1 + R3 平台化拆除）
+
+- 平台化系统已整体拆除（R3）：solution pack / store / signature / registry / runner / npm-market / lock / `packages/solution-sdk` 全部删除；示例 solution（`weflow/solutions/knowledge|memory`）删除。
+- 插件加载 = 「插件目录直读」：Core 从 `WEFLOW_PLUGIN_DIR`（core/.env 配置，指向如 `weflow-solutions/solutions/customer-support`）直读 backend 插件（`backend/**/index.js` 的 `registerRoutes(server, ctx)` 契约不变）与 agent 插件（`plugins/*/dist`，`SKILL_PLUGIN_PATH`/`STRATEGY_PLUGIN_PATH` 仍可显式覆盖）。
+- `solution.extension_settings` 表保留为设置中心通用 JSON 设置存储（主键 scope/key）；读写端点收编至 operations 模块（`/api/v1/admin/solutions/:solutionId/extensions/:extensionId/settings`）。
+- weflowctl 只保留 dev（doctor/up/down）+ config/completion；solution 命令族全部删除。
+- 0070 迁移删除 `solution` schema 的 installations/versions/operations/operation_payloads/resource_ownership/events/secret_assignments 表。
 
 ## 产品收敛现状（R1）
 
@@ -33,6 +41,8 @@
 - 禁止在 Core 中硬编码业务策略、业务 Prompt、业务状态机。
 - 禁止把 `weflow-solutions` 里的业务功能反向搬到 `weflow`（含 `apps/console`、`core` 及其他平台目录）。
 - 禁止重建 ExtensionHost / solution pack 消费端 / 微前端 mount 契约。
+- 禁止恢复 solution store / registry / runner / npm-market / signature / lock 机制或 `@weflow-leaif/solution-sdk`。
+- 业务插件的加载只走插件目录直读；不要引入打包安装/激活/回滚流程。
 
 ## 正确开发路径
 
@@ -61,6 +71,7 @@
 
 - PR / diff 中若出现 `weflow/apps/console` 下新增业务词（客服、工作台、Handoff 业务页、微信、具体通道 UI 等），必须暂停合入并确认归属。
 - 搜索 `createMemoryHistory`、`ExtensionHost`、`consoleExtensions`：出现即违规。
+- 搜索 `solution-store`、`solution-pack`、`solution-registry`、`solution-runner`、`solution-sdk`、`npm-market`：出现即违规（R3 已全部拆除）。
 
 ## Console 路由审计
 
