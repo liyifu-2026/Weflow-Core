@@ -86,7 +86,7 @@ onUnmounted(() => {
       <img
         :src="objectUrl"
         :alt="alt || '客户发送的图片'"
-        class="block max-h-48 max-w-60 object-cover"
+        class="block max-h-48 max-w-60 rounded-md border border-border bg-muted object-cover"
       />
     </button>
   </span>
