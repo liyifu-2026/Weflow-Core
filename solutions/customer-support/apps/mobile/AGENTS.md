@@ -12,6 +12,7 @@ Mobile is an Expo React Native application for internal customer-service staff. 
 - `docs/mobile-spec.md` defines product rules and Core contract requirements.
 - `docs/mobile-ui-spec.md` defines information architecture and interaction behavior.
 - `docs/versioning.md` defines the mandatory versioning and release-note workflow.
+- `docs/dev-debug.md` is the quick-reference for daily dev/debug workflows (emulator, LAN device, OTA release). Read it before operating the mobile app.
 - `CHANGELOG.md` is the public record of unreleased and released changes.
 
 `README.md` is broader product context. Core is the source of truth: never place Handoff ownership, queue membership, assistance, escalation, or authorization solely in client state.
@@ -34,7 +35,7 @@ npm run typecheck # validate TypeScript
 npx expo export --platform web # verify Metro/static routing can bundle
 ```
 
-No automated test suite exists yet. Add tests with each feature and document the command in `README.md`.
+Vitest is configured (`npm run test`; 20 files, 100+ cases). Add tests with each feature and cover the races listed under Testing Guidelines. Daily dev/debug workflows (emulator, LAN device, OTA release) live in `docs/dev-debug.md`.
 
 ## Coding Style & Naming
 
