@@ -19,6 +19,7 @@ import { loadInstalledBackendPlugins } from "../../infrastructure/solutions/back
 import { startMemoryCaptureDispatcher } from "../../infrastructure/redis/memory-capture-dispatcher.js";
 import { startMediaProcessingDispatcher } from "../../infrastructure/redis/media-processing-dispatcher.js";
 import { startTurnAdmissionDispatcher } from "../../modules/conversations/application/start-turn-admission-dispatcher.js";
+import { processDueScheduledSends } from "../../modules/agent/application/scheduled-sends.js";
 import { processTurnAdmissions } from "../../modules/conversations/application/process-turn-admissions.js";
 import {
   HttpChannelProvider,
@@ -41,6 +42,7 @@ import { registerContactProfileRoutes } from "../../modules/contacts/interface/h
 import { registerContactAvatarRoutes } from "../../modules/contacts/interface/avatar-routes.js";
 import { AvatarProxyService } from "../../modules/contacts/application/avatar-proxy-service.js";
 import { registerMemoryRoutes } from "../../modules/memory/interface/http-routes.js";
+import { registerScheduledSendRoutes } from "../../modules/agent/interface/scheduled-send-routes.js";
 import { registerMediaRoutes } from "../../modules/media/interface/http-routes.js";
 import { registerAssetRoutes } from "../../modules/assets/interface/http-routes.js";
 import { registerNotificationRoutes } from "../../modules/notifications/interface/http-routes.js";
@@ -107,6 +109,7 @@ await runProcess({
     );
     registerHandoffRoutes(server, postgres.db);
     registerMemoryRoutes(server, postgres.db);
+  registerScheduledSendRoutes(server, postgres.db);
     registerMediaRoutes(server, postgres.db, `${config.fileStorageRoot}/media`);
     registerAssetRoutes(
       server,
@@ -280,6 +283,17 @@ await runProcess({
       process: () => processTurnAdmissions(postgres.db, logger),
       logger,
     });
+    // 定时发送 dispatcher（SCHEDULED-SEND-PLAN）：到点直发预承诺内容，
+    // 不调用模型；护栏（handoff 冻结 / 白名单摘除作废 / 静音顺延）全代码持有。
+    const stopScheduledSendDispatcher = startTurnAdmissionDispatcher({
+      process: async () =>
+        processDueScheduledSends(postgres.db, undefined, {
+          error: (obj, msg) => logger.error(obj as object, msg),
+          info: (obj, msg) => logger.info(obj as object, msg),
+        }),
+      intervalMs: 5_000,
+      logger,
+    });
     const stopMemoryMaintenance = startMemoryMaintenance(postgres.db, logger);
     // 启动媒体处理调度器，处理入站媒体文件的转码和存储。
     // 业务依赖由组合根绑定：infrastructure 的 dispatcher/poller 不反向依赖 modules。
@@ -383,6 +397,7 @@ await runProcess({
         stopAgentTurnDispatcher();
         stopMemoryCaptureDispatcher();
         stopTurnAdmissionDispatcher();
+        stopScheduledSendDispatcher();
         stopMemoryMaintenance();
         stopMediaProcessingDispatcher();
         stopPushDispatcher();
@@ -397,6 +412,7 @@ await runProcess({
       stopAgentTurnDispatcher();
       stopMemoryCaptureDispatcher();
       stopTurnAdmissionDispatcher();
+      stopScheduledSendDispatcher();
       stopMemoryMaintenance();
       stopMediaProcessingDispatcher();
       stopPushDispatcher();

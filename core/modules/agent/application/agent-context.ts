@@ -12,7 +12,7 @@
  * 可以在此基础上自行扩展上下文。
  */
 
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { recallMemories } from "../../memory/application/recall-memories.js";
@@ -124,6 +124,36 @@ export async function buildAgentContext(
   };
   const now = new Date();
   const nowText = formatCurrentTime(now);
+  // 定时发送可见性（SCHEDULED-SEND-PLAN 决策 #5）：待发与近 24h 内被
+  // 新事件作废的定时消息进入上下文，模型自行决定补发/改期/放弃。
+  const scheduledSends = await db
+    .select({
+      content: schema.scheduledSends.content,
+      status: schema.scheduledSends.status,
+      sendAt: schema.scheduledSends.sendAt,
+      cancelReason: schema.scheduledSends.cancelReason,
+      updatedAt: schema.scheduledSends.updatedAt,
+    })
+    .from(schema.scheduledSends)
+    .where(
+      and(
+        eq(schema.scheduledSends.conversationId, conversationId),
+        sql`(${schema.scheduledSends.status} in ('pending','frozen') or (${schema.scheduledSends.status} = 'cancelled' and ${schema.scheduledSends.cancelReason} = 'new_inbound' and ${schema.scheduledSends.updatedAt} > now() - interval '24 hours'))`,
+      ),
+    )
+    .orderBy(desc(schema.scheduledSends.updatedAt))
+    .limit(5);
+  const scheduledSendHint =
+    scheduledSends.length > 0
+      ? `\n\n定时消息（程序维护的既定承诺；pending 的到点会自动直发，cancelled(new_inbound) 的已因用户新消息作废——若仍有必要请重新安排或在回复中处理）：${JSON.stringify(
+          scheduledSends.map((item) => ({
+            content: item.content,
+            status: item.status,
+            sendAt: item.sendAt.toISOString(),
+            ...(item.cancelReason ? { cancelReason: item.cancelReason } : {}),
+          })),
+        )}`
+      : "";
   const chatTypeHint =
     chatType === "group"
       ? "\n当前会话类型：群聊（回复应简洁，避免包含私人信息或针对特定联系人的个性化内容）"
@@ -147,7 +177,7 @@ export async function buildAgentContext(
       previousHumanCycle,
     )}\n\n本批次消息摘要（由程序生成，不重复询问其中已确认的信息）：${JSON.stringify(
       batchSummary,
-    )}\n\n已确认长期记忆（仅在相关时使用，不向对方暴露内部记录）：${JSON.stringify(
+    )}${scheduledSendHint}\n\n已确认长期记忆（仅在相关时使用，不向对方暴露内部记录）：${JSON.stringify(
       memories.map((memory) => ({
         key: `${memory.kind}.${memory.memoryKey}`,
         value: memory.content,

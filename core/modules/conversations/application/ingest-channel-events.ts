@@ -12,6 +12,7 @@ import type { Logger } from "pino";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { createLogger } from "../../../infrastructure/observability/logger.js";
 import type { ChannelEvent } from "../../channel/contracts/channel-event-source.js";
+import { cancelPendingScheduledSendsOnInbound } from "../../agent/application/scheduled-sends.js";
 import { contactIdForChannel } from "../../contacts/application/contact-profile-service.js";
 import { scheduleMemoryCaptureInTransaction } from "../../memory/application/schedule-memory-capture.js";
 import { scheduleTurnAdmissionInTransaction } from "./turn-admission.js";
@@ -275,6 +276,13 @@ async function ingestNormalizedEvents(
         })
         .onConflictDoNothing()
         .returning({ messageId: schema.messages.messageId });
+
+      // 定时发送新事件作废（SCHEDULED-SEND-PLAN 决策 #5）：入站消息落库
+      // 即作废该会话全部 pending 定时发送——预承诺内容可能已过时，正常
+      // 轮次的上下文会展示被作废项，由模型自行决定补发/改期/放弃。
+      if (insertedMessages[0] && direction === "inbound" && !event.historical) {
+        await cancelPendingScheduledSendsOnInbound(transaction, conversationId);
+      }
 
       const handoff = await transaction
         .select({

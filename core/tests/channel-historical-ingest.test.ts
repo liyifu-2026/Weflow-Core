@@ -188,9 +188,30 @@ function createStubDb() {
           };
           return chain;
         },
-        // ingest 路径不需要 update/delete；出现即失败，防静默绕过
-        update() {
-          throw new Error("stub: update not expected");
+        // update 仅允许：实时入站对 scheduled_sends 的新事件作废
+        // （SCHEDULED-SEND-PLAN 决策 #5）。其余表出现 update 即失败，防静默绕过。
+        update(table: { getSQLName?: () => string } & Record<string, unknown>) {
+          const name = (table as any)?.[Symbol.for("drizzle:Name")] ?? "";
+          if (name === "scheduled_sends") {
+            return {
+              set() {
+                const chain: any = {
+                  returning() {
+                    return Promise.resolve([]);
+                  },
+                };
+                chain.where = () => {
+                  return {
+                    returning: chain.returning,
+                    then: (resolve: (v: unknown[]) => void) =>
+                      Promise.resolve([]).then(resolve),
+                  };
+                };
+                return chain;
+              },
+            };
+          }
+          throw new Error(`stub: update not expected on ${name || "unknown table"}`);
         },
         delete() {
           throw new Error("stub: delete not expected");

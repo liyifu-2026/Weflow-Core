@@ -28,6 +28,7 @@ import {
 import { AgentTurnService } from "./agent-turn-service.js";
 import { isDuplicateOfLastReply } from "./duplicate-reply.js";
 import { recordAgentTurnEvent } from "./agent-turn-events.js";
+import { freezePendingScheduledSendsForHandoff } from "./scheduled-sends.js";
 import type { ToolPlan } from "./tool-plan.js";
 
 export type AgentTurnOutcomeInput = {
@@ -139,6 +140,12 @@ export async function commitAgentTurnHandoff(
       eventType: "handoff_created",
       reasonCode: input.reason,
     });
+    // 定时发送冻结（SCHEDULED-SEND-PLAN 决策 #6）：人工接入即冻结全部
+    // pending 定时消息进待审，由接手客服放行/改期/丢弃；不自动恢复。
+    await freezePendingScheduledSendsForHandoff(
+      transaction,
+      input.conversationId,
+    );
     return { status: "committed" };
   });
 }

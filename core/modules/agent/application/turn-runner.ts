@@ -137,6 +137,17 @@ export async function processAgentTurn(
     .where(eq(schema.conversations.conversationId, turn.conversationId))
     .limit(1);
 
+  // 定时发送联系人开关（SCHEDULED-SEND-PLAN 决策 #3）：默认关。
+  const [contactProfileRow] = conversation?.contactId
+    ? await db
+        .select({
+          scheduledSendEnabled: schema.contactProfiles.scheduledSendEnabled,
+        })
+        .from(schema.contactProfiles)
+        .where(eq(schema.contactProfiles.contactId, conversation.contactId))
+        .limit(1)
+    : [];
+
   // 检测会话类型：conversationId 以 @chatroom 结尾表示群聊
   const chatType = detectChatType(turn.conversationId);
 
@@ -189,7 +200,9 @@ export async function processAgentTurn(
           ],
           chatType,
         }).system
-      : buildSystemPrompt(Boolean(dependencies.knowledgeSearch), chatType);
+      : buildSystemPrompt(Boolean(dependencies.knowledgeSearch), chatType, {
+          scheduleSendEnabled: contactProfileRow?.scheduledSendEnabled === true,
+        });
 
     // Skill 提示：SkillRegistry 中每个注册 Skill 的 beforeKnowledge 输出
     // 作为不透明上下文注入，平台不解释其内容。
@@ -254,6 +267,13 @@ export async function processAgentTurn(
             ...(behavior.nudgeText ? { defaultNudgeText: behavior.nudgeText } : {}),
           }
         : {}),
+      scheduledSend: {
+        enabled: contactProfileRow?.scheduledSendEnabled === true,
+        maxPending: behavior?.scheduledSendMaxPending ?? 2,
+        maxPerDay: behavior?.scheduledSendMaxPerDay ?? 10,
+        quietStartHour: behavior?.scheduledSendQuietStartHour ?? 22,
+        quietEndHour: behavior?.scheduledSendQuietEndHour ?? 8,
+      },
     });
   } catch (error) {
     if (error instanceof AgentTurnTransitionNotApplied) throw error;

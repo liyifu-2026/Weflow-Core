@@ -39,6 +39,13 @@ import {
   ensureSessionOnWait,
   scheduleSessionWake,
 } from "./session-wake.js";
+import { recordAgentTurnEvent } from "./agent-turn-events.js";
+import {
+  commitScheduledSend,
+  countPendingScheduledSends,
+  countScheduledSendsCreatedSince,
+  shiftOutOfQuietHours,
+} from "./scheduled-sends.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
@@ -95,6 +102,18 @@ export type DecisionDispositionInput = {
    * 缺省 MAX_ROUNDS_PER_SESSION = 与可配置前行为逐字节一致。
    */
   defaultSessionRoundBudget?: number | undefined;
+  /**
+   * 定时发送（SCHEDULED-SEND-PLAN）：联系人级开关与护栏。
+   * enabled=false 时模型提示词不提供 schedule_send；此处兜底压制
+   * （模型越权输出时静默降级，不失败、不转人工）。缺省 = 关闭。
+   */
+  scheduledSend?: {
+    enabled: boolean;
+    maxPending: number;
+    maxPerDay: number;
+    quietStartHour: number;
+    quietEndHour: number;
+  } | undefined;
 };
 
 export type DecisionDispositionResult =
@@ -194,6 +213,14 @@ async function commitFreshDisposition(
   // no_action：模型判断当前无需任何操作，静默处理（记录原因）
   if (decision.nextAction === "no_action") {
     await commitNoAction(db, conversationId, turnId, decision);
+    return { action: "terminal" };
+  }
+
+  // 定时发送（SCHEDULED-SEND-PLAN）：模型约定未来某时刻直发一段既定文本。
+  if (
+    decision.nextAction === "schedule_send" &&
+    (await commitScheduleSendDisposition(input))
+  ) {
     return { action: "terminal" };
   }
 
@@ -305,6 +332,13 @@ async function commitToolRecoveryDisposition(
 
   // 预算未耗尽时允许再次规划工具（有界 ReAct 续跑）：构建工具计划并
   // 落 checkpoint，turn-runner 执行后再次进入恢复路径。
+  // 恢复路径同样允许约定定时发送（有界 ReAct 查证后的兑现承诺）
+  if (
+    decision.nextAction === "schedule_send" &&
+    (await commitScheduleSendDisposition(input))
+  ) {
+    return { action: "terminal" };
+  }
   if (
     decision.nextAction === "retrieve_knowledge" ||
     decision.nextAction === "call_tool"
@@ -375,6 +409,99 @@ async function commitNoAction(
     turnId,
     reason: decision.noActionReason ?? "no_action",
   });
+}
+
+/**
+ * 定时发送（SCHEDULED-SEND-PLAN）：模型约定未来某时刻直发一段既定文本。
+ * 护栏全部代码持有（联系人开关 / pending 上限 / 每日上限），模型越权时
+ * 静默降级——定时不发，但不失败、不转人工；即时确认回复（若给出）照常
+ * 走回复校验与落库，没有确认回复按 no_action(scheduled_send) 收尾。
+ * 返回 true 表示本分支已终态处理该轮次。
+ */
+async function commitScheduleSendDisposition(
+  input: DecisionDispositionInput,
+): Promise<boolean> {
+  const { db, decision, turnId, conversationId } = input;
+  const guardrails = input.scheduledSend;
+  const content = decision.scheduledMessage;
+  const sendAt = decision.scheduledSendAt;
+  if (guardrails?.enabled === true && content !== undefined && sendAt !== undefined) {
+    const pending = await countPendingScheduledSends(db, conversationId);
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const todayTotal = await countScheduledSendsCreatedSince(
+      db,
+      conversationId,
+      startOfDay,
+    );
+    if (pending >= guardrails.maxPending || todayTotal >= guardrails.maxPerDay) {
+      await recordAgentTurnEvent(db, {
+        turnId,
+        conversationId,
+        eventType: "scheduled_send_cancelled",
+        reasonCode: pending >= guardrails.maxPending ? "pending_limit" : "daily_limit",
+        payload: {},
+      });
+    } else {
+      const shifted = shiftOutOfQuietHours(
+        sendAt,
+        guardrails.quietStartHour,
+        guardrails.quietEndHour,
+      );
+      await commitScheduledSend(db, {
+        conversationId,
+        turnId,
+        content,
+        sendAt: shifted,
+      });
+      await recordAgentTurnEvent(db, {
+        turnId,
+        conversationId,
+        eventType: "scheduled_send_created",
+        payload: { sendAt: shifted.toISOString() },
+      });
+    }
+  } else {
+    await recordAgentTurnEvent(db, {
+      turnId,
+      conversationId,
+      eventType: "scheduled_send_cancelled",
+      reasonCode:
+        guardrails?.enabled === true ? "invalid_request" : "scheduled_send_disabled",
+      payload: {},
+    });
+  }
+  if (decision.replySegments.length > 0 && decision.replySegments[0] !== "") {
+    const invalid = await commitReplyValidationFailure(
+      db,
+      conversationId,
+      turnId,
+      decision,
+    );
+    if (invalid) return true;
+    await commitAgentTurnOutcome(db, {
+      conversationId,
+      turnId,
+      traceId: input.traceId,
+      variant: "direct",
+      responseText: decision.replyText,
+      responseSegments: decision.replySegments,
+      model: input.model,
+      ...(input.aiEmployeeId ? { aiEmployeeId: input.aiEmployeeId } : {}),
+      memoryWatermarkMessageId: memoryWatermarkMessageId(
+        turnId,
+        input.path,
+        decision.replySegments.length,
+      ),
+    });
+  } else {
+    await commitAgentTurnNoAction(db, {
+      conversationId,
+      turnId,
+      reason: "scheduled_send",
+    });
+  }
+  return true;
 }
 
 /** 校验回复分段；不合法时落失败并返回 true（调用方终止处理）。 */

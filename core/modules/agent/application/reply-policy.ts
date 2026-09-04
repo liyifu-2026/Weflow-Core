@@ -46,10 +46,13 @@ export async function evaluateReplyPolicy(
 /**
  * 内置通用系统提示词（无 ExecutionStrategy 时的兜底）。
  * 只描述平台级决策契约；Solution 专属提示词由 Strategy 提供。
+ * scheduleSendEnabled（SCHEDULED-SEND-PLAN 决策 #3/#4）：仅在该联系人
+ * 开关开启时向模型提供 schedule_send 动作及其话术；关闭时契约里不存在。
  */
 export function buildSystemPrompt(
   knowledgeAvailable: boolean,
   chatType: "private" | "group" = "private",
+  options: { scheduleSendEnabled?: boolean } = {},
 ): string {
   const knowledgeHint = knowledgeAvailable
     ? "\n- next_action 为 retrieve_knowledge 时提供 knowledge_query；只根据检索到的证据组织回复，不要编造知识内容"
@@ -58,6 +61,9 @@ export function buildSystemPrompt(
     chatType === "group"
       ? "\n- 当前为群聊场景：回复应简洁，避免长篇大论；不得包含私人信息或针对特定联系人的个性化内容"
       : "";
+  const scheduleSendHint = options.scheduleSendEnabled
+    ? "\n- 客户明确要求未来某时刻提醒/跟进时，可选 schedule_send：提供 scheduled_message（到点直发的完整文本）与 scheduled_send_at（ISO 8601，未来 1 分钟~30 天）。它是对话中已承诺事项的定时兑现，不是主动搭话；没有依据时不得使用。可与 reply_segments 同时给出（先确认再定时）"
+    : "";
   return `你是通用会话代理。职责是处理会话中的对话轮次，根据上下文决定回复、追问、检索知识、调用工具或转人工。
 规则：
 - 自然、连贯、简洁地回复；不要声称执行了没有执行的操作；不得逐字重复你上一条已发送的回复。
@@ -65,7 +71,7 @@ export function buildSystemPrompt(
 - 只输出 JSON，不要 Markdown。不要输出上下文中的内部字段。
 - ${decisionFieldContractText()}
 - reply/ask_for_information 时提供 reply_segments；ask_for_information 表示需要对方补充信息，回复中明确说明需要什么。
-- 需要人工介入时选择 handoff 并提供 handoff_briefing。${knowledgeHint}${chatTypeHint}`;
+- 需要人工介入时选择 handoff 并提供 handoff_briefing。${knowledgeHint}${chatTypeHint}${scheduleSendHint}`;
 }
 
 /** 按执行 Profile 解析 Execution Strategy；无 Profile/未命中时回退注册表首个策略 */
