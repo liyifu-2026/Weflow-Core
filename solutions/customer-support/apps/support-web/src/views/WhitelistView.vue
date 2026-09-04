@@ -13,9 +13,14 @@
  * - 审计：所有变更调用 Core 走 audit 通道，不在客户端伪造
  */
 import { computed, onMounted, ref } from "vue";
+import { Loader2, RefreshCw, Search, X } from "lucide-vue-next";
 import { api } from "../api";
 import AvatarImage from "../components/AvatarImage.vue";
-import WfIcon from "../components/WfIcon.vue";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Skeleton } from "../components/ui/skeleton";
+import { Switch } from "../components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
 
 type ContactItem = {
   contactId: string;
@@ -138,300 +143,129 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="wf-service-page">
-    <div class="wf-service-head">
-      <h1>白名单配置</h1>
-      <button class="wf-icon-button" title="刷新" @click="load(true)">
-        <WfIcon name="refresh" :size="15" />
-      </button>
-    </div>
-    <div class="wf-whitelist">
-      <div class="wf-whitelist-toolbar">
-        <div class="wf-search">
-          <WfIcon name="search" :size="16" /><input
-            v-model="searchInput"
-            class="wf-input"
-            placeholder="按昵称、备注或共享别名搜索"
-            @keyup.enter="applySearch"
-          />
-        </div>
-        <button
+  <div class="flex min-h-0 flex-1 flex-col">
+    <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+      <div class="relative min-w-0 flex-1">
+        <Search
+          class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+        />
+        <Input
+          v-model="searchInput"
+          class="pl-9 pr-8"
+          placeholder="按昵称、备注或共享别名搜索"
+          @keyup.enter="applySearch"
+        />
+        <Button
           v-if="searchInput"
-          class="wf-icon-button"
+          variant="ghost"
+          size="icon"
+          class="absolute right-1 top-1/2 size-7 -translate-y-1/2"
           title="清空搜索"
+          aria-label="清空搜索"
           @click="clearSearch"
-        >×</button>
-        <button
-          v-else
-          class="wf-icon-button"
-          title="搜索"
-          @click="applySearch"
-        ><WfIcon name="search" :size="16" /></button>
-        <div class="wf-whitelist-filter">
-          <button
-            class="wf-tab"
-            :class="{ active: viewFilter === 'all' }"
-            @click="viewFilter = 'all'"
-          >全部</button>
-          <button
-            class="wf-tab"
-            :class="{ active: viewFilter === 'whitelist' }"
-            @click="viewFilter = 'whitelist'"
-          >白名单</button>
-          <button
-            class="wf-tab"
-            :class="{ active: viewFilter === 'others' }"
-            @click="viewFilter = 'others'"
-          >仅人工</button>
-        </div>
-      </div>
-      <div v-if="error" class="wf-error wf-pane-error">
-        <span>{{ error }}</span
-        ><button class="wf-button compact" @click="load(true)">重试</button>
-      </div>
-      <div v-if="loading && !items.length" class="wf-queue-loading">
-        <div v-for="i in 6" :key="i" class="wx-row">
-          <div class="wf-skeleton wf-skeleton-title"></div>
-          <div class="wf-skeleton wf-skeleton-line"></div>
-        </div>
-      </div>
-      <div class="wf-whitelist-table" v-else-if="filteredItems.length">
-        <div class="wf-whitelist-row wf-whitelist-head">
-          <span>联系人</span>
-          <span>最近消息</span>
-          <span class="wf-whitelist-toggle-col">白名单</span>
-        </div>
-        <div
-          v-for="item in filteredItems"
-          :key="item.contactId"
-          class="wf-whitelist-row"
         >
-          <div class="wf-whitelist-contact">
-            <AvatarImage
-              :contact-id="item.contactId"
-              :fallback-text="displayName(item)"
-              :size="32"
-            />
-            <div class="wf-whitelist-contact-body">
-              <strong>{{ displayName(item) }}</strong>
-              <span v-if="item.sharedAlias && item.channelRemark" class="wf-muted">
-                {{ item.channelRemark }}
-              </span>
-              <span v-else-if="item.channelDisplayName" class="wf-muted">
-                {{ item.channelDisplayName }}
-              </span>
-            </div>
-          </div>
-          <div class="wf-whitelist-preview">
-            <span>{{ item.latestMessageText || "暂无消息" }}</span>
-            <span v-if="item.latestMessageAt" class="wf-muted">{{
-              new Date(item.latestMessageAt).toLocaleString()
-            }}</span>
-          </div>
-          <div class="wf-whitelist-toggle-col">
-            <label class="wf-switch">
-              <input
-                type="checkbox"
-                :checked="item.agentEnabled"
-                :disabled="toggling.has(item.contactId)"
-                @change="toggleAgentEnabled(item)"
-              />
-              <span class="wf-switch-slider"></span>
-            </label>
-            <span
-              class="wf-whitelist-status"
-              :class="{ on: item.agentEnabled }"
-            >{{ item.agentEnabled ? "白名单" : "仅人工" }}</span>
+          <X class="size-4" />
+        </Button>
+      </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        title="刷新"
+        aria-label="刷新"
+        @click="load(true)"
+      >
+        <RefreshCw class="size-4" />
+      </Button>
+      <Tabs v-model="viewFilter">
+        <TabsList>
+          <TabsTrigger value="all">全部</TabsTrigger>
+          <TabsTrigger value="whitelist">白名单</TabsTrigger>
+          <TabsTrigger value="others">仅人工</TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </div>
+
+    <div v-if="error" class="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+      <p class="text-sm text-destructive" role="alert">{{ error }}</p>
+      <Button variant="outline" size="sm" @click="load(true)">重试</Button>
+    </div>
+
+    <div v-if="loading && !items.length" class="space-y-2 p-4">
+      <div v-for="i in 6" :key="i" class="flex items-center gap-3">
+        <Skeleton class="size-8 rounded-full" />
+        <div class="flex-1 space-y-1.5">
+          <Skeleton class="h-4 w-1/4" />
+          <Skeleton class="h-3 w-1/2" />
+        </div>
+      </div>
+    </div>
+
+    <div v-else-if="filteredItems.length" class="min-h-0 flex-1 overflow-auto">
+      <div class="sticky top-0 z-10 grid grid-cols-[minmax(160px,240px)_minmax(0,1fr)_140px] items-center gap-3 border-b border-border bg-muted/60 px-4 py-2 text-xs font-medium text-muted-foreground">
+        <span>联系人</span>
+        <span>最近消息</span>
+        <span class="text-right">白名单</span>
+      </div>
+      <div
+        v-for="item in filteredItems"
+        :key="item.contactId"
+        class="grid grid-cols-[minmax(160px,240px)_minmax(0,1fr)_140px] items-center gap-3 border-b border-border px-4 py-2 transition-colors last:border-b-0 hover:bg-muted/50"
+      >
+        <div class="flex min-w-0 items-center gap-2.5">
+          <AvatarImage
+            :contact-id="item.contactId"
+            :fallback-text="displayName(item)"
+            :size="32"
+          />
+          <div class="min-w-0 leading-tight">
+            <p class="truncate text-sm">{{ displayName(item) }}</p>
+            <p
+              v-if="(item.sharedAlias && item.channelRemark) || item.channelDisplayName"
+              class="truncate text-xs text-muted-foreground"
+            >
+              {{ item.sharedAlias && item.channelRemark ? item.channelRemark : item.channelDisplayName }}
+            </p>
           </div>
         </div>
-        <button
-          v-if="nextCursor"
-          class="wf-load-more"
-          :disabled="loadingMore"
-          @click="load(false)"
-        >
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            {{ item.latestMessageText || "暂无消息" }}
+          </span>
+          <span v-if="item.latestMessageAt" class="shrink-0 text-xs text-muted-foreground">
+            {{ new Date(item.latestMessageAt).toLocaleString() }}
+          </span>
+        </div>
+        <div class="flex items-center justify-end gap-2">
+          <Switch
+            :model-value="item.agentEnabled"
+            :disabled="toggling.has(item.contactId)"
+            :aria-label="`白名单开关：${displayName(item)}`"
+            @update:model-value="toggleAgentEnabled(item)"
+          />
+          <Loader2
+            v-if="toggling.has(item.contactId)"
+            class="size-3.5 animate-spin text-muted-foreground"
+          />
+          <span v-else class="w-14 text-right text-xs" :class="item.agentEnabled ? 'font-medium' : 'text-muted-foreground'">
+            {{ item.agentEnabled ? "白名单" : "仅人工" }}
+          </span>
+        </div>
+      </div>
+      <div v-if="nextCursor" class="flex justify-center py-4">
+        <Button variant="outline" size="sm" :disabled="loadingMore" @click="load(false)">
           {{ loadingMore ? "正在加载…" : "加载更多" }}
-        </button>
+        </Button>
       </div>
-      <div v-else-if="!loading" class="wf-empty">
-        <div>
-          <strong>{{
-            searchApplied ? "没有符合条件的联系人" : "暂无联系人"
-          }}</strong>
-          <p v-if="!searchApplied">客户首次发消息后将出现在此处。</p>
-        </div>
-      </div>
+    </div>
+
+    <div
+      v-else-if="!loading"
+      class="flex flex-1 flex-col items-center justify-center gap-1 p-12 text-muted-foreground"
+    >
+      <p class="text-sm font-medium text-foreground">
+        {{ searchApplied ? "没有符合条件的联系人" : "暂无联系人" }}
+      </p>
+      <p v-if="!searchApplied" class="text-sm">客户首次发消息后将出现在此处。</p>
     </div>
   </div>
 </template>
-
-<style scoped>
-.wf-whitelist {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-.wf-whitelist-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
-}
-.wf-whitelist-toolbar .wf-search {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.1));
-  border-radius: 999px;
-  background: var(--wf-surface, #fff);
-}
-.wf-whitelist-filter {
-  display: inline-flex;
-  gap: 4px;
-  padding: 2px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
-  border-radius: 8px;
-  background: var(--wf-surface, #fff);
-}
-.wf-whitelist-filter .wf-tab {
-  min-height: 24px;
-  padding: 2px 10px;
-  border: 0;
-  background: transparent;
-  color: var(--wf-text-secondary, #5f6368);
-  font-size: 12px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.wf-whitelist-filter .wf-tab.active {
-  background: #e8f0fe;
-  color: #1a56c4;
-  font-weight: 700;
-}
-.wf-whitelist-table {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-.wf-whitelist-row {
-  display: grid;
-  grid-template-columns: 240px 1fr 160px;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--wf-border, rgba(0, 0, 0, 0.05));
-}
-.wf-whitelist-row.wf-whitelist-head {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--wf-text-tertiary, #9aa0a6);
-  background: var(--wf-surface-hover, rgba(0, 0, 0, 0.02));
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-.wf-whitelist-contact {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.wf-whitelist-contact-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.wf-whitelist-contact-body strong {
-  font-size: 13px;
-  color: var(--wf-text, #17181a);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wf-whitelist-contact-body .wf-muted {
-  font-size: 11px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wf-whitelist-preview {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.wf-whitelist-preview span:first-child {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--wf-text-secondary, #5f6368);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wf-whitelist-preview .wf-muted {
-  flex-shrink: 0;
-  font-size: 11px;
-}
-.wf-whitelist-toggle-col {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.wf-whitelist-status {
-  font-size: 11px;
-  color: var(--wf-text-tertiary, #9aa0a6);
-}
-.wf-whitelist-status.on {
-  color: #137333;
-  font-weight: 700;
-}
-/* switch */
-.wf-switch {
-  position: relative;
-  display: inline-block;
-  width: 36px;
-  height: 20px;
-}
-.wf-switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-.wf-switch-slider {
-  position: absolute;
-  inset: 0;
-  background: #c4c7c5;
-  border-radius: 999px;
-  transition: background 120ms ease;
-  cursor: pointer;
-}
-.wf-switch-slider::before {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  background: #fff;
-  border-radius: 50%;
-  transition: transform 120ms ease;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-}
-.wf-switch input:checked + .wf-switch-slider {
-  background: #1a56c4;
-}
-.wf-switch input:checked + .wf-switch-slider::before {
-  transform: translateX(16px);
-}
-.wf-switch input:disabled + .wf-switch-slider {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-</style>

@@ -6,16 +6,7 @@ import WhitelistView from "../WhitelistView.vue";
 </script>
 
 <template>
-  <div class="wf-admin-tab">
+  <div class="flex min-h-0 flex-1 flex-col">
     <WhitelistView />
   </div>
 </template>
-
-<style scoped>
-.wf-admin-tab {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-</style>

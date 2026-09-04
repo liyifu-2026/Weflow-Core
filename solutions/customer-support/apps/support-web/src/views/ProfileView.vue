@@ -5,7 +5,16 @@
  */
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
+import { ArrowLeft, Loader2 } from "lucide-vue-next";
 import { useWeflowAuthStore } from "../auth-store";
+import { Button } from "../components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card";
 import StaffAvatar from "../components/StaffAvatar.vue";
 
 const auth = useWeflowAuthStore();
@@ -64,134 +73,81 @@ function goBack() {
 </script>
 
 <template>
-  <div class="wf-page wf-profile-page">
-    <header class="wf-page-head">
-      <div>
-        <button class="wf-link wf-profile-back" @click="goBack">
-          ← 返回工作台
-        </button>
-        <h1>个人资料</h1>
-        <p>管理你的客服头像和信息。</p>
-      </div>
-    </header>
+  <div class="mx-auto w-full max-w-2xl p-6">
+    <Button
+      variant="ghost"
+      size="sm"
+      class="-ml-2 mb-4 text-muted-foreground"
+      @click="goBack"
+    >
+      <ArrowLeft class="size-4" />
+      返回工作台
+    </Button>
 
-    <div class="wf-profile-body">
-      <div class="wf-profile-card">
-        <div class="wf-profile-avatar-section">
-          <StaffAvatar
-            :user-id="auth.user?.userId"
-            :avatar-url="auth.user?.avatarUrl"
-            :fallback-text="displayName"
-            :size="80"
-          />
-          <div class="wf-profile-avatar-actions">
-            <button
-              class="wf-button compact primary"
-              :disabled="uploading"
-              @click="triggerFileSelect"
-            >
-              {{ uploading ? "上传中…" : "更换头像" }}
-            </button>
-            <p class="wf-muted">
-              支持 JPEG / PNG / WebP，最大 1 MB。<br />
-              更换后 Mobile 端和 Console 端会同步显示新头像。
-            </p>
+    <h1 class="text-2xl font-semibold tracking-tight">个人资料</h1>
+    <p class="mt-1 text-sm text-muted-foreground">管理你的客服头像和信息。</p>
+
+    <div class="mt-6 space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>头像</CardTitle>
+          <CardDescription>更换后 Mobile 端和网页端会同步显示新头像。</CardDescription>
+        </CardHeader>
+        <CardContent class="space-y-4">
+          <div class="flex items-center gap-6">
+            <StaffAvatar
+              :user-id="auth.user?.userId"
+              :avatar-url="auth.user?.avatarUrl"
+              :fallback-text="displayName"
+              :size="80"
+            />
+            <div class="space-y-2">
+              <Button :disabled="uploading" @click="triggerFileSelect">
+                <Loader2 v-if="uploading" class="size-4 animate-spin" />
+                {{ uploading ? "上传中…" : "更换头像" }}
+              </Button>
+              <p class="text-xs text-muted-foreground">
+                支持 JPEG / PNG / WebP，最大 1 MB。
+              </p>
+            </div>
           </div>
-        </div>
-        <input
-          ref="fileInput"
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          style="display: none"
-          @change="onFileSelected"
-        />
 
-        <div v-if="error" class="wf-error">{{ error }}</div>
-        <div v-if="notice" class="wf-profile-notice">{{ notice }}</div>
-      </div>
+          <p v-if="error" class="text-sm text-destructive" role="alert">
+            {{ error }}
+          </p>
+          <p v-if="notice" class="text-sm text-muted-foreground" role="status">
+            {{ notice }}
+          </p>
 
-      <div class="wf-profile-card">
-        <h3>基本信息</h3>
-        <div class="wf-profile-field">
-          <label>用户名</label>
-          <span>{{ auth.user?.username ?? "—" }}</span>
-        </div>
-        <div class="wf-profile-field">
-          <label>显示名</label>
-          <span>{{ auth.user?.displayName || "未设置" }}</span>
-        </div>
-        <div class="wf-profile-field">
-          <label>角色</label>
-          <span>{{ roleLabel }}</span>
-        </div>
-      </div>
+          <input
+            ref="fileInput"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            class="hidden"
+            @change="onFileSelected"
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>基本信息</CardTitle>
+        </CardHeader>
+        <CardContent class="divide-y divide-border">
+          <div class="flex items-center justify-between py-3 text-sm first:pt-0 last:pb-0">
+            <span class="text-muted-foreground">用户名</span>
+            <span>{{ auth.user?.username ?? "—" }}</span>
+          </div>
+          <div class="flex items-center justify-between py-3 text-sm first:pt-0 last:pb-0">
+            <span class="text-muted-foreground">显示名</span>
+            <span>{{ auth.user?.displayName || "未设置" }}</span>
+          </div>
+          <div class="flex items-center justify-between py-3 text-sm first:pt-0 last:pb-0">
+            <span class="text-muted-foreground">角色</span>
+            <span>{{ roleLabel }}</span>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   </div>
 </template>
-
-<style scoped>
-.wf-profile-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: auto;
-}
-.wf-profile-back {
-  background: none;
-  border: none;
-  color: #1a56c4;
-  cursor: pointer;
-  font-size: 13px;
-  padding: 0;
-  margin-bottom: 6px;
-  display: inline-block;
-}
-.wf-profile-body {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 16px 24px;
-  max-width: 520px;
-}
-.wf-profile-card {
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
-  border-radius: 12px;
-  background: var(--wf-surface, #fff);
-  padding: 20px;
-}
-.wf-profile-card h3 {
-  font-size: 15px;
-  margin: 0 0 12px;
-}
-.wf-profile-avatar-section {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  margin-bottom: 12px;
-}
-.wf-profile-avatar-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.wf-profile-notice {
-  color: #137333;
-  font-size: 13px;
-  margin-top: 8px;
-}
-.wf-profile-field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--wf-border, rgba(0, 0, 0, 0.05));
-  font-size: 13px;
-}
-.wf-profile-field:last-child {
-  border-bottom: none;
-}
-.wf-profile-field label {
-  color: var(--wf-text-secondary, #5f6368);
-  font-weight: 500;
-}
-</style>

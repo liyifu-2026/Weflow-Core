@@ -1,5 +1,20 @@
 <script setup lang="ts">
+/**
+ * 共享确认弹窗（promise 化 confirmDialog 的展示层）。
+ * 用 shadcn AlertDialog 实现；confirmDialog() 在 App.vue 挂载的本组件上全局生效。
+ */
 import { confirmDialogState } from "./confirm-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
+import { buttonVariants } from "./ui/button";
 
 function close(value: boolean) {
   confirmDialogState.resolve?.(value);
@@ -9,38 +24,26 @@ function close(value: boolean) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="confirmDialogState.open"
-      class="wf-modal-mask"
-      @click.self="close(false)"
-    >
-      <div class="wf-modal wf-modal-narrow" role="alertdialog" aria-modal="true">
-        <div class="wf-modal-body">
-          <p class="wf-confirm-message">{{ confirmDialogState.message }}</p>
-        </div>
-        <div class="wf-modal-foot">
-          <button class="wf-button" @click="close(false)">取消</button>
-          <button
-            class="wf-button"
-            :class="confirmDialogState.danger ? 'danger' : 'primary'"
-            @click="close(true)"
-          >
-            确认
-          </button>
-        </div>
-      </div>
-    </div>
-  </Teleport>
+  <AlertDialog
+    :open="confirmDialogState.open"
+    @update:open="(open: boolean) => !open && close(false)"
+  >
+    <AlertDialogContent class="max-w-sm">
+      <AlertDialogHeader>
+        <AlertDialogTitle>确认操作</AlertDialogTitle>
+        <AlertDialogDescription class="whitespace-pre-line">
+          {{ confirmDialogState.message }}
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel @click="close(false)">取消</AlertDialogCancel>
+        <AlertDialogAction
+          :class="buttonVariants({ variant: confirmDialogState.danger ? 'destructive' : 'default' })"
+          @click="close(true)"
+        >
+          确认
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
 </template>
-
-<style>
-.wf-confirm-message {
-  margin: 0;
-  color: var(--wf-text);
-  font-size: var(--wf-type-body);
-  line-height: 1.6;
-  white-space: pre-line;
-}
-</style>
-

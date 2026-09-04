@@ -6,11 +6,35 @@
  */
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { MoreHorizontal } from "lucide-vue-next";
 import { api } from "../api";
-import { statusTone } from "../components/status-tone";
-import WfIcon from "../components/WfIcon.vue";
 import StaffAvatar from "../components/StaffAvatar.vue";
-import { useEscClose } from "../composables/use-esc-close";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../components/ui/table";
 import { confirmDialog } from "../components/confirm-dialog";
 
 type User = {
@@ -34,11 +58,6 @@ const initialPassword = ref("");
 const saving = ref(false);
 const roleOpen = ref(false);
 const roleTarget = ref<User | null>(null);
-
-useEscClose(computed(() => createOpen.value || roleOpen.value), () => {
-  createOpen.value = false;
-  roleOpen.value = false;
-});
 
 async function load() {
   try {
@@ -200,238 +219,220 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="wf-page">
-    <header class="wf-page-head">
+  <div class="mx-auto w-full max-w-6xl p-6">
+    <div class="flex items-start justify-between">
       <div>
-        <h1>用户与角色</h1>
-        <p>管理 Weflow 账号、角色与登录状态。</p>
+        <h1 class="text-2xl font-semibold tracking-tight">用户与角色</h1>
+        <p class="mt-1 text-sm text-muted-foreground">
+          管理 Weflow 账号、角色与登录状态。
+        </p>
       </div>
-      <button class="wf-button primary" @click="startCreate">发放账号</button>
-    </header>
+      <Button @click="startCreate">发放账号</Button>
+    </div>
 
-    <div v-if="error" class="wf-error" role="alert">{{ error }}</div>
-    <div v-if="notice" class="wf-notice" role="status">{{ notice }}</div>
+    <p v-if="error" class="mt-4 text-sm text-destructive" role="alert">{{ error }}</p>
+    <p v-if="notice" class="mt-4 text-sm text-muted-foreground" role="status">{{ notice }}</p>
 
-    <section class="wf-panel">
-      <div class="wf-panel-head">
+    <div class="mt-6 overflow-hidden rounded-md border border-border">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
-          <h2>共享工作空间成员</h2>
-          <span class="wf-muted">共 {{ users.length }} 人</span>
+          <h2 class="text-sm font-medium">共享工作空间成员</h2>
+          <p class="text-xs text-muted-foreground">共 {{ users.length }} 人</p>
         </div>
-        <div class="wf-user-filters">
-          <select v-model="roleFilter" class="wf-select">
+        <div class="flex items-center gap-2">
+          <select
+            v-model="roleFilter"
+            aria-label="按角色筛选"
+            class="h-9 rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
             <option value="">全部角色</option>
             <option value="admin">管理员</option>
             <option value="operator">操作员</option>
           </select>
-          <select v-model="statusFilter" class="wf-select">
+          <select
+            v-model="statusFilter"
+            aria-label="按状态筛选"
+            class="h-9 rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          >
             <option value="">全部状态</option>
             <option value="active">正常</option>
             <option value="disabled">已禁用</option>
           </select>
         </div>
       </div>
-      <div class="wf-table-wrap">
-        <table class="wf-table">
-          <thead>
-            <tr>
-              <th>账号</th>
-              <th>角色</th>
-              <th>状态</th>
-              <th>创建时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="user in pagedUsers" :key="user.userId">
-              <td>
-                <div class="wf-user-cell">
-                  <StaffAvatar
-                    :user-id="user.userId"
-                    :fallback-text="user.username"
-                    :avatar-url="user.avatarUrl ?? null"
-                  />
-                  <div>
-                    <strong>{{ user.displayName || user.username }}</strong>
-                    <div v-if="user.mustChangePassword" class="wf-muted">
-                      等待首次设置密码
-                    </div>
-                  </div>
+
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>账号</TableHead>
+            <TableHead>角色</TableHead>
+            <TableHead>状态</TableHead>
+            <TableHead>创建时间</TableHead>
+            <TableHead class="w-12"><span class="sr-only">操作</span></TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          <TableRow v-for="user in pagedUsers" :key="user.userId">
+            <TableCell>
+              <div class="flex items-center gap-3">
+                <StaffAvatar
+                  :user-id="user.userId"
+                  :fallback-text="user.username"
+                  :avatar-url="user.avatarUrl ?? null"
+                />
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-medium">
+                    {{ user.displayName || user.username }}
+                  </p>
+                  <p v-if="user.mustChangePassword" class="text-xs text-muted-foreground">
+                    等待首次设置密码
+                  </p>
                 </div>
-              </td>
-              <td>{{ user.role === "admin" ? "管理员" : "操作员" }}</td>
-              <td>
-                <span
-                  v-if="user.status !== 'active'"
-                  class="wf-status"
-                  :class="statusTone(user.status)"
-                >已禁用</span>
-                <span v-else class="wf-muted">正常</span>
-              </td>
-              <td class="wf-muted">
-                {{ new Date(user.createdAt).toLocaleDateString() }}
-              </td>
-              <td>
-                <details class="wf-row-menu">
-                  <summary class="wf-icon-button" title="更多操作">
-                    <WfIcon name="more" :size="17" />
-                  </summary>
-                  <div>
-                    <button @click="startRoleChange(user)">修改角色</button>
-                    <button @click="reset(user)">重置密码</button>
-                    <button @click="revokeSessions(user)">撤销 Session</button>
-                    <button
-                      :class="{ danger: user.status === 'active' }"
-                      @click="toggleStatus(user)"
-                    >
-                      {{ user.status === "active" ? "禁用账号" : "启用账号" }}
-                    </button>
-                  </div>
-                </details>
-              </td>
-            </tr>
-            <tr v-if="!pagedUsers.length">
-              <td colspan="5" class="wf-empty">暂无成员</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="wf-pagination">
-        <span class="wf-muted">
+              </div>
+            </TableCell>
+            <TableCell>{{ user.role === "admin" ? "管理员" : "操作员" }}</TableCell>
+            <TableCell>
+              <Badge v-if="user.status !== 'active'" variant="destructive">已禁用</Badge>
+              <span v-else class="text-sm text-muted-foreground">正常</span>
+            </TableCell>
+            <TableCell class="text-muted-foreground">
+              {{ new Date(user.createdAt).toLocaleDateString() }}
+            </TableCell>
+            <TableCell>
+              <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                  <Button variant="ghost" size="icon" title="更多操作">
+                    <MoreHorizontal class="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem @click="startRoleChange(user)">
+                    修改角色
+                  </DropdownMenuItem>
+                  <DropdownMenuItem @click="reset(user)">重置密码</DropdownMenuItem>
+                  <DropdownMenuItem @click="revokeSessions(user)">
+                    撤销 Session
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    :class="user.status === 'active' && 'text-destructive'"
+                    @click="toggleStatus(user)"
+                  >
+                    {{ user.status === "active" ? "禁用账号" : "启用账号" }}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </TableCell>
+          </TableRow>
+          <TableRow v-if="!pagedUsers.length">
+            <TableCell colspan="5" class="text-center text-muted-foreground">
+              暂无成员
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+
+      <div class="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+        <span class="text-sm text-muted-foreground">
           共 {{ filteredUsers.length }} 人 · 第 {{ page }} / {{ totalPages }} 页
         </span>
-        <button
-          class="wf-button compact"
+        <Button
+          variant="outline"
+          size="sm"
           :disabled="page <= 1"
           @click="page = Math.max(1, page - 1); syncQuery()"
         >
           上一页
-        </button>
-        <button
-          class="wf-button compact"
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
           :disabled="page >= totalPages"
           @click="page = Math.min(totalPages, page + 1); syncQuery()"
         >
           下一页
-        </button>
+        </Button>
       </div>
-    </section>
+    </div>
 
-    <div v-if="createOpen" class="wf-modal-mask" @click.self="createOpen = false">
-      <div class="wf-modal" role="dialog" aria-modal="true" aria-label="发放账号">
-        <div class="wf-modal-head">
-          <h3>{{ initialPassword ? "一次性初始密码" : "发放封闭账号" }}</h3>
-          <button class="wf-icon-button" @click="createOpen = false">
-            <WfIcon name="close" :size="17" />
-          </button>
-        </div>
-        <div class="wf-modal-body">
-          <template v-if="initialPassword">
-            <p>请通过安全渠道交付。关闭后系统不会再次显示该密码。</p>
-            <div class="wf-secret-output wf-mono">{{ initialPassword }}</div>
-            <button class="wf-button compact" @click="copyPassword(initialPassword)">
+    <Dialog
+      :open="createOpen"
+      @update:open="(open: boolean) => { createOpen = open; if (!open) initialPassword = ''; }"
+    >
+      <DialogContent class="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{{ initialPassword ? "一次性初始密码" : "发放封闭账号" }}</DialogTitle>
+          <DialogDescription v-if="initialPassword">
+            请通过安全渠道交付。关闭后系统不会再次显示该密码。
+          </DialogDescription>
+        </DialogHeader>
+
+        <template v-if="initialPassword">
+          <p class="font-mono text-sm" role="status">{{ initialPassword }}</p>
+          <DialogFooter class="gap-2">
+            <Button variant="outline" @click="copyPassword(initialPassword)">
               复制密码
-            </button>
-          </template>
-          <template v-else>
-            <div class="wf-field">
-              <label>用户名</label>
-              <input
+            </Button>
+            <Button @click="createOpen = false">我已安全保存</Button>
+          </DialogFooter>
+        </template>
+        <template v-else>
+          <div class="space-y-4">
+            <div class="space-y-2">
+              <Label for="new-username">用户名</Label>
+              <Input
+                id="new-username"
                 v-model="username"
-                class="wf-input"
                 placeholder="3–64 位小写字母、数字或 . _ -"
               />
             </div>
-            <div class="wf-field">
-              <label>角色</label>
-              <select v-model="role" class="wf-select">
+            <div class="space-y-2">
+              <Label for="new-role">角色</Label>
+              <select
+                id="new-role"
+                v-model="role"
+                class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
                 <option value="operator">操作员</option>
                 <option value="admin">管理员</option>
               </select>
             </div>
-          </template>
-        </div>
-        <div class="wf-modal-foot">
-          <button
-            v-if="!initialPassword"
-            class="wf-button primary"
-            :disabled="saving || username.length < 3"
-            @click="create"
-          >
-            生成一次性密码
-          </button>
-          <button v-else class="wf-button primary" @click="createOpen = false">
-            我已安全保存
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <div
-      v-if="roleOpen && roleTarget"
-      class="wf-modal-mask"
-      @click.self="roleOpen = false"
-    >
-      <div class="wf-modal wf-modal-narrow" role="dialog" aria-modal="true" aria-label="修改角色">
-        <div class="wf-modal-head">
-          <h3>修改角色 · {{ roleTarget.username }}</h3>
-          <button class="wf-icon-button" @click="roleOpen = false">
-            <WfIcon name="close" :size="17" />
-          </button>
-        </div>
-        <div class="wf-modal-body">
-          <div class="wf-assignee-list">
-            <button
-              class="wf-assignee-row"
-              :class="{ active: roleTarget.role === 'operator' }"
-              @click="roleTarget.role = 'operator'"
-            >
-              操作员
-            </button>
-            <button
-              class="wf-assignee-row"
-              :class="{ active: roleTarget.role === 'admin' }"
-              @click="roleTarget.role = 'admin'"
-            >
-              管理员
-            </button>
           </div>
+          <DialogFooter>
+            <Button :disabled="saving || username.length < 3" @click="create">
+              生成一次性密码
+            </Button>
+          </DialogFooter>
+        </template>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog :open="roleOpen && Boolean(roleTarget)" @update:open="(open: boolean) => !open && (roleOpen = false)">
+      <DialogContent class="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>修改角色 · {{ roleTarget?.username }}</DialogTitle>
+        </DialogHeader>
+        <div v-if="roleTarget" class="space-y-2">
+          <label
+            v-for="option in ['operator', 'admin'] as const"
+            :key="option"
+            class="flex cursor-pointer items-center gap-3 rounded-md border border-border p-3 text-sm transition-colors hover:bg-muted/50"
+            :class="roleTarget.role === option && 'border-primary'"
+          >
+            <input
+              v-model="roleTarget.role"
+              type="radio"
+              name="role-option"
+              :value="option"
+              class="accent-foreground"
+            />
+            {{ option === "operator" ? "操作员" : "管理员" }}
+          </label>
         </div>
-        <div class="wf-modal-foot">
-          <button class="wf-button" @click="roleOpen = false">取消</button>
-          <button class="wf-button primary" @click="confirmRoleChange">保存</button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter class="gap-2">
+          <Button variant="outline" @click="roleOpen = false">取消</Button>
+          <Button @click="confirmRoleChange">保存</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
-
-<style scoped>
-.wf-page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.wf-user-filters {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.wf-user-filters .wf-select {
-  min-width: 120px;
-  width: auto;
-}
-.wf-user-cell {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.wf-pagination {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 14px 16px;
-  border-top: 1px solid var(--wf-border);
-}
-</style>

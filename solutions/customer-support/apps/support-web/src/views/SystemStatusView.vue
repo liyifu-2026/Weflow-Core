@@ -6,10 +6,23 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { ChevronRight, RotateCw } from "lucide-vue-next";
 import { api } from "../api";
-import WfIcon from "../components/WfIcon.vue";
-import { statusTone } from "../components/status-tone";
+import { statusTone, type WfStatusTone } from "../components/status-tone";
 import { healthLabel } from "../labels";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Badge } from "../components/ui/badge";
+import { Button } from "../components/ui/button";
+import { Card, CardContent } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../components/ui/table";
 
 type Service = {
   key: string;
@@ -85,6 +98,14 @@ const overallText = computed(
     })[overall.value],
 );
 
+/** statusTone → Badge 变体（唯一映射，避免散落判断） */
+function toneBadge(tone: WfStatusTone): "default" | "secondary" | "destructive" | "outline" {
+  if (tone === "good") return "default";
+  if (tone === "bad") return "destructive";
+  if (tone === "warn") return "outline";
+  return "secondary";
+}
+
 function serviceHealthText(service: Service) {
   if (service.configuration.status !== "configured") return "未配置";
   return healthLabel(service.health.status).text;
@@ -159,36 +180,46 @@ onBeforeUnmount(stopAutoRefresh);
 </script>
 
 <template>
-  <div class="wf-page">
-    <header class="wf-page-head">
+  <div class="mx-auto w-full max-w-6xl p-6">
+    <div class="flex items-start justify-between">
       <div>
-        <h1>系统状态</h1>
-        <p>平台各服务的配置与健康状态，每 30 秒自动刷新。</p>
+        <h1 class="text-2xl font-semibold tracking-tight">系统状态</h1>
+        <p class="mt-1 text-sm text-muted-foreground">
+          平台各服务的配置与健康状态，每 30 秒自动刷新。
+        </p>
       </div>
-    </header>
-
-    <div v-if="error" class="wf-error" role="alert">
-      <span>{{ error }}</span>
-      <button class="wf-button compact" @click="load">重新加载</button>
+      <Button variant="outline" size="sm" :disabled="loading" @click="load">
+        <RotateCw class="size-4" :class="loading && 'animate-spin'" />
+        刷新
+      </Button>
     </div>
 
-    <div class="wf-status-summary">
-      <span class="wf-status" :class="statusTone(overall)">{{
-        loading ? "检测中…" : overallText
-      }}</span>
-      <span v-if="status" class="wf-muted">
+    <Alert v-if="error" variant="destructive" class="mt-4" role="alert">
+      <AlertDescription class="flex items-center justify-between gap-4">
+        <span>{{ error }}</span>
+        <Button variant="outline" size="sm" @click="load">重新加载</Button>
+      </AlertDescription>
+    </Alert>
+
+    <div class="mt-4 flex flex-wrap items-center gap-2">
+      <Badge :variant="toneBadge(statusTone(overall))">
+        {{ loading ? "检测中…" : overallText }}
+      </Badge>
+      <span v-if="status" class="text-sm text-muted-foreground">
         检查于 {{ new Date(status.checkedAt).toLocaleString() }}
       </span>
-      <span v-for="service in attentionServices" :key="service.key" class="wf-status warn">
+      <Badge
+        v-for="service in attentionServices"
+        :key="service.key"
+        variant="outline"
+      >
         {{ service.name }}
-      </span>
+      </Badge>
     </div>
 
     <template v-if="loading">
-      <div class="wf-service-list">
-        <div v-for="i in 4" :key="i" class="wf-service-row">
-          <span class="wf-skeleton">正在读取服务状态</span>
-        </div>
+      <div class="mt-6 space-y-2">
+        <Skeleton v-for="i in 4" :key="i" class="h-16 w-full" />
       </div>
     </template>
 
@@ -196,202 +227,129 @@ onBeforeUnmount(stopAutoRefresh);
       <section
         v-for="group in serviceGroups"
         :key="group.label"
-        class="wf-service-group"
+        class="mt-6"
       >
-        <div class="wf-service-group-label">{{ group.label }}</div>
-        <div class="wf-service-list">
-          <article
-            v-for="service in group.services"
-            :id="`service-${service.key}`"
-            :key="service.key"
-            class="wf-service-row"
-            :class="{ selected: selectedService === service.key }"
-            @click="selectService(service.key)"
-          >
-            <div class="wf-service-name">
-              <strong>{{ service.name }}</strong>
-              <small>{{ service.health.summary }}</small>
-            </div>
-            <div class="wf-service-field">
-              <label>配置</label>
-              <span class="wf-status neutral">
-                {{ service.configuration.status === "configured" ? "已配置" : "未配置" }}
-              </span>
-            </div>
-            <div class="wf-service-field">
-              <label>健康</label>
-              <span class="wf-status" :class="statusTone(service.health.status)">
-                {{ serviceHealthText(service) }}
-              </span>
-            </div>
-            <WfIcon
-              name="chevron"
-              :size="16"
-              class="wf-service-chevron"
-              :class="{ rotated: selectedService === service.key }"
-            />
-            <div v-if="selectedService === service.key" class="wf-service-details">
-              <p v-if="service.health.status === 'not_monitored'">
-                该服务当前没有实时业务探测。请求加载失败、尚未加载和"未监测"是不同状态。
-              </p>
-              <div
-                v-for="item in service.details || []"
-                :key="item.key"
-                class="wf-detail-line"
-              >
-                <strong>{{ item.name }}</strong>
-                <span>{{ item.summary }}</span>
-                <span class="wf-status" :class="statusTone(item.status)">
-                  {{ detailStatusLabel(item.status) }}
-                </span>
+        <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {{ group.label }}
+        </h2>
+        <Card class="gap-0 overflow-hidden py-0">
+          <CardContent class="p-0">
+            <article
+              v-for="service in group.services"
+              :id="`service-${service.key}`"
+              :key="service.key"
+              class="cursor-pointer border-b border-border px-4 py-3 transition-colors last:border-b-0 hover:bg-muted/50"
+              :class="selectedService === service.key && 'bg-muted/50'"
+              @click="selectService(service.key)"
+            >
+              <div class="grid grid-cols-1 items-center gap-2 md:grid-cols-[minmax(0,1fr)_120px_120px_28px] md:gap-4">
+                <div class="min-w-0">
+                  <p class="text-sm font-medium">{{ service.name }}</p>
+                  <p class="truncate text-xs text-muted-foreground">
+                    {{ service.health.summary }}
+                  </p>
+                </div>
+                <div class="hidden flex-col gap-1 md:flex">
+                  <span class="text-xs text-muted-foreground">配置</span>
+                  <Badge variant="secondary">
+                    {{ service.configuration.status === "configured" ? "已配置" : "未配置" }}
+                  </Badge>
+                </div>
+                <div class="hidden flex-col gap-1 md:flex">
+                  <span class="text-xs text-muted-foreground">健康</span>
+                  <Badge :variant="toneBadge(statusTone(service.health.status))">
+                    {{ serviceHealthText(service) }}
+                  </Badge>
+                </div>
+                <ChevronRight
+                  class="hidden size-4 text-muted-foreground transition-transform duration-200 md:block"
+                  :class="selectedService === service.key && 'rotate-90'"
+                />
               </div>
-            </div>
-          </article>
-        </div>
+
+              <div
+                v-if="selectedService === service.key"
+                class="mt-3 border-t border-border pt-3 text-sm text-muted-foreground"
+              >
+                <p v-if="service.health.status === 'not_monitored'" class="mb-2">
+                  该服务当前没有实时业务探测。请求加载失败、尚未加载和"未监测"是不同状态。
+                </p>
+                <p
+                  v-if="!(service.details || []).length && service.health.status !== 'not_monitored'"
+                  class="py-1"
+                >
+                  暂无更详细的探测数据。
+                </p>
+                <div
+                  v-for="item in service.details || []"
+                  :key="item.key"
+                  class="grid grid-cols-1 gap-1 border-b border-border py-2 last:border-b-0 md:grid-cols-[180px_minmax(0,1fr)_110px] md:items-center md:gap-3"
+                >
+                  <span class="font-medium text-foreground">{{ item.name }}</span>
+                  <span>{{ item.summary }}</span>
+                  <Badge :variant="toneBadge(statusTone(item.status))" class="w-fit">
+                    {{ detailStatusLabel(item.status) }}
+                  </Badge>
+                </div>
+              </div>
+            </article>
+          </CardContent>
+        </Card>
       </section>
 
-      <div v-if="serviceGroups.length === 0" class="wf-empty">
-        暂无可展示的服务
+      <div
+        v-if="serviceGroups.length === 0"
+        class="mt-6 flex flex-col items-center gap-1 rounded-md border border-dashed border-border py-12 text-muted-foreground"
+      >
+        <p class="text-sm">暂无可展示的服务</p>
       </div>
     </template>
 
-    <details class="wf-admin-diagnostics">
-      <summary>诊断详情 · 最近 Agent Turn</summary>
-      <div class="wf-table-wrap">
-        <table class="wf-table">
-          <thead>
-            <tr>
-              <th>Turn</th>
-              <th>会话</th>
-              <th>状态</th>
-              <th>模型</th>
-              <th>错误</th>
-              <th>创建时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="turn in turns" :key="turn.turnId">
-              <td class="wf-mono">{{ turn.turnId.slice(0, 22) }}…</td>
-              <td class="wf-mono">{{ turn.conversationId.slice(0, 18) }}…</td>
-              <td>
-                <span class="wf-status" :class="statusTone(turn.status)">
-                  {{ detailStatusLabel(turn.status) }}
-                </span>
-              </td>
-              <td>{{ turn.model || "—" }}</td>
-              <td>{{ turn.errorCode || "—" }}</td>
-              <td class="wf-muted">{{ new Date(turn.createdAt).toLocaleString() }}</td>
-            </tr>
-            <tr v-if="!turns.length">
-              <td colspan="6" class="wf-empty">暂无记录</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+    <details class="mt-8">
+      <summary class="cursor-pointer text-sm font-medium text-foreground">
+        诊断详情 · 最近 Agent Turn
+      </summary>
+      <Card class="mt-3 gap-0 overflow-hidden py-0">
+        <CardContent class="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Turn</TableHead>
+                <TableHead>会话</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>模型</TableHead>
+                <TableHead>错误</TableHead>
+                <TableHead>创建时间</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow v-for="turn in turns" :key="turn.turnId">
+                <TableCell class="font-mono text-xs">
+                  {{ turn.turnId.slice(0, 22) }}…
+                </TableCell>
+                <TableCell class="font-mono text-xs">
+                  {{ turn.conversationId.slice(0, 18) }}…
+                </TableCell>
+                <TableCell>
+                  <Badge :variant="toneBadge(statusTone(turn.status))">
+                    {{ detailStatusLabel(turn.status) }}
+                  </Badge>
+                </TableCell>
+                <TableCell>{{ turn.model || "—" }}</TableCell>
+                <TableCell>{{ turn.errorCode || "—" }}</TableCell>
+                <TableCell class="text-muted-foreground">
+                  {{ new Date(turn.createdAt).toLocaleString() }}
+                </TableCell>
+              </TableRow>
+              <TableRow v-if="!turns.length">
+                <TableCell colspan="6" class="text-center text-muted-foreground">
+                  暂无记录
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </details>
   </div>
 </template>
-
-<style scoped>
-.wf-status-summary {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.wf-service-group {
-  margin-bottom: 16px;
-}
-.wf-service-group-label {
-  margin: 0 0 8px;
-  color: var(--wf-text-muted);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-.wf-service-list {
-  background: var(--wf-surface);
-  border: 1px solid var(--wf-border);
-  border-radius: 12px;
-  overflow: hidden;
-}
-.wf-service-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) 150px 160px 28px;
-  align-items: center;
-  gap: 16px;
-  min-height: 68px;
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--wf-border);
-  cursor: pointer;
-  transition: background var(--wf-motion-fast) var(--wf-ease-out);
-}
-.wf-service-row:last-child {
-  border-bottom: 0;
-}
-.wf-service-row:hover,
-.wf-service-row.selected {
-  background: var(--wf-surface-hover);
-}
-.wf-service-name,
-.wf-service-field {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-.wf-service-name strong {
-  font-size: 14px;
-}
-.wf-service-row label,
-.wf-service-row small {
-  color: var(--wf-text-muted);
-  font-size: 12px;
-}
-.wf-service-chevron {
-  color: var(--wf-text-muted);
-  transition: transform var(--wf-motion-fast) var(--wf-ease-out);
-}
-.wf-service-chevron.rotated {
-  transform: rotate(90deg);
-  color: var(--wf-primary);
-}
-.wf-service-details {
-  grid-column: 1 / -1;
-  padding: 12px 0 4px;
-  border-top: 1px solid var(--wf-border);
-  color: var(--wf-text-secondary);
-  font-size: 13px;
-}
-.wf-detail-line {
-  display: grid;
-  grid-template-columns: 180px minmax(0, 1fr) 110px;
-  gap: 12px;
-  align-items: center;
-  min-height: 42px;
-  border-top: 1px solid var(--wf-border);
-}
-.wf-admin-diagnostics {
-  margin-top: 24px;
-}
-.wf-admin-diagnostics > summary {
-  padding: 8px 0;
-  color: var(--wf-primary);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-}
-@media (max-width: 960px) {
-  .wf-service-row {
-    grid-template-columns: minmax(200px, 1fr) 28px;
-  }
-  .wf-service-field {
-    display: none;
-  }
-  .wf-detail-line {
-    grid-template-columns: 1fr;
-    gap: 4px;
-    padding: 8px 0;
-  }
-}
-</style>

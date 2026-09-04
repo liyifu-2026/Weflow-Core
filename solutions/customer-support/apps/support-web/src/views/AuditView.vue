@@ -2,13 +2,24 @@
 /**
  * 审计日志（admin only）。功能自平台壳迁移重实现，复用既有
  * `/api/v1/admin/audit*` 接口：按事件类型 / 操作者 / 日期筛选 +
- * 分页加载 + 事件详情。
+ * 分页加载 + 事件详情（Dialog）。
  */
 import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import { eventTypeLabel } from "../labels";
-import WfInspector from "../components/WfInspector.vue";
+import { Alert, AlertDescription } from "../components/ui/alert";
+import { Button } from "../components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import { Input } from "../components/ui/input";
+import { Label } from "../components/ui/label";
+import { Skeleton } from "../components/ui/skeleton";
 
 const PAGE_SIZE = 50;
 
@@ -159,147 +170,159 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="wf-page">
-    <header class="wf-page-head">
-      <div>
-        <h1>审计日志</h1>
-        <p>平台内所有管理操作的完整记录。</p>
-      </div>
-    </header>
+  <div class="mx-auto w-full max-w-6xl p-6">
+    <h1 class="text-2xl font-semibold tracking-tight">审计日志</h1>
+    <p class="mt-1 text-sm text-muted-foreground">
+      平台内所有管理操作的完整记录。
+    </p>
 
-    <div class="wf-filter-bar">
-      <span class="wf-filter-label">筛选</span>
-      <select v-model="filter" class="wf-select" @change="applyFilters">
-        <option value="">全部事件类型</option>
-        <option v-for="type in eventOptions" :key="type" :value="type">
-          {{ eventTypeLabel(type) }}
-        </option>
-      </select>
-      <select v-model="selectedActor" class="wf-select" @change="applyFilters">
-        <option value="">全部操作者</option>
-        <option v-for="actor in actorOptions" :key="actor" :value="actor">
-          {{ actor }}
-        </option>
-      </select>
-      <input v-model="fromDate" type="date" class="wf-input" @change="applyFilters" />
-      <span class="wf-muted">至</span>
-      <input v-model="toDate" type="date" class="wf-input" @change="applyFilters" />
-      <button class="wf-button compact primary" @click="applyFilters">筛选</button>
-      <button
+    <div
+      class="mt-6 flex flex-wrap items-end gap-2 rounded-md border border-border bg-card p-3"
+    >
+      <div class="space-y-1.5">
+        <Label for="audit-event" class="text-xs text-muted-foreground">事件类型</Label>
+        <select
+          id="audit-event"
+          v-model="filter"
+          class="h-9 rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          @change="applyFilters"
+        >
+          <option value="">全部事件类型</option>
+          <option v-for="type in eventOptions" :key="type" :value="type">
+            {{ eventTypeLabel(type) }}
+          </option>
+        </select>
+      </div>
+      <div class="space-y-1.5">
+        <Label for="audit-actor" class="text-xs text-muted-foreground">操作者</Label>
+        <select
+          id="audit-actor"
+          v-model="selectedActor"
+          class="h-9 rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          @change="applyFilters"
+        >
+          <option value="">全部操作者</option>
+          <option v-for="actor in actorOptions" :key="actor" :value="actor">
+            {{ actor }}
+          </option>
+        </select>
+      </div>
+      <div class="space-y-1.5">
+        <Label for="audit-from" class="text-xs text-muted-foreground">从</Label>
+        <Input
+          id="audit-from"
+          v-model="fromDate"
+          type="date"
+          class="w-40"
+          @change="applyFilters"
+        />
+      </div>
+      <div class="space-y-1.5">
+        <Label for="audit-to" class="text-xs text-muted-foreground">至</Label>
+        <Input
+          id="audit-to"
+          v-model="toDate"
+          type="date"
+          class="w-40"
+          @change="applyFilters"
+        />
+      </div>
+      <Button size="sm" @click="applyFilters">筛选</Button>
+      <Button
         v-if="filter || selectedActor || fromDate || toDate"
-        class="wf-button compact ghost"
+        variant="ghost"
+        size="sm"
         @click="clearFilters"
       >
         清除
-      </button>
+      </Button>
     </div>
 
-    <div v-if="error" class="wf-error" role="alert">{{ error }}</div>
+    <Alert v-if="error" variant="destructive" class="mt-4" role="alert">
+      <AlertDescription>{{ error }}</AlertDescription>
+    </Alert>
 
-    <section class="wf-audit-stream">
+    <section class="mt-6">
       <template v-if="loading">
-        <div v-for="i in 6" :key="i" class="wf-audit-event">
-          <span class="wf-skeleton">正在读取事件</span>
+        <div class="space-y-2">
+          <Skeleton v-for="i in 6" :key="i" class="h-10 w-full" />
         </div>
       </template>
       <template v-else>
-        <div v-for="group in days" :key="group.label" class="wf-audit-day">
-          <div class="wf-audit-day-label">{{ group.label }}</div>
-          <button
-            v-for="item in group.list"
-            :key="item.auditId"
-            class="wf-audit-event"
-            @click="selectedEvent = item"
-          >
-            <span class="wf-audit-time">{{
-              new Date(item.createdAt).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })
-            }}</span>
-            <span class="wf-audit-copy">{{ eventCopy(item) }}</span>
-            <span class="wf-audit-link">详情 →</span>
-          </button>
-        </div>
-        <div v-if="!events.length" class="wf-empty">
-          <div>
-            <strong>没有符合条件的审计事件</strong>
-            <p>调整筛选条件后再试。</p>
+        <div v-for="group in days" :key="group.label" class="mb-6">
+          <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {{ group.label }}
+          </h2>
+          <div class="overflow-hidden rounded-md border border-border">
+            <button
+              v-for="item in group.list"
+              :key="item.auditId"
+              class="flex w-full items-center gap-4 border-b border-border px-4 py-2.5 text-left text-sm transition-colors last:border-b-0 hover:bg-muted/50"
+              @click="selectedEvent = item"
+            >
+              <span class="w-12 shrink-0 text-muted-foreground">
+                {{
+                  new Date(item.createdAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                }}
+              </span>
+              <span class="min-w-0 flex-1 truncate">{{ eventCopy(item) }}</span>
+              <span class="shrink-0 text-xs text-muted-foreground">详情</span>
+            </button>
           </div>
+        </div>
+        <div
+          v-if="!events.length"
+          class="flex flex-col items-center gap-1 rounded-md border border-dashed border-border py-12 text-muted-foreground"
+        >
+          <p class="text-sm font-medium text-foreground">没有符合条件的审计事件</p>
+          <p class="text-sm">调整筛选条件后再试。</p>
         </div>
       </template>
     </section>
 
-    <div v-if="hasMore && !loading" class="wf-load-more">
-      <button class="wf-button compact" :disabled="loadingMore" @click="loadMore">
+    <div v-if="hasMore && !loading" class="flex justify-center py-4">
+      <Button variant="outline" :disabled="loadingMore" @click="loadMore">
         {{ loadingMore ? "加载中…" : "加载更多" }}
-      </button>
+      </Button>
     </div>
 
-    <WfInspector
-      variant="overlay"
+    <Dialog
       :open="Boolean(selectedEvent)"
-      title="事件详情"
-      @close="selectedEvent = null"
+      @update:open="(open: boolean) => !open && (selectedEvent = null)"
     >
-      <template v-if="selectedEvent">
-        <p class="wf-drawer-copy">{{ eventCopy(selectedEvent) }}</p>
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">操作者</span>
-          <p class="wf-brief-text">{{ selectedEvent.actorUsername || "System" }}</p>
-        </section>
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">对象</span>
-          <p class="wf-brief-text">{{ selectedEvent.subjectType }}</p>
-        </section>
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">时间</span>
-          <p class="wf-brief-text">
-            {{ new Date(selectedEvent.createdAt).toLocaleString() }}
-          </p>
-        </section>
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">来源</span>
-          <p class="wf-brief-text wf-mono">{{ selectedEvent.sourceIp || "—" }}</p>
-        </section>
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">技术字段</span>
-          <pre class="wf-audit-metadata">{{
-            JSON.stringify(selectedEvent.metadata, null, 2)
-          }}</pre>
-        </section>
-      </template>
-    </WfInspector>
+      <DialogContent class="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>事件详情</DialogTitle>
+          <DialogDescription v-if="selectedEvent">
+            {{ eventCopy(selectedEvent) }}
+          </DialogDescription>
+        </DialogHeader>
+        <div v-if="selectedEvent" class="space-y-4 text-sm">
+          <div class="space-y-1">
+            <p class="text-xs text-muted-foreground">操作者</p>
+            <p>{{ selectedEvent.actorUsername || "System" }}</p>
+          </div>
+          <div class="space-y-1">
+            <p class="text-xs text-muted-foreground">对象</p>
+            <p>{{ selectedEvent.subjectType }}</p>
+          </div>
+          <div class="space-y-1">
+            <p class="text-xs text-muted-foreground">时间</p>
+            <p>{{ new Date(selectedEvent.createdAt).toLocaleString() }}</p>
+          </div>
+          <div class="space-y-1">
+            <p class="text-xs text-muted-foreground">来源</p>
+            <p class="font-mono text-xs">{{ selectedEvent.sourceIp || "—" }}</p>
+          </div>
+          <div class="space-y-1">
+            <p class="text-xs text-muted-foreground">技术字段</p>
+            <pre class="max-h-56 overflow-auto rounded-md bg-muted p-3 font-mono text-xs">{{ JSON.stringify(selectedEvent.metadata, null, 2) }}</pre>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>
-
-<style scoped>
-.wf-filter-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 10px 14px;
-  border: 1px solid var(--wf-border);
-  border-radius: 12px;
-  background: var(--wf-surface);
-  margin-bottom: 16px;
-}
-.wf-filter-label {
-  color: var(--wf-text-muted);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  margin-right: 4px;
-}
-.wf-filter-bar .wf-select,
-.wf-filter-bar .wf-input {
-  min-width: 150px;
-  width: auto;
-}
-.wf-load-more {
-  display: flex;
-  justify-content: center;
-  padding: 16px 0;
-}
-</style>
