@@ -519,6 +519,52 @@ const FILE_CHANNEL_TYPE = 49;
 const VOICE_CHANNEL_TYPE = 34;
 const VIDEO_CHANNEL_TYPE = 43;
 
+/** 整条消息就是一个通道内部 id 的形态（user_ 前缀 + 长 token） */
+const BARE_CHANNEL_REF_RE = /^user_[A-Za-z0-9_-]{16,}$/;
+/** 上游解析失败时以占位文案落库，替代裸 id（原始事件在 Host 事件库可查） */
+export const UNKNOWN_CUSTOMER_TEXT = "（未知客户）";
+
+/** 剥除消息内嵌 HTML；<a href="url">文字</a> 保留为「文字 (url)」，不丢链接 */
+export function stripInboundHtml(raw: string): string {
+  if (!raw.includes("<")) return raw;
+  const stripTags = (s: string) => s.replace(/<[^>]*>/g, "");
+  const text = raw.replace(
+    /<a\s[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a\s*>/gi,
+    (_m, dq: string | undefined, sq: string | undefined, inner: string) => {
+      const href = (dq ?? sq ?? "").trim();
+      const label = stripTags(inner).trim();
+      if (!href || href === label) return label;
+      return label ? `${label} (${href})` : href;
+    },
+  );
+  return stripTags(text);
+}
+
+/**
+ * 入站文本正文清洗（FIX-PLAN A-5：ISS-003 裸 HTML / ISS-006 裸 id 根修）。
+ *
+ * 只处理文本类事件；判定刻意保守——只有「正文与 senderRef 完全相同」或
+ * 「整条恰为通道内部 id 形态」才替换为占位文案，绝不伤及真实消息。
+ */
+export function sanitizeInboundContent(
+  kind: string,
+  content: string,
+  senderRef: string | null,
+): string {
+  if (!TEXT_LIKE_KINDS.has(kind)) return content;
+  const cleaned = stripInboundHtml(content);
+  const trimmed = cleaned.trim();
+  if (!trimmed) return cleaned;
+  const sender = senderRef?.trim() ?? "";
+  if (
+    (sender && trimmed === sender) ||
+    BARE_CHANNEL_REF_RE.test(trimmed)
+  ) {
+    return UNKNOWN_CUSTOMER_TEXT;
+  }
+  return cleaned;
+}
+
 function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
   // pat 与文本化 emotion（[表情包]<含义>）按文本处理，无需 mediaRef；
   // 传统 emotion 带 mediaRef 时仍走图片链路（兼容旧 Host）。
@@ -562,7 +608,11 @@ function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
             ? VOICE_CHANNEL_TYPE
             : 1,
     kind: imageLike ? "image" : event.kind,
-    content: event.content,
+    content: sanitizeInboundContent(
+      event.kind,
+      event.content,
+      event.senderRef ?? null,
+    ),
     occurredAt: Math.floor(occurredAt / 1000),
     isSelf: event.isSelf,
     mentioned: event.mentioned ?? null,
