@@ -23,6 +23,10 @@ describe("extractBehaviorSettings", () => {
         defaultWaitMs: 600_000,
         nudgeText: "还在吗？",
         toolStepBudget: 6,
+        scheduledSendMaxPending: 3,
+        scheduledSendMaxPerDay: 20,
+        scheduledSendQuietStartHour: 23,
+        scheduledSendQuietEndHour: 7,
       },
     });
     expect(parsed).toEqual({
@@ -31,6 +35,11 @@ describe("extractBehaviorSettings", () => {
       defaultWaitMs: 600_000,
       nudgeText: "还在吗？",
       toolStepBudget: 6,
+      // 定时发送护栏未配置时回落出厂默认
+      scheduledSendMaxPending: 3,
+      scheduledSendMaxPerDay: 20,
+      scheduledSendQuietStartHour: 23,
+      scheduledSendQuietEndHour: 7,
     });
   });
 

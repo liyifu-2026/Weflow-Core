@@ -31,6 +31,14 @@ export const DEFAULT_BEHAVIOR_SETTINGS = {
   nudgeText: "",
   /** 单个 Agent Turn 内的最大工具步数（有界 ReAct 预算）。 */
   toolStepBudget: 4,
+  /**
+   * 定时发送护栏（SCHEDULED-SEND-PLAN 决策 #7）：
+   * 单联系人 pending 上限 / 单联系人每日直发上限 / 静音时段（顺延至 quietEndHour）。
+   */
+  scheduledSendMaxPending: 2,
+  scheduledSendMaxPerDay: 10,
+  scheduledSendQuietStartHour: 22,
+  scheduledSendQuietEndHour: 8,
 } as const;
 
 export type BehaviorSettings = {
@@ -39,6 +47,10 @@ export type BehaviorSettings = {
   defaultWaitMs: number;
   nudgeText: string;
   toolStepBudget: number;
+  scheduledSendMaxPending: number;
+  scheduledSendMaxPerDay: number;
+  scheduledSendQuietStartHour: number;
+  scheduledSendQuietEndHour: number;
 };
 
 /** 数值字段约束：min/max 与原代码常量的合法域一致。 */
@@ -47,6 +59,10 @@ const LIMITS = {
   sessionRoundBudget: { min: 1, max: 200 },
   defaultWaitMs: { min: 30_000, max: 15 * 60_000 },
   toolStepBudget: { min: 1, max: 12 },
+  scheduledSendMaxPending: { min: 0, max: 20 },
+  scheduledSendMaxPerDay: { min: 0, max: 100 },
+  scheduledSendQuietStartHour: { min: 0, max: 23 },
+  scheduledSendQuietEndHour: { min: 0, max: 23 },
 } as const;
 
 function clampInt(
@@ -99,6 +115,26 @@ export function extractBehaviorSettings(raw: unknown): BehaviorSettings {
       source.toolStepBudget,
       LIMITS.toolStepBudget,
       defaults.toolStepBudget,
+    ),
+    scheduledSendMaxPending: clampInt(
+      source.scheduledSendMaxPending,
+      LIMITS.scheduledSendMaxPending,
+      defaults.scheduledSendMaxPending,
+    ),
+    scheduledSendMaxPerDay: clampInt(
+      source.scheduledSendMaxPerDay,
+      LIMITS.scheduledSendMaxPerDay,
+      defaults.scheduledSendMaxPerDay,
+    ),
+    scheduledSendQuietStartHour: clampInt(
+      source.scheduledSendQuietStartHour,
+      LIMITS.scheduledSendQuietStartHour,
+      defaults.scheduledSendQuietStartHour,
+    ),
+    scheduledSendQuietEndHour: clampInt(
+      source.scheduledSendQuietEndHour,
+      LIMITS.scheduledSendQuietEndHour,
+      defaults.scheduledSendQuietEndHour,
     ),
   };
 }

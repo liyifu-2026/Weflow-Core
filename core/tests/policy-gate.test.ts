@@ -19,6 +19,8 @@ function decision(overrides: Partial<AgentDecision> = {}): AgentDecision {
     tool: undefined,
     waitMs: undefined,
     nudgeText: undefined,
+    scheduledMessage: undefined,
+    scheduledSendAt: undefined,
     closureSummary: undefined,
     ...overrides,
   };

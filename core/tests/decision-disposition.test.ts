@@ -35,12 +35,21 @@ import {
 } from "../modules/agent/application/agent-turn-outcome-command.js";
 import { hasNewerAgentTurn } from "../modules/agent/application/turn-utils.js";
 import type { AgentDecision } from "../modules/agent/application/agent-decision.js";
+import * as schema from "../infrastructure/postgres/schema.js";
 
 const dbMock = {
   insert: vi.fn().mockReturnThis(),
   values: vi.fn().mockReturnThis(),
   onConflictDoUpdate: vi.fn().mockResolvedValue(undefined),
-  onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+  onConflictDoNothing: vi.fn(function (this: unknown) {
+    const chain: any = {
+      returning: vi.fn().mockResolvedValue([{ id: "scheduled:turn-test" }]),
+    };
+    chain.where = vi.fn(function (this: unknown) {
+      return Promise.resolve([]);
+    });
+    return chain;
+  }),
   select: vi.fn().mockReturnThis(),
   from: vi.fn().mockReturnThis(),
   where: vi.fn().mockImplementation(() => {
@@ -69,6 +78,13 @@ function baseInput(overrides?: {
   decision?: AgentDecision;
   toolStepsUsed?: number;
   toolStepBudget?: number;
+  scheduledSend?: {
+    enabled: boolean;
+    maxPending: number;
+    maxPerDay: number;
+    quietStartHour: number;
+    quietEndHour: number;
+  };
 }) {
   const decision: AgentDecision = overrides?.decision ?? {
     replySegments: [],
@@ -81,6 +97,8 @@ function baseInput(overrides?: {
     knowledgeQuery: "如何恢复隔离文件",
     handoffBriefing: undefined,
     waitMs: undefined,
+    scheduledMessage: undefined,
+    scheduledSendAt: undefined,
     nudgeText: undefined,
     closureSummary: undefined,
   };
@@ -97,6 +115,7 @@ function baseInput(overrides?: {
     aiEmployeeId: null,
     toolStepsUsed: overrides?.toolStepsUsed,
     toolStepBudget: overrides?.toolStepBudget,
+    scheduledSend: overrides?.scheduledSend,
   };
 }
 
@@ -173,6 +192,8 @@ describe("commitDecisionDisposition fresh path ordering", () => {
           knowledgeQuery: undefined,
           handoffBriefing: undefined,
           waitMs: undefined,
+          scheduledMessage: undefined,
+          scheduledSendAt: undefined,
           nudgeText: undefined,
           closureSummary: undefined,
         },
@@ -214,6 +235,8 @@ describe("commitDecisionDisposition Phase 2 branches", () => {
           knowledgeQuery: undefined,
           handoffBriefing: undefined,
           waitMs: 300_000,
+          scheduledMessage: undefined,
+          scheduledSendAt: undefined,
           nudgeText: "您先忙，有问题随时叫我",
           closureSummary: undefined,
         },
@@ -262,6 +285,8 @@ describe("commitDecisionDisposition Phase 2 branches", () => {
           knowledgeQuery: undefined,
           handoffBriefing: undefined,
           waitMs: undefined,
+          scheduledMessage: undefined,
+          scheduledSendAt: undefined,
           nudgeText: undefined,
           closureSummary: "退款问题已解答，客户确认等待到账",
         },
@@ -294,6 +319,8 @@ describe("commitDecisionDisposition tool step budget", () => {
       knowledgeQuery: "二次检索：退款政策",
       handoffBriefing: undefined,
       waitMs: undefined,
+    scheduledMessage: undefined,
+    scheduledSendAt: undefined,
       nudgeText: undefined,
       closureSummary: undefined,
     };
@@ -338,5 +365,106 @@ describe("commitDecisionDisposition tool step budget", () => {
       expect.objectContaining({ errorCode: "tool_chain_limit" }),
     );
     expect(persistAgentToolCheckpoint).not.toHaveBeenCalled();
+  });
+});
+
+describe("commitDecisionDisposition — schedule_send（定时发送）", () => {
+  it("开关开启且护栏内：落 scheduled_sends 计划 + created 事件，无确认回复按 NoAction 收尾", async () => {
+    vi.mocked(hasNewerAgentTurn).mockResolvedValue(false);
+    vi.mocked(commitAgentTurnNoAction).mockClear();
+    vi.mocked(commitAgentTurnOutcome).mockClear();
+    dbAsRecord.insert.mockClear();
+
+    const decision = {
+      replySegments: [],
+      replyText: "",
+      nextAction: "schedule_send",
+      noActionReason: undefined,
+      requiresHuman: false,
+      riskLevel: "low",
+      tool: undefined,
+      knowledgeQuery: undefined,
+      handoffBriefing: undefined,
+      waitMs: undefined,
+      nudgeText: undefined,
+      scheduledMessage: "明早 9 点提醒您续费",
+      scheduledSendAt: new Date(Date.now() + 60 * 60_000),
+      closureSummary: undefined,
+    } as AgentDecision;
+
+    const result = await commitDecisionDisposition(
+      baseInput({
+        triggerMessageId: "msg-1",
+        decision,
+        scheduledSend: {
+          enabled: true,
+          maxPending: 2,
+          maxPerDay: 10,
+          quietStartHour: 22,
+          quietEndHour: 8,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ action: "terminal" });
+    const insertedTables = dbAsRecord.insert.mock.calls.map(
+      (call: unknown[]) => call[0],
+    );
+    expect(insertedTables).toContain(
+      schema.scheduledSends,
+    );
+    expect(commitAgentTurnOutcome).not.toHaveBeenCalled();
+    expect(commitAgentTurnNoAction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ reason: "scheduled_send" }),
+    );
+  });
+
+  it("开关关闭：压制定时（不落计划），按 NoAction 收尾", async () => {
+    vi.mocked(hasNewerAgentTurn).mockResolvedValue(false);
+    vi.mocked(commitAgentTurnNoAction).mockClear();
+    dbAsRecord.insert.mockClear();
+
+    const decision = {
+      replySegments: [],
+      replyText: "",
+      nextAction: "schedule_send",
+      noActionReason: undefined,
+      requiresHuman: false,
+      riskLevel: "low",
+      tool: undefined,
+      knowledgeQuery: undefined,
+      handoffBriefing: undefined,
+      waitMs: undefined,
+      nudgeText: undefined,
+      scheduledMessage: "明早提醒",
+      scheduledSendAt: new Date(Date.now() + 60 * 60_000),
+      closureSummary: undefined,
+    } as AgentDecision;
+
+    await commitDecisionDisposition(
+      baseInput({
+        triggerMessageId: "msg-1",
+        decision,
+        scheduledSend: {
+          enabled: false,
+          maxPending: 2,
+          maxPerDay: 10,
+          quietStartHour: 22,
+          quietEndHour: 8,
+        },
+      }),
+    );
+
+    const insertedTables = dbAsRecord.insert.mock.calls.map(
+      (call: unknown[]) => call[0],
+    );
+    expect(insertedTables).not.toContain(
+      schema.scheduledSends,
+    );
+    expect(commitAgentTurnNoAction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ reason: "scheduled_send" }),
+    );
   });
 });

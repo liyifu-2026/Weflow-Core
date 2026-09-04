@@ -89,6 +89,11 @@ export const contactProfiles = conversationSchema.table(
     tags: jsonb("tags").$type<string[]>().default([]).notNull(),
     // 白名单开关：false = 该联系人不触发 Agent 对话（人工处理）；默认开启（所有用户默认白名单，ADR-0060）
     agentEnabled: boolean("agent_enabled").default(true).notNull(),
+    // 定时发送开关（SCHEDULED-SEND-PLAN 决策 #3）：false = 模型提示词不提供
+    // schedule_send 动作；落库侧同步兜底压制。默认关闭。
+    scheduledSendEnabled: boolean("scheduled_send_enabled")
+      .default(false)
+      .notNull(),
     // 黑名单：true = 不建 Agent Turn、不出现在会话列表、不推通知；消息照常入库，
     // 只能在联系人页查看（比 agentEnabled=false 更强的隔离）。
     blocked: boolean("blocked").default(false).notNull(),
@@ -412,6 +417,48 @@ export const sessionWakes = agentSchema.table(
     index("agent_session_wakes_status_wake_idx").on(
       table.status,
       table.wakeAt,
+    ),
+  ],
+);
+
+/**
+ * 定时发送（SCHEDULED-SEND-PLAN）：schedule_send 决策的持久化执行计划。
+ * 预承诺直发家法——内容在决策时定死，到点由 dispatcher 走既有 send
+ * operation 链路直发（发送时不调用模型）。到点前会话出现新入站 →
+ * cancelled(new_inbound) 并入正常轮次；人工接入 → frozen 进待审。
+ * 状态机：pending → fired | cancelled | frozen。
+ */
+export const scheduledSends = agentSchema.table(
+  "scheduled_sends",
+  {
+    scheduledSendId: varchar("scheduled_send_id", { length: 750 }).primaryKey(),
+    conversationId: varchar("conversation_id", { length: 300 })
+      .notNull()
+      .references(() => conversations.conversationId),
+    turnId: varchar("turn_id", { length: 700 })
+      .notNull()
+      .references(() => agentTurns.turnId, { onDelete: "cascade" }),
+    content: text("content").notNull(),
+    status: varchar("status", { length: 30 }).default("pending").notNull(),
+    sendAt: timestamp("send_at", { withTimezone: true }).notNull(),
+    firedMessageId: varchar("fired_message_id", { length: 700 }),
+    cancelReason: varchar("cancel_reason", { length: 60 }),
+    operatedByUserId: varchar("operated_by_user_id", { length: 36 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("agent_scheduled_sends_status_send_idx").on(
+      table.status,
+      table.sendAt,
+    ),
+    index("agent_scheduled_sends_conversation_status_idx").on(
+      table.conversationId,
+      table.status,
     ),
   ],
 );

@@ -39,6 +39,8 @@ export function agentActionToDecision(action: AgentAction): AgentDecision {
     riskLevel: "low",
     waitMs: undefined,
     nudgeText: undefined,
+    scheduledMessage: undefined,
+    scheduledSendAt: undefined,
     closureSummary: undefined,
     handoffBriefing:
       action.kind === "handoff"

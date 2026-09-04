@@ -477,6 +477,13 @@
       "when": 1788690000006,
       "tag": "0070_retire_solution_platform",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1788690000007,
+      "tag": "0071_scheduled_send",
+      "breakpoints": true
     }
   ]
 }

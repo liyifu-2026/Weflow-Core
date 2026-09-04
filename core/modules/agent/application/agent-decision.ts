@@ -13,6 +13,7 @@ import {
   NEXT_ACTION_VALUES,
   NO_ACTION_REASONS,
   WAIT_MS_RANGE,
+  SCHEDULE_SEND_RANGE,
 } from "./decision-contract.js";
 
 /** LLM 输出的原始 JSON Schema（snake_case 字段，与提示词对齐） */
@@ -45,6 +46,13 @@ const decisionInputSchema = z
       .optional(),
     wait_ms: z.number().int().min(WAIT_MS_RANGE.min).max(WAIT_MS_RANGE.max).optional(),
     nudge_text: z.string().trim().min(1).max(500).optional(),
+    scheduled_message: z
+      .string()
+      .trim()
+      .min(1)
+      .max(SCHEDULE_SEND_RANGE.maxContentLength)
+      .optional(),
+    scheduled_send_at: z.string().trim().min(1).max(40).optional(),
     closure_summary: z.string().trim().min(1).max(1_000).optional(),
   })
   .strict()
@@ -56,6 +64,8 @@ const decisionInputSchema = z
       "no_action",
       "wait",
       "end_session",
+      // schedule_send 的即时确认回复可选：模型可"只约定不定论"
+      "schedule_send",
     ].includes(value.next_action);
     if (replyRequired && !value.reply_text && !value.reply_segments) {
       context.addIssue({
@@ -99,6 +109,43 @@ const decisionInputSchema = z
         message: "closure_summary is required when next_action is end_session",
       });
     }
+    if (value.next_action === "schedule_send") {
+      if (!value.scheduled_message) {
+        context.addIssue({
+          code: "custom",
+          path: ["scheduled_message"],
+          message: "scheduled_message is required when next_action is schedule_send",
+        });
+      }
+      if (!value.scheduled_send_at) {
+        context.addIssue({
+          code: "custom",
+          path: ["scheduled_send_at"],
+          message: "scheduled_send_at is required when next_action is schedule_send",
+        });
+      } else {
+        const sendAt = Date.parse(value.scheduled_send_at);
+        if (!Number.isFinite(sendAt)) {
+          context.addIssue({
+            code: "custom",
+            path: ["scheduled_send_at"],
+            message: "scheduled_send_at must be an ISO 8601 datetime",
+          });
+        } else {
+          const ahead = sendAt - Date.now();
+          if (
+            ahead < SCHEDULE_SEND_RANGE.minAheadMs ||
+            ahead > SCHEDULE_SEND_RANGE.maxAheadMs
+          ) {
+            context.addIssue({
+              code: "custom",
+              path: ["scheduled_send_at"],
+              message: `scheduled_send_at must be 1 minute to 30 days in the future`,
+            });
+          }
+        }
+      }
+    }
   });
 
 /** 将 LLM 输出的 snake_case 字段转换为内部 camelCase 格式 */
@@ -113,6 +160,8 @@ const decisionSchema = decisionInputSchema.transform((value) => ({
   knowledgeQuery: value.knowledge_query,
   waitMs: value.wait_ms,
   nudgeText: value.nudge_text,
+  scheduledMessage: value.scheduled_message,
+  scheduledSendAt: value.scheduled_send_at ? new Date(value.scheduled_send_at) : undefined,
   closureSummary: value.closure_summary,
   handoffBriefing: value.handoff_briefing
     ? {
