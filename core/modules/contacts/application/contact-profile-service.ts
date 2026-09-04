@@ -8,6 +8,9 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
+import {
+  cancelPendingScheduledSendsForConversation,
+} from "../../agent/application/scheduled-sends.js";
 import { AgentTurnService } from "../../agent/application/agent-turn-service.js";
 
 /** 联系人资料可更新字段 */
@@ -18,6 +21,8 @@ export type ContactProfilePatch = {
   sharedAlias?: string | null | undefined;
   /** 黑名单：true = 不建 Agent Turn、不出现在会话列表、不推通知 */
   blocked?: boolean | undefined;
+  /** 定时发送开关（SCHEDULED-SEND-PLAN 决策 #3）：false 同时作废 pending 定时消息 */
+  scheduledSendEnabled?: boolean | undefined;
 };
 
 /**
@@ -120,6 +125,12 @@ export async function updateConversationContactProfile(
       });
     }
 
+    if (input.patch.scheduledSendEnabled === false) {
+      await cancelPendingScheduledSendsForConversation(
+        transaction,
+        input.conversationId,
+      );
+    }
     if (input.patch.agentEnabled === false || input.patch.blocked === true) {
       await new AgentTurnService(transaction).suppressPolicyForConversation(
         input.conversationId,

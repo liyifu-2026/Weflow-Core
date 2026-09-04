@@ -52,6 +52,8 @@ const patchSchema = z
       .transform((tags) => [...new Set(tags)])
       .optional(),
     agentEnabled: z.boolean().optional(),
+    /** 定时发送开关（SCHEDULED-SEND-PLAN 决策 #3）：默认关 */
+    scheduledSendEnabled: z.boolean().optional(),
     sharedAlias: z.string().trim().min(1).max(120).nullable().optional(),
     /** 黑名单：true = 不建 Turn / 不进会话列表 / 不推通知 */
     blocked: z.boolean().optional(),
