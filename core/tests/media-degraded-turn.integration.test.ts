@@ -152,6 +152,13 @@ integration("media degraded turn（图片消息不得静默死亡）", () => {
     if (!media || !message || !conversation) {
       throw new Error(`fixture missing for ${tag}`);
     }
+    // 白名单模式（migration 0060）下新建联系人默认 agent_enabled=false；
+    // 本套件测降级 Turn 机制本身，显式把夹具联系人加入白名单，
+    // 不依赖 DB 列默认值（开发库/测试库默认值不一致）。
+    await postgres.db
+      .update(schema.contactProfiles)
+      .set({ agentEnabled: true })
+      .where(eq(schema.contactProfiles.contactId, conversation.contactId));
     created.push({ conversationId, contactId: conversation.contactId });
     return { eventId, conversationId, media, message };
   }

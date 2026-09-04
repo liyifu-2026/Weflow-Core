@@ -4,7 +4,7 @@ import {
   mediaAwareMessageText,
 } from "../modules/agent/application/media-context.js";
 
-describe("mediaAwareMessageText（Phase 4 视觉直读装配规则）", () => {
+describe("mediaAwareMessageText（媒体上下文装配规则）", () => {
   it("图片有描述（含模型自写 media_notes）→ 图片观察", () => {
     expect(
       mediaAwareMessageText({
@@ -14,25 +14,12 @@ describe("mediaAwareMessageText（Phase 4 视觉直读装配规则）", () => {
     ).toBe("图片观察：订单截图，尾号8823，金额299元");
   });
 
-  it("图片无描述 → 可看图信号（模型可用 fetch_url 拉原图），不编造", () => {
-    const text = mediaAwareMessageText({
-      contentType: "image",
-      mediaDescription: null,
-      originalImageUrl: "https://cdn.example/1.png",
-      messageId: "msg:1",
-    });
-    expect(text).toContain("[对方发送了一张图片");
-    expect(text).toContain("msg:1");
-    expect(text).toContain("原图可查看");
-  });
-
-  it("图片无描述也无原图 URL → 诚实占位", () => {
+  it("图片无描述 → 诚实占位（不编造，不引导必然失败的工具调用）", () => {
     expect(
       mediaAwareMessageText({
         contentType: "image",
         mediaDescription: null,
-        originalImageUrl: null,
-        messageId: "msg:2",
+        messageId: "msg:1",
       }),
     ).toBe("[对方发送了一张图片，当前无法查看内容]");
   });

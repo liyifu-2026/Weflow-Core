@@ -1,17 +1,19 @@
 /**
- * 媒体感知的上下文装配规则（Phase 4 视觉直读）。
+ * 媒体感知的上下文装配规则。
  *
- * 图片不再止步于 caption/占位：有描述（旧 caption 或模型自写
- * media_notes）直接给观察文本；无描述但原图可取时注入"可看图"
- * 信号与消息 ID——模型决策轮据此用 fetch_url/原图直读获得一手
- * 视觉信息。语音行为保持既有转写语义。
+ * 图片有描述（旧 caption 或模型自写 media_notes）直接给观察文本；
+ * 无描述时渲染诚实占位（模型知道存在图片但无法查看，禁止编造）。
+ * 语音行为保持既有转写语义。
+ *
+ * 注：曾在此注入「原图可查看（用 fetch_url 抓取）」的可看图信号，
+ * 但 fetch_url 仅支持文本类内容、也不存在可用的看图工具——该信号是
+ * 死路（模型照做必然工具失败，曾进一步触发转人工），已移除。
  */
 
 export type MediaMessageInput = {
   contentType: string;
   text?: string | null;
   mediaDescription?: string | null;
-  originalImageUrl?: string | null;
   messageId?: string | null;
 };
 
@@ -20,9 +22,6 @@ export function mediaAwareMessageText(message: MediaMessageInput): string {
     case "image":
       if (message.mediaDescription) {
         return `图片观察：${message.mediaDescription}`;
-      }
-      if (message.originalImageUrl) {
-        return `[对方发送了一张图片，原图可查看（用 fetch_url 抓取 ${message.originalImageUrl} 后描述；消息ID ${message.messageId ?? ""}）]`;
       }
       return "[对方发送了一张图片，当前无法查看内容]";
     case "voice":

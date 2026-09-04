@@ -84,10 +84,10 @@ export async function buildAgentContext(
       : null;
   type HistoryRow = (typeof history)[number];
   /**
-   * 多模态消息统一渲染为文本（Phase 4 视觉直读装配规则）：
+   * 多模态消息统一渲染为文本：
    * - 图片有描述（caption 或模型自写 media_notes）→ 图片观察
-   * - 图片无描述但原图已下载 → 注入可看图信号（fetch_url 拉原图直读）
-   * - 两者皆无 → 诚实占位（禁止编造）
+   * - 无描述 → 诚实占位（禁止编造；不存在可用的看图工具，
+   *   不再注入 fetch_url 可看图信号——那是必然失败的工具死路）
    * - 语音转写语义与纯文本透传保持既有行为
    */
   const messageText = (message: HistoryRow): string =>
@@ -95,10 +95,6 @@ export async function buildAgentContext(
       contentType: message.contentType,
       text: message.text,
       mediaDescription: message.mediaDescription,
-      // 原图已下载（originalImageFileId 非空）才注入可看图信号
-      originalImageUrl: message.originalImageFileId
-        ? "file-available"
-        : null,
       messageId: message.messageId,
     });
   // 召回最近 12 条已确认的长期记忆（memory_enabled OFF 时不 recall）
