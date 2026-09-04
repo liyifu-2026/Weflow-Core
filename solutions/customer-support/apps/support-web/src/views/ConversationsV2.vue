@@ -1,84 +1,48 @@
 <script setup lang="ts">
+/**
+ * 会话工作台（组合层）：
+ * 全部业务逻辑（列表加载/选择/SSE/增量刷新/接管/转交/发送/上传）保留在此，
+ * 视觉拆分为 components/conversations/ 子组件（列表/聊天窗格/气泡/输入区/
+ * 接管条/Inspector 面板/决策轨迹抽屉）。逻辑零改动，仅重写视觉与结构。
+ */
 import { confirmDialog } from "../components/confirm-dialog";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import { useWeflowAuthStore } from "../auth-store";
-import WfIcon from "../components/WfIcon.vue";
-import MediaImage from "../components/MediaImage.vue";
-import MediaFile from "../components/MediaFile.vue";
-import AvatarImage from "../components/AvatarImage.vue";
-import StaffAvatar from "../components/StaffAvatar.vue";
-import VoiceMessage from "../components/VoiceMessage.vue";
-import WfInspector from "../components/WfInspector.vue";
 import AssetPicker, { type AssetPickResult } from "../components/AssetPicker.vue";
 import type { AssetItem } from "../assets/api";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { statusTone } from "../components/status-tone";
 import { useEscClose } from "../composables/use-esc-close";
 import { agentDisplayName, contactDisplayName, factLabel, reasonLabel } from "../labels";
 import { knowledgeTarget } from "../navigation-context";
 import { useConversationWorkspaceStore } from "../stores/conversation-workspace";
-
-type Conversation = {
-  conversationId: string;
-  latestMessageAt?: string;
-  latestMessage?: { text?: string };
-  matchedMessage?: { text?: string; occurredAt?: string };
-  /** 会话类型：group = 群聊（Core 由 channel ref @chatroom 派生） */
-  chatType?: "private" | "group";
-  contact?: Record<string, any>;
-  handoff?: {
-    status?: string;
-    assignedUserId?: string;
-    assignedUser?: { username?: string };
-    reason?: string;
-    createdAt?: string;
-    agentPaused?: boolean;
-  } | null;
-  unreadCustomerCount?: number;
-  riskLevel?: string | null;
-  permissions?: ConversationPermissions;
-};
-/** 会话级操作权限（Core 计算；capability 开启后缺失即只读，客户端不猜） */
-type ConversationPermissions = {
-  canView: boolean;
-  canManualTakeover: boolean;
-  canReply: boolean;
-  canTransfer: boolean;
-  canFinish: boolean;
-};
-type Message = {
-  messageId: string;
-  actorType: string;
-  direction: string;
-  text?: string;
-  contentType?: string;
-  mediaId?: string;
-  /** 媒体细分类型（Core mediaAssets.kind）：图片/文件卡片据此渲染 */
-  mediaKind?: string | null;
-  /** 文件名（出站=暂存原名；入站=Host 上报原名） */
-  mediaFileName?: string | null;
-  sendState?: string;
-  occurredAt: string;
-  actorId?: string;
-  /** AI 员工头像（平台 DiceBear 代理 URL）；人工/客户消息为 null */
-  actorAvatarUrl?: string | null;
-  /** 群聊消息的发送者昵称（Core 由联系人资料解析；私聊恒为 null） */
-  senderName?: string | null;
-  replyToChannelMessageId?: string;
-  mentionContactRefs?: string[];
-};
-type Evidence = {
-  evidenceId?: string;
-  chunkId?: string;
-  documentId?: string;
-  knowledgeBaseId?: string;
-  title?: string;
-  sourceName?: string;
-  excerpt?: string;
-  provenance?: "human_selected" | "agent_retrieval";
-  sourceExecutionId?: string;
-};
+import ConversationList from "../components/conversations/ConversationList.vue";
+import ChatPane from "../components/conversations/ChatPane.vue";
+import InspectorPanel from "../components/conversations/InspectorPanel.vue";
+import SessionTraceDrawer from "../components/conversations/SessionTraceDrawer.vue";
+import {
+  actorLabel,
+  priority,
+  riskLabel,
+  rowSummary,
+  rowTimeLabel,
+  type Conversation,
+  type Evidence,
+  type Message,
+  type SectionScope,
+} from "../components/conversations/types";
 
 const auth = useWeflowAuthStore();
 const route = useRoute();
@@ -92,7 +56,6 @@ const conversationPermissionsEnabled = computed(
   () => capabilities.value?.conversationPermissions === true,
 );
 // 三区（capability 开启且非搜索态时使用；排序由 Core scope 合同保证）
-type SectionScope = "attention" | "mine" | "others";
 const sectionAttention = ref<Conversation[]>([]);
 const sectionMine = ref<Conversation[]>([]);
 const sectionOthers = ref<Conversation[]>([]);
@@ -221,7 +184,6 @@ const historyMessagesNextCursor = ref<string | null>(null);
 const transferOpen = ref(false);
 const transferTarget = ref("");
 const settingsOpen = ref(false);
-const queueSearchOpen = ref(false);
 const anyOverlayOpen = computed(
   () =>
     inspectorOpen.value || transferOpen.value || settingsOpen.value,
@@ -321,8 +283,13 @@ const inspectorTitle = computed(() => {
     case "customer":
       return "客户资料";
     case "history":
-      return historySelectedId.value ? "历史对话" : "历史对话";
+      return "历史对话";
   }
+});
+const inspectorDepth = computed(() => {
+  if (inspectorView.value === "context") return 0;
+  if (inspectorView.value === "history" && historySelectedId.value) return 2;
+  return 1;
 });
 const sending = ref(false);
 const retryBusy = ref(false);
@@ -336,6 +303,11 @@ const detailError = ref("");
 const note = ref("");
 const tags = ref("");
 const messagePane = ref<HTMLElement | null>(null);
+const messagePaneHost = ref<InstanceType<typeof ChatPane> | null>(null);
+watch(messagePaneHost, (host) => {
+  // ChatPane defineExpose 的滚动容器：消息锚定/跟随滚动都依赖它
+  messagePane.value = (host?.messagePane as HTMLElement | null) ?? null;
+});
 
 const selected = computed(() =>
   [
@@ -414,27 +386,6 @@ const unresolvedShort = computed(() => {
   return items.slice(0, 2);
 });
 
-
-function priority(item: Conversation) {
-  const risk =
-    item.riskLevel === "high" ? 300 : item.riskLevel === "medium" ? 150 : 0;
-  const handoffRank =
-    item.handoff?.status === "pending"
-      ? 200
-      : item.handoff?.status === "in_progress"
-        ? 100
-        : 0;
-  return risk + handoffRank + Number(item.unreadCustomerCount || 0);
-}
-function handoffLabel(status?: string) {
-  return status === "pending"
-    ? "等待接手"
-    : status === "in_progress"
-      ? "处理中"
-      : status === "resolved"
-        ? "已完成"
-        : "Agent 处理中";
-}
 // 会话模式状态徽章：closed > handoff（既有）> waiting > active（第 3 期 session）
 function sessionEpisodeLabel(): string | null {
   if (!agentSession.value) return null;
@@ -500,113 +451,39 @@ const TRACE_EVENT_LABELS: Record<string, string> = {
   validation_failed: "校验失败",
   suppressed: "策略抑制",
 };
-function traceEventLabel(eventType: string): string {
-  return TRACE_EVENT_LABELS[eventType] ?? eventType;
+
+function ownershipLabel() {
+  const state = handoff.value?.state;
+  if (!state) return "Agent 处理中";
+  if (state.status === "pending") return "等待接手";
+  if (state.status === "in_progress")
+    return mine.value ? "我处理中" : "其他客服处理中";
+  if (state.status === "resolved") return "已完成";
+  return handoffLabel(state.status);
 }
-function riskLabel(risk?: string | null) {
-  return risk === "high" ? "高风险" : risk === "medium" ? "需关注" : "常规";
-}
-function actorLabel(message: Message) {
-  return message.actorType === "agent"
-    ? "Agent"
-    : message.direction === "outbound"
-      ? "人工客服"
-      : "客户";
-}
-// 气泡 meta 降噪：客户只显示时间；Agent 显示身份；人工显示本人用户名
-// （历史他人消息显示「其他客服」，不伪造名字）。
-function bubbleMetaLabel(message: Message): string {
-  if (message.actorType === "agent") return "Agent";
-  if (message.direction === "inbound") return "";
-  return message.actorId === auth.user?.userId
-    ? (auth.user?.username ?? "我")
-    : "其他客服";
-}
-// ---------- 微信客户端式消息渲染 ----------
-// 表情包：不渲染图片截图，直接显示纯文本「[表情包]<含义>」。
-function isEmotionMessage(message: Message): boolean {
-  return message.contentType === "emotion";
-}
-function emotionLabel(message: Message): string {
-  const meaning = (message.text || "").trim();
-  return meaning ? `[表情包]${meaning}` : "[表情包]";
-}
-/** 表情包贴纸：emotion 类型，或带「[表情包]」文本的图片消息（有媒体） */
-function isEmotionSticker(message: Message): boolean {
-  return (
-    (message.contentType === "emotion" ||
-      (message.contentType === "image" &&
-        (message.text || "").includes("[表情包]"))) &&
-    Boolean(message.mediaId)
-  );
-}
-// 拍一拍：系统样式提示条，显示「对方拍了拍你」。
-function isPatMessage(message: Message): boolean {
-  return (
-    message.contentType === "pat" ||
-    (message.actorType === "system" && /拍了拍/.test(message.text || ""))
-  );
-}
-/** 气泡正文：表情包走文本含义；其余按原逻辑。 */
-function bubbleText(message: Message): string {
-  if (isEmotionMessage(message)) return emotionLabel(message);
-  return message.text || "〔非文本消息〕";
+function handoffLabel(status?: string) {
+  return status === "pending"
+    ? "等待接手"
+    : status === "in_progress"
+      ? "处理中"
+      : status === "resolved"
+        ? "已完成"
+        : "Agent 处理中";
 }
 
-// ---------- 媒体消息渲染辅助（微信式单气泡：图片/文件卡片） ----------
-/** 消息是否渲染为图片：contentType=image（回声行）或 mediaKind=image */
-function isImageMessage(message: Message): boolean {
-  return (
-    message.contentType === "image" ||
-    message.mediaKind === "image" ||
-    // ct=media 的 manual 行：mediaKind 缺失时按上传 kind 判断不可行，
-    // 由 mediaId + 非 image kind 分支兜底（见 mediaFileMessage）
-    false
-  );
-}
-/** 消息是否渲染为文件卡片：mediaKind=file（含融合后的 ct=media 行） */
-function isFileMessage(message: Message): boolean {
-  return message.mediaKind === "file" || message.contentType === "file";
-}
-/** 消息是否渲染为语音：mediaKind=voice 或 contentType=voice */
-function isVoiceMsg(message: Message): boolean {
-  return message.mediaKind === "voice" || message.contentType === "voice";
+// Core 对 contractVersion=2 会话返回 Mobile 序列化的状态大写值，
+// 桌面端状态判断统一用小写；进入 UI 前归一化，避免“按钮存在却永远不显示”。
+const HANDOFF_STATUS_NORMALIZE: Record<string, string> = {
+  HANDOFF_PENDING: "pending",
+  TRANSFER_PENDING: "transfer_pending",
+  HUMAN_ACTIVE: "in_progress",
+  HUMAN_FINISHED: "resolved",
+};
+function normalizeHandoffStatus(status?: string | null): string | undefined {
+  if (!status) return undefined;
+  return HANDOFF_STATUS_NORMALIZE[status] ?? status;
 }
 
-// ---------- 引用回复 & @提及渲染 ----------
-/** 在当前消息列表中找到被引用的原消息 */
-function quotedMessage(message: Message): Message | undefined {
-  if (!message.replyToChannelMessageId) return undefined;
-  return messages.value.find(
-    (m) => m.messageId === message.replyToChannelMessageId,
-  );
-}
-/** 引用卡片摘要：取原消息前 40 字符 */
-function quotedSummary(quoted: Message): string {
-  const text = (quoted.text || "").trim();
-  if (!text) return "〔非文本消息〕";
-  return text.length > 40 ? text.slice(0, 40) + "…" : text;
-}
-/** 将消息文本中的 @提及 渲染为高亮 span 段。
- *  返回交替的 { text, isMention } 段列表，供 v-for 渲染。 */
-function mentionSegments(text: string): Array<{ text: string; mention: boolean }> {
-  if (!text) return [];
-  const segments: Array<{ text: string; mention: boolean }> = [];
-  const regex = /@\S+/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      segments.push({ text: text.slice(lastIndex, match.index), mention: false });
-    }
-    segments.push({ text: match[0], mention: true });
-    lastIndex = regex.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    segments.push({ text: text.slice(lastIndex), mention: false });
-  }
-  return segments;
-}
 // 左侧列表：微信式单列（头像+昵称+摘要+未读），按风险/交接/未读排序。
 const flatConversations = computed<Conversation[]>(() => {
   const rows = conversationPermissionsEnabled.value
@@ -624,8 +501,7 @@ const flatConversations = computed<Conversation[]>(() => {
 
 // 三区会话（问题 4：等待处理 / 我处理的 / 其他对话，颜色区分）。
 // 与 mobile 端一致：attention=等待处理（红）、mine=我处理的（蓝）、others=其他（灰）。
-type QueueSectionKey = "attention" | "mine" | "others";
-const queueSections = computed<Array<{ key: QueueSectionKey; title: string; tone: string; items: Conversation[] }>>(() => {
+const queueSections = computed<Array<{ key: SectionScope; title: string; tone: string; items: Conversation[] }>>(() => {
   const seen = new Set<string>();
   const pick = (rows: Conversation[]) => {
     const out: Conversation[] = [];
@@ -643,15 +519,6 @@ const queueSections = computed<Array<{ key: QueueSectionKey; title: string; tone
   ];
 });
 
-// 白名单会话（agentEnabled=true）：AI 托管；非白名单（false）由人工处理。
-// 工作区视图在 Core 端已按 agentEnabled=true 过滤（带 ?agentEnabled=true），
-// 这里保留 client filter 作为 capability 未开启时的兜底。
-const whitelistConversations = computed<Conversation[]>(() =>
-  flatConversations.value.filter((item) => item.contact?.agentEnabled === true),
-);
-const nonWhitelistConversations = computed<Conversation[]>(() =>
-  flatConversations.value.filter((item) => item.contact?.agentEnabled !== true),
-);
 // 顶层页面：workspace=三区工作区（仅白名单客户）；contacts=联系人（全部，只读）
 type PageMode = "workspace" | "contacts";
 const pageMode = ref<PageMode>("workspace");
@@ -675,295 +542,6 @@ const contactsLoadingMore = ref(false);
 const contactsError = ref("");
 const contactSearchInput = ref("");
 const contactSearchApplied = ref("");
-function rowSummary(item: Conversation): string {
-  const text =
-    item.latestMessage?.text || item.matchedMessage?.text || "";
-  return text.trim() || "暂无消息";
-}
-function rowTimeLabel(value?: string): string {
-  if (!value) return "";
-  const date = new Date(value);
-  const now = new Date();
-  const sameDay = date.toDateString() === now.toDateString();
-  return sameDay
-    ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
-}
-// ---------- 输入栏：表情 / 图片 / 文件 ----------
-const EMOJI_CHOICES = [
-  "😀","😁","😂","🤣","😅","😊","😍","😘",
-  "😜","🤗","🤔","😴","😭","😤","😡","🥺",
-  "👍","👏","🙏","💪","🤝","👌","✌️","👋",
-  "❤️","💔","🎉","🎂","🌹","⚡","☀️","🌙",
-];
-const emojiPickerOpen = ref(false);
-function toggleEmojiPicker() {
-  emojiPickerOpen.value = !emojiPickerOpen.value;
-}
-function insertEmoji(emoji: string) {
-  replyText.value = `${replyText.value}${emoji}`;
-}
-function closeEmojiPicker() {
-  emojiPickerOpen.value = false;
-}
-// 图片/文件：真实上传逻辑
-const toolHint = ref("");
-let toolHintTimer: ReturnType<typeof setTimeout> | undefined;
-function showToolHint(msg: string) {
-  toolHint.value = msg;
-  if (toolHintTimer) clearTimeout(toolHintTimer);
-  toolHintTimer = setTimeout(() => (toolHint.value = ""), 2400);
-}
-// --- 媒体上传 ---
-const mediaUploading = ref(false);
-async function uploadMedia(file: File, kind: "image" | "file"): Promise<{ mediaId: string; fileId: string } | null> {
-  if (!selectedId.value) return null;
-  mediaUploading.value = true;
-  try {
-    const fd = new FormData();
-    fd.append("file", file);
-    const result = await api<{ media: { mediaId: string; fileId: string } }>("/api/v1/media", {
-      method: "POST",
-      body: fd,
-    });
-    return result.media;
-  } catch (reason) {
-    showToolHint(reason instanceof Error ? reason.message : "上传失败");
-    return null;
-  } finally {
-    mediaUploading.value = false;
-  }
-}
-// --- 图片选择 & 发送 ---
-const imageInputRef = ref<HTMLInputElement | null>(null);
-function triggerImagePick() {
-  imageInputRef.value?.click();
-}
-async function onImagePicked(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  const result = await uploadMedia(file, "image");
-  if (!result) return;
-  try {
-    await postMessage("", crypto.randomUUID(), {
-      mediaId: result.mediaId,
-      media: { fileId: result.fileId, kind: "image" },
-    });
-    await Promise.all([select(selectedId.value), loadList()]);
-  } catch {
-    showToolHint("图片发送失败");
-  }
-}
-// --- 文件选择 & 发送 ---
-const fileInputRef = ref<HTMLInputElement | null>(null);
-function triggerFilePick() {
-  fileInputRef.value?.click();
-}
-// --- 素材选择器（本机文件 / 图片空间 / 文件空间） ---
-const assetPickerOpen = ref(false);
-async function sendAsset(asset: AssetItem, text = "") {
-  if (!selectedId.value) return;
-  mediaUploading.value = true;
-  try {
-    await postMessage(text, crypto.randomUUID(), { assetId: asset.assetId });
-    await Promise.all([select(selectedId.value), loadList()]);
-  } catch (reason) {
-    showToolHint(reason instanceof Error ? reason.message : "素材发送失败");
-  } finally {
-    mediaUploading.value = false;
-  }
-}
-async function onAssetPicked(result: AssetPickResult) {
-  assetPickerOpen.value = false;
-  if (!selectedId.value) return;
-  try {
-    if (result.type === "asset") {
-      await sendAsset(result.asset);
-    } else {
-      // 降级路径：入空间失败时直接按原有上传发送链路发送
-      const uploaded = await uploadMedia(result.file, result.category);
-      if (!uploaded) return;
-      await postMessage("", crypto.randomUUID(), {
-        mediaId: uploaded.mediaId,
-        media: { fileId: uploaded.fileId, kind: result.category },
-      });
-      await Promise.all([select(selectedId.value), loadList()]);
-    }
-  } catch (reason) {
-    showToolHint(reason instanceof Error ? reason.message : "发送失败");
-  }
-}
-// 管理员可在选择器中整理（重命名/删除）
-const canManageAssets = computed(() => auth.isAdmin);
-async function onFilePicked(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  input.value = "";
-  if (!file) return;
-  const result = await uploadMedia(file, "file");
-  if (!result) return;
-  try {
-    await postMessage("", crypto.randomUUID(), {
-      mediaId: result.mediaId,
-      media: { fileId: result.fileId, kind: "file" },
-    });
-    await Promise.all([select(selectedId.value), loadList()]);
-  } catch {
-    showToolHint("文件发送失败");
-  }
-}
-// --- 引用回复 ---
-const replyTarget = ref<Message | null>(null);
-function setReplyTarget(message: Message) {
-  replyTarget.value = message;
-}
-function clearReplyTarget() {
-  replyTarget.value = null;
-}
-// --- 拍一拍 ---
-async function sendPoke(message: Message) {
-  if (!selectedId.value) return;
-  try {
-    await api(`/api/v1/conversations/${encodeURIComponent(selectedId.value)}/poke`, {
-      method: "POST",
-    });
-    await Promise.all([select(selectedId.value), loadList()]);
-  } catch {
-    showToolHint("拍一拍发送失败");
-  }
-}
-// --- @提及 ---
-const mentionOpen = ref(false);
-const mentionFilter = ref("");
-const mentionContacts = computed(() => {
-  const sources: Array<{ id: string; name: string }> = [];
-  // 从联系人 profile
-  if (profile.value?.contactId) {
-    sources.push({ id: profile.value.contactId, name: contactDisplayName(selected.value) || "联系人" });
-  }
-  // 从 assignees（客服列表）
-  for (const u of assignees.value) {
-    sources.push({ id: u.userId, name: u.displayName || u.username || u.userId });
-  }
-  const q = mentionFilter.value.toLowerCase();
-  if (!q) return sources;
-  return sources.filter((c) => c.name.toLowerCase().includes(q));
-});
-function onReplyInput(event: Event) {
-  const textarea = event.target as HTMLTextAreaElement;
-  const val = textarea.value;
-  const cursorPos = textarea.selectionStart ?? 0;
-  // 向前查找最近的 @ 符号
-  const before = val.slice(0, cursorPos);
-  const atIdx = before.lastIndexOf("@");
-  if (atIdx === -1 || (atIdx > 0 && before[atIdx - 1] !== " " && before[atIdx - 1] !== "\n")) {
-    mentionOpen.value = false;
-    return;
-  }
-  const query = before.slice(atIdx + 1);
-  // 如果 @ 后面已有空格，说明提及已结束
-  if (/\s/.test(query)) {
-    mentionOpen.value = false;
-    return;
-  }
-  mentionFilter.value = query;
-  mentionOpen.value = true;
-}
-function selectMentionContact(contact: { id: string; name: string }) {
-  const textarea = document.querySelector(".wx-input") as HTMLTextAreaElement | null;
-  if (!textarea) return;
-  const val = textarea.value;
-  const cursorPos = textarea.selectionStart ?? val.length;
-  const before = val.slice(0, cursorPos);
-  const atIdx = before.lastIndexOf("@");
-  if (atIdx === -1) return;
-  const after = val.slice(cursorPos);
-  replyText.value = `${val.slice(0, atIdx)}@${contact.name} ${after}`;
-  mentionOpen.value = false;
-  nextTick(() => {
-    const newPos = atIdx + contact.name.length + 2; // @name + space
-    textarea.setSelectionRange(newPos, newPos);
-    textarea.focus();
-  });
-}
-/** 从当前 replyText 中提取 mentionContactRefs（@名字列表） */
-function extractMentionRefs(): string[] {
-  const text = replyText.value;
-  const refs: string[] = [];
-  const regex = /@(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = regex.exec(text)) !== null) {
-    const name = m[1];
-    // 尝试匹配联系人或客服名
-    const found = mentionContacts.value.find((c) => c.name === name);
-    if (found) refs.push(found.id);
-  }
-  return refs;
-}
-// --- 消息右键菜单 ---
-const messageMenu = ref<{ x: number; y: number; message: Message } | null>(null);
-function openMessageMenu(event: MouseEvent, message: Message) {
-  event.preventDefault();
-  messageMenu.value = { x: event.clientX, y: event.clientY, message };
-}
-function closeMessageMenu() {
-  messageMenu.value = null;
-}
-function handleMenuReply(message: Message) {
-  setReplyTarget(message);
-  closeMessageMenu();
-}
-function handleMenuPoke(message: Message) {
-  sendPoke(message);
-  closeMessageMenu();
-}
-// 状态降噪：正常（sent/confirmed）不显示；仅发送中/失败/未知显示。
-function isNonDefaultSendState(message: Message): boolean {
-  return ["sending", "pending", "failed", "unknown"].includes(
-    message.sendState || "",
-  );
-}
-function messageTime(value: string) {
-  return new Date(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-function ownershipLabel() {
-  const state = handoff.value?.state;
-  if (!state) return "Agent 处理中";
-  if (state.status === "pending") return "等待接手";
-  if (state.status === "in_progress")
-    return mine.value ? "我处理中" : "其他客服处理中";
-  if (state.status === "resolved") return "已完成";
-  return handoffLabel(state.status);
-}
-function cycleStatusLabel(status?: string) {
-  const map: Record<string, string> = {
-    HANDOFF_PENDING: "等待处理",
-    HANDOFF_ACCEPTED: "已接管",
-    HANDOFF_RESOLVED: "已结束",
-    TRANSFER_PENDING: "转交等待接受",
-    TRANSFERRED: "已转交",
-    AGENT_HANDOFF: "Agent 转人工",
-  };
-  return map[String(status).toUpperCase()] ?? status ?? "交接";
-}
-
-// Core 对 contractVersion=2 会话返回 Mobile 序列化的状态大写值，
-// 桌面端状态判断统一用小写；进入 UI 前归一化，避免“按钮存在却永远不显示”。
-const HANDOFF_STATUS_NORMALIZE: Record<string, string> = {
-  HANDOFF_PENDING: "pending",
-  TRANSFER_PENDING: "transfer_pending",
-  HUMAN_ACTIVE: "in_progress",
-  HUMAN_FINISHED: "resolved",
-};
-function normalizeHandoffStatus(status?: string | null): string | undefined {
-  if (!status) return undefined;
-  return HANDOFF_STATUS_NORMALIZE[status] ?? status;
-}
 
 async function loadList(selectFirst = false) {
   listError.value = "";
@@ -1077,15 +655,6 @@ async function loadOlderConversations() {
 }
 
 // ---------- 联系人页（独立视图，仅只读浏览） ----------
-function contactItemDisplayName(item: ContactSummary): string {
-  return (
-    item.sharedAlias ||
-    item.channelRemark ||
-    item.channelNickname ||
-    item.channelDisplayName ||
-    item.contactId
-  );
-}
 async function loadContacts(append = false) {
   if (pageMode.value !== "contacts") return;
   if (append ? contactsLoadingMore.value : contactsLoading.value) return;
@@ -1361,16 +930,6 @@ async function rejectIncomingTransfer() {
 const clientRequestMap = ref<Record<string, string>>({});
 const outcomeChecked = ref<Set<string>>(new Set());
 const outcomeBusy = ref(false);
-
-function sendStateLabel(state?: string) {
-  if (!state) return "";
-  if (state === "confirmed" || state === "sent") return "已发送";
-  if (state === "failed") return "发送失败";
-  if (state === "unknown") return "结果未知";
-  if (state === "pending" || state === "sending") return "发送中";
-  if (state === "accepted") return "已受理";
-  return state;
-}
 
 async function postMessage(text: string, clientRequestId: string, extra?: {
   mediaId?: string;
@@ -1846,1430 +1405,495 @@ onUnmounted(() => {
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("keydown", onTakeoverShortcut);
 });
+
+// ---------- 输入栏：表情 / 图片 / 文件 / 素材（逻辑保留在组合层） ----------
+const toolHint = ref("");
+let toolHintTimer: ReturnType<typeof setTimeout> | undefined;
+function showToolHint(msg: string) {
+  toolHint.value = msg;
+  if (toolHintTimer) clearTimeout(toolHintTimer);
+  toolHintTimer = setTimeout(() => (toolHint.value = ""), 2400);
+}
+// --- 媒体上传 ---
+const mediaUploading = ref(false);
+async function uploadMedia(file: File, kind: "image" | "file"): Promise<{ mediaId: string; fileId: string } | null> {
+  if (!selectedId.value) return null;
+  mediaUploading.value = true;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const result = await api<{ media: { mediaId: string; fileId: string } }>("/api/v1/media", {
+      method: "POST",
+      body: fd,
+    });
+    return result.media;
+  } catch (reason) {
+    showToolHint(reason instanceof Error ? reason.message : "上传失败");
+    return null;
+  } finally {
+    mediaUploading.value = false;
+  }
+}
+// --- 图片/文件选择事件代理：Composer 只发信号，事件对象在组合层组装 ---
+let pendingPickKind: "image" | "file" = "image";
+function onImagePickerProxy() {
+  pendingPickKind = "image";
+  nextTick(() => {
+    const inputs = document.querySelectorAll<HTMLInputElement>(
+      "input[type=file][accept=image/*]",
+    );
+    const input = inputs[inputs.length - 1];
+    input?.click();
+  });
+}
+function onFilePickerProxy() {
+  pendingPickKind = "file";
+  nextTick(() => {
+    const inputs = document.querySelectorAll<HTMLInputElement>(
+      "input[type=file]:not([accept=image/*])",
+    );
+    const input = inputs[inputs.length - 1];
+    input?.click();
+  });
+}
+async function onImagePicked(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const result = await uploadMedia(file, "image");
+  if (!result) return;
+  try {
+    await postMessage("", crypto.randomUUID(), {
+      mediaId: result.mediaId,
+      media: { fileId: result.fileId, kind: "image" },
+    });
+    await Promise.all([select(selectedId.value), loadList()]);
+  } catch {
+    showToolHint("图片发送失败");
+  }
+}
+// --- 文件选择 & 发送 ---
+async function onFilePicked(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const result = await uploadMedia(file, "file");
+  if (!result) return;
+  try {
+    await postMessage("", crypto.randomUUID(), {
+      mediaId: result.mediaId,
+      media: { fileId: result.fileId, kind: "file" },
+    });
+    await Promise.all([select(selectedId.value), loadList()]);
+  } catch {
+    showToolHint("文件发送失败");
+  }
+}
+// --- 素材选择器（本机文件 / 图片空间 / 文件空间） ---
+const assetPickerOpen = ref(false);
+async function sendAsset(asset: AssetItem, text = "") {
+  if (!selectedId.value) return;
+  mediaUploading.value = true;
+  try {
+    await postMessage(text, crypto.randomUUID(), { assetId: asset.assetId });
+    await Promise.all([select(selectedId.value), loadList()]);
+  } catch (reason) {
+    showToolHint(reason instanceof Error ? reason.message : "素材发送失败");
+  } finally {
+    mediaUploading.value = false;
+  }
+}
+async function onAssetPicked(result: AssetPickResult) {
+  assetPickerOpen.value = false;
+  if (!selectedId.value) return;
+  try {
+    if (result.type === "asset") {
+      await sendAsset(result.asset);
+    } else {
+      // 降级路径：入空间失败时直接按原有上传发送链路发送
+      const uploaded = await uploadMedia(result.file, result.category);
+      if (!uploaded) return;
+      await postMessage("", crypto.randomUUID(), {
+        mediaId: uploaded.mediaId,
+        media: { fileId: uploaded.fileId, kind: result.category },
+      });
+      await Promise.all([select(selectedId.value), loadList()]);
+    }
+  } catch (reason) {
+    showToolHint(reason instanceof Error ? reason.message : "发送失败");
+  }
+}
+// 管理员可在选择器中整理（重命名/删除）
+const canManageAssets = computed(() => auth.isAdmin);
+
+// --- 引用回复 ---
+const replyTarget = ref<Message | null>(null);
+function setReplyTarget(message: Message) {
+  replyTarget.value = message;
+}
+function clearReplyTarget() {
+  replyTarget.value = null;
+}
+// --- 拍一拍 ---
+async function sendPoke(_message: Message) {
+  if (!selectedId.value) return;
+  try {
+    await api(`/api/v1/conversations/${encodeURIComponent(selectedId.value)}/poke`, {
+      method: "POST",
+    });
+    await Promise.all([select(selectedId.value), loadList()]);
+  } catch {
+    showToolHint("拍一拍发送失败");
+  }
+}
+// --- @提及 ---
+const mentionContacts = computed(() => {
+  const sources: Array<{ id: string; name: string }> = [];
+  // 从联系人 profile
+  if (profile.value?.contactId) {
+    sources.push({ id: profile.value.contactId, name: contactDisplayName(selected.value) || "联系人" });
+  }
+  // 从 assignees（客服列表）
+  for (const u of assignees.value) {
+    sources.push({ id: u.userId, name: u.displayName || u.username || u.userId });
+  }
+  return sources;
+});
+/** 从当前 replyText 中提取 mentionContactRefs（@名字列表） */
+function extractMentionRefs(): string[] {
+  const text = replyText.value;
+  const refs: string[] = [];
+  const regex = /@(\S+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    const name = m[1];
+    // 尝试匹配联系人或客服名
+    const found = mentionContacts.value.find((c) => c.name === name);
+    if (found) refs.push(found.id);
+  }
+  return refs;
+}
+// --- 消息右键菜单 ---
+const messageMenu = ref<{ x: number; y: number; message: Message } | null>(null);
+function openMessageMenu(event: MouseEvent, message: Message) {
+  event.preventDefault();
+  messageMenu.value = { x: event.clientX, y: event.clientY, message };
+}
+function closeMessageMenu() {
+  messageMenu.value = null;
+}
+function handleMenuReply(message: Message) {
+  setReplyTarget(message);
+  closeMessageMenu();
+}
+function handleMenuPoke(message: Message) {
+  sendPoke(message);
+  closeMessageMenu();
+}
+
+// --- Composer 派生文案 ---
+const composerPlaceholder = computed(() => {
+  if (handoff.value?.state?.status === "pending") return "先领取会话，再回复客户";
+  if (handoff.value?.state?.status === "in_progress" && !mine.value) return "其他客服正在处理";
+  return "输入回复…";
+});
+const composerDisabled = computed(
+  () => handoff.value?.state?.status === "in_progress" && !mine.value,
+);
+const transferPendingLabel = computed(() => {
+  if (handoff.value?.state?.status !== "transfer_pending") return null;
+  return handoff.value.state.targetQueueId
+    ? `已进入队列${handoff.value.state.targetDisplayName ? `（${handoff.value.state.targetDisplayName}）` : ""}，等待成员接手`
+    : `等待 ${handoff.value.state.targetDisplayName || "目标客服"} 接受`;
+});
 </script>
 
 <template>
-  <div class="wf-service-page">
-    <div class="wf-service-head">
-      <h1>{{ pageMode === "contacts" ? "联系人" : "客户服务" }}</h1>
-      <button
-        v-if="pageMode === 'workspace'"
-        class="wf-icon-button"
-        title="刷新队列"
-        @click="loadList()"
-      >
-        <WfIcon name="refresh" :size="15" />
-      </button>
-      <button
-        v-else
-        class="wf-icon-button"
-        title="刷新联系人"
-        @click="loadContacts()"
-      >
-        <WfIcon name="refresh" :size="15" />
-      </button>
-    </div>
-    <div class="wf-cs-layout">
-      <aside class="wf-queue">
-        <div class="wf-queue-head">
-          <div class="wf-queue-tools">
-            <template v-if="queueSearchOpen">
-              <div class="wf-search">
-                <WfIcon name="search" :size="16" /><input
-                  v-model="search"
-                  class="wf-input"
-                  placeholder="联系人、消息或会话 ID"
-                  autofocus
-                  @keyup.enter="loadList()"
-                />
-              </div>
-              <button
-                class="wf-icon-button"
-                title="收起搜索"
-                @click="queueSearchOpen = false"
-              >
-                ×
-              </button>
-            </template>
-            <button
-              v-else
-              class="wf-icon-button wf-queue-search-toggle"
-              title="搜索会话"
-              @click="queueSearchOpen = true"
-            >
-              <WfIcon name="search" :size="16" />
-            </button>
-          </div>
-        </div>
-        <div v-if="listError" class="wf-error wf-pane-error">
-          <span>{{ listError }}</span
-          ><button class="wf-button compact" @click="loadList()">重试</button>
-        </div>
-        <!-- 顶层页面切换：工作区 / 联系人 -->
-        <div v-if="!listError" class="wf-queue-mode">
-          <button
-            class="wf-mode-btn"
-            :class="{ active: pageMode === 'workspace' }"
-            @click="pageMode = 'workspace'"
-          >工作区</button
-          ><button
-            class="wf-mode-btn"
-            :class="{ active: pageMode === 'contacts' }"
-            @click="pageMode = 'contacts'"
-          >联系人</button
-          ><router-link
-            v-if="auth.isAdmin"
-            to="/whitelist"
-            class="wf-mode-btn wf-mode-link"
-            title="白名单配置"
-          >白名单</router-link>
-        </div>
-        <!-- 工作区：三区会话（仅白名单客户） -->
-        <template v-if="pageMode === 'workspace'">
-          <div v-if="loadingList" class="wf-queue-loading">
-            <div v-for="i in 6" :key="i" class="wx-row">
-              <div class="wf-skeleton wf-skeleton-title"></div>
-              <div class="wf-skeleton wf-skeleton-line"></div>
-            </div>
-          </div>
-          <div v-if="listError" class="wf-error wf-pane-error">
-            <span>{{ listError }}</span
-            ><button class="wf-button compact" @click="loadList()">重试</button>
-          </div>
-          <!-- 工作区搜索态：使用旧的单列接口 -->
-          <template
-            v-if="!loadingList && !listError && search"
-          >
-            <div
-              v-for="item in flatConversations"
-              :key="item.conversationId"
-              class="wx-row"
-              :class="{ active: selectedId === item.conversationId }"
-              @click="select(item.conversationId)"
-            >
-              <AvatarImage
-                :contact-id="item.contact?.contactId"
-                :fallback-text="contactDisplayName(item)"
-                :size="40"
-              />
-              <div class="wx-row-body">
-                <div class="wx-row-top">
-                  <span class="wx-row-name">{{
-                    contactDisplayName(item)
-                  }}</span>
-                  <span v-if="isGroup(item)" class="wx-row-group-tag">群</span>
-                  <span class="wx-row-time">{{
-                    rowTimeLabel(
-                      item.latestMessageAt ||
-                        item.matchedMessage?.occurredAt,
-                    )
-                  }}</span>
-                </div>
-                <div class="wx-row-bottom">
-                  <span class="wx-row-preview">{{ rowSummary(item) }}</span>
-                </div>
-              </div>
-            </div>
-            <div v-if="!flatConversations.length" class="wf-empty">
-              <div>
-                <strong>没有符合条件的会话</strong>
-                <p>调整搜索词后再试。</p>
-              </div>
-            </div>
-          </template>
-          <!-- 三区列表：等待处理（红）/ 我处理的（蓝）/ 其他对话（灰） -->
-          <template
-            v-else-if="
-              !loadingList && !listError && conversationPermissionsEnabled
-            "
-          >
-            <div
-              v-for="section in queueSections"
-              :key="section.key"
-              class="wf-queue-section"
-            >
-              <div class="wf-queue-section-head" :class="`tone-${section.tone}`">
-                <span class="wf-queue-section-title">{{ section.title }}</span>
-                <span class="wf-queue-section-count">{{ section.items.length }}</span>
-              </div>
-              <div
-                v-for="item in section.items"
-                :key="item.conversationId"
-                class="wx-row"
-                :class="{ active: selectedId === item.conversationId }"
-                @click="select(item.conversationId)"
-              >
-                <AvatarImage
-                  :contact-id="item.contact?.contactId"
-                  :fallback-text="contactDisplayName(item)"
-                  :size="40"
-                />
-                <div class="wx-row-body">
-                  <div class="wx-row-top">
-                    <span class="wx-row-name">{{
-                      contactDisplayName(item)
-                    }}</span>
-                    <span v-if="isGroup(item)" class="wx-row-group-tag">群</span>
-                    <span
-                      v-if="item.handoff?.status === 'pending' || item.riskLevel === 'high'"
-                      class="wx-row-flag"
-                      >{{
-                        item.handoff?.status === "pending"
-                          ? "待接手"
-                          : riskLabel(item.riskLevel)
-                      }}</span
-                    ><span v-else class="wx-row-time">{{
-                      rowTimeLabel(
-                        item.latestMessageAt || item.matchedMessage?.occurredAt,
-                      )
-                    }}</span>
-                  </div>
-                  <div class="wx-row-bottom">
-                    <span class="wx-row-preview">{{ rowSummary(item) }}</span>
-                    <span
-                      v-if="Number(item.unreadCustomerCount || 0) > 0"
-                      class="wx-row-unread"
-                      >{{
-                        Number(item.unreadCustomerCount) > 99
-                          ? "99+"
-                          : item.unreadCustomerCount
-                      }}</span
-                    >
-                  </div>
-                </div>
-              </div>
-              <div v-if="!section.items.length" class="wf-queue-section-empty">
-                <span>暂无</span>
-              </div>
-            </div>
-            <div
-              v-if="!queueSections.some((s) => s.items.length)"
-              class="wf-empty"
-            >
-              <div>
-                <strong>暂无会话</strong>
-                <p>Agent 可以继续自动处理现有会话。</p>
-              </div>
-            </div>
-            <button
-              v-if="hasMoreConversations"
-              class="wf-load-more"
-              :disabled="loadingMoreConversations"
-              @click="loadOlderConversations"
-            >
-              {{ loadingMoreConversations ? "正在加载…" : "加载更多" }}
-            </button>
-          </template>
-          <!-- 兜底：capability 未开启时维持旧单列（不区分白名单）。 -->
-          <template v-else-if="!loadingList && !listError">
-            <div
-              v-for="item in flatConversations"
-              :key="item.conversationId"
-              class="wx-row"
-              :class="{ active: selectedId === item.conversationId }"
-              @click="select(item.conversationId)"
-            >
-              <AvatarImage
-                :contact-id="item.contact?.contactId"
-                :fallback-text="contactDisplayName(item)"
-                :size="40"
-              />
-              <div class="wx-row-body">
-                <div class="wx-row-top">
-                  <span class="wx-row-name">{{
-                    contactDisplayName(item)
-                  }}</span>
-                  <span v-if="isGroup(item)" class="wx-row-group-tag">群</span>
-                  <span class="wx-row-time">{{
-                    rowTimeLabel(
-                      item.latestMessageAt ||
-                        item.matchedMessage?.occurredAt,
-                    )
-                  }}</span>
-                </div>
-                <div class="wx-row-bottom">
-                  <span class="wx-row-preview">{{ rowSummary(item) }}</span>
-                </div>
-              </div>
-            </div>
-            <div v-if="!flatConversations.length" class="wf-empty">
-              <div>
-                <strong>暂无会话</strong>
-                <p>Agent 可以继续自动处理现有会话。</p>
-              </div>
-            </div>
-          </template>
-        </template>
-        <!-- 联系人页：全部客户，只读浏览 -->
-        <template v-else-if="pageMode === 'contacts'">
-          <div class="wf-queue-search">
-            <div class="wf-search">
-              <WfIcon name="search" :size="16" /><input
-                v-model="contactSearchInput"
-                class="wf-input"
-                placeholder="按昵称、备注或共享别名搜索"
-                @keyup.enter="applyContactSearch"
-              />
-            </div>
-            <button
-              v-if="contactSearchInput"
-              class="wf-icon-button"
-              title="清空"
-              @click="clearContactSearch"
-            >×</button>
-            <button
-              v-else
-              class="wf-icon-button"
-              title="搜索"
-              @click="applyContactSearch"
-            ><WfIcon name="search" :size="16" /></button>
-          </div>
-          <div v-if="contactsError" class="wf-error wf-pane-error">
-            <span>{{ contactsError }}</span
-            ><button class="wf-button compact" @click="loadContacts()">
-              重试
-            </button>
-          </div>
-          <div
-            v-if="contactsLoading && !contacts.length"
-            class="wf-queue-loading"
-          >
-            <div v-for="i in 6" :key="i" class="wx-row">
-              <div class="wf-skeleton wf-skeleton-title"></div>
-              <div class="wf-skeleton wf-skeleton-line"></div>
-            </div>
-          </div>
-          <div
-            v-for="item in contacts"
-            v-else
-            :key="item.contactId"
-            class="wx-row"
-            :class="{ active: selectedId === item.conversationId }"
-            @click="selectContactAndSwitch(item.conversationId)"
-          >
-            <AvatarImage
-              :contact-id="item.contactId"
-              :fallback-text="contactItemDisplayName(item)"
-              :size="40"
-            />
-            <div class="wx-row-body">
-              <div class="wx-row-top">
-                <span class="wx-row-name">{{
-                  contactItemDisplayName(item)
-                }}</span>
-                <span
-                  v-if="item.agentEnabled"
-                  class="wx-row-flag"
-                  title="Agent 自动回复已开启"
-                >白名单</span>
-                <span v-else class="wx-row-time">仅人工</span>
-              </div>
-              <div class="wx-row-bottom">
-                <span class="wx-row-preview">{{
-                  item.latestMessageText || "暂无消息"
-                }}</span>
-                <span
-                  v-if="item.latestMessageAt"
-                  class="wx-row-time"
-                >{{ rowTimeLabel(item.latestMessageAt) }}</span>
-              </div>
-            </div>
-          </div>
-          <div v-if="!contactsLoading && !contacts.length" class="wf-empty">
-            <div>
-              <strong>{{
-                contactSearchApplied ? "没有符合条件的联系人" : "暂无联系人"
-              }}</strong>
-              <p v-if="!contactSearchApplied">
-                客户首次发消息后将出现在此处。
-              </p>
-            </div>
-          </div>
-          <button
-            v-if="contactsNextCursor"
-            class="wf-load-more"
-            :disabled="contactsLoadingMore"
-            @click="loadContacts(true)"
-          >
-            {{ contactsLoadingMore ? "正在加载…" : "加载更多" }}
-          </button>
-        </template>
-      </aside>
+  <div class="flex h-[calc(100vh-40px)] flex-col gap-3 p-3 pb-4">
+    <h1 class="min-h-6 text-lg font-semibold tracking-tight">
+      {{ pageMode === "contacts" ? "联系人" : "客户服务" }}
+    </h1>
+    <div class="grid min-h-0 flex-1 grid-cols-[clamp(220px,18vw,280px)_minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-border bg-background max-[860px]:grid-cols-[clamp(200px,30vw,260px)_minmax(0,1fr)]">
+      <ConversationList
+        v-model:page-mode="pageMode"
+        :search="search"
+        @update:search="search = $event"
+        :selected-id="selectedId"
+        :conversation-permissions-enabled="conversationPermissionsEnabled"
+        :flat-conversations="flatConversations"
+        :queue-sections="queueSections"
+        :has-more-conversations="hasMoreConversations"
+        :loading-more-conversations="loadingMoreConversations"
+        :loading-list="loadingList"
+        :list-error="listError"
+        :contacts="contacts"
+        :contacts-loading="contactsLoading"
+        :contacts-loading-more="contactsLoadingMore"
+        :contacts-error="contactsError"
+        :contacts-next-cursor="contactsNextCursor"
+        :contact-search-input="contactSearchInput"
+        :contact-search-applied="contactSearchApplied"
+        :is-admin="auth.isAdmin"
+        @select="(id) => select(id)"
+        @select-contact="selectContactAndSwitch"
+        @reload="pageMode === 'workspace' ? loadList() : loadContacts()"
+        @load-more="loadOlderConversations"
+        @load-contacts="(append: boolean) => loadContacts(append)"
+        @apply-contact-search="applyContactSearch"
+        @clear-contact-search="clearContactSearch"
+      />
 
-      <section class="wf-pane wf-thread">
-        <template v-if="selected">
-          <div class="wf-thread-head">
-            <div class="wf-thread-title">
-              <div class="wf-thread-person">
-                <AvatarImage
-                  :contact-id="selected.contact?.contactId"
-                  :fallback-text="contactDisplayName(selected)"
-                  :size="32"
-                  style="align-self: center"
-                />
-                <button
-                  class="wf-person-button"
-                  title="查看客户资料"
-                  @click="openInspector('customer')"
-                >
-                  <strong>{{ contactDisplayName(selected) }}</strong>
-                  <span v-if="selectedIsGroup" class="wf-thread-company">· 群聊</span>
-                  <span v-else-if="company" class="wf-thread-company"
-                    >· {{ company }}</span
-                  >
-                </button>
-                <span
-                  v-if="
-                    selected.riskLevel === 'high' ||
-                    selected.riskLevel === 'medium'
-                  "
-                  class="wf-risk-text"
-                  :class="selected.riskLevel"
-                  >{{ riskLabel(selected.riskLevel) }}</span
-                >
-              </div>
-              <div class="wf-actions">
-                <!-- 三条命令语义精确：AGENT_ACTIVE→Manual Takeover；pending→Claim -->
-                <button
-                  v-if="canManualTakeover"
-                  class="wf-button compact primary"
-                  :disabled="actionBusy"
-                  @click="transition('take-over')"
-                >
-                  接手处理
-                </button>
-                <button
-                  v-else-if="handoff?.state?.status === 'pending'"
-                  class="wf-button compact primary"
-                  :disabled="actionBusy"
-                  @click="transition('accept')"
-                >
-                  接手处理
-                </button>
-                <details class="wf-row-menu">
-                  <summary class="wf-icon-button" title="更多操作">···</summary>
-                  <div>
-                    <button @click="router.push('/profile')">
-                      个人资料
-                    </button>
-                    <button v-if="canTransfer" @click="openTransfer()">
-                      转交处理
-                    </button>
-                    <button @click="settingsOpen = true">会话设置</button>
-                    <button
-                      v-if="canFinish"
-                      class="danger"
-                      @click="transition('resolve')"
-                    >
-                      结束人工处理
-                    </button>
-                  </div>
-                </details>
-              </div>
-            </div>
-            <div class="wf-thread-task">{{ briefingLine }}</div>
-            <div
-              v-if="handoff?.state?.status === 'transfer_pending'"
-              class="wf-transfer-status"
-            >
-              <span>{{
-                handoff.state.targetQueueId
-                  ? `已进入队列${handoff.state.targetDisplayName ? `（${handoff.state.targetDisplayName}）` : ""}，等待成员接手`
-                  : `等待 ${handoff.state.targetDisplayName || "目标客服"} 接受`
-              }}</span>
-              <button
-                v-if="handoff.state.canRejectTransfer"
-                class="wf-link wf-link-button"
-                :disabled="actionBusy"
-                @click="rejectIncomingTransfer"
-              >
-                拒绝转交
-              </button>
-            </div>
-          </div>
-          <div v-if="detailError" class="wf-error wf-thread-error">
-            <span>{{ detailError }}</span
-            ><button class="wf-button compact" @click="select(selectedId)">
-              重新加载
-            </button>
-          </div>
+      <ChatPane
+        ref="messagePaneHost"
+        :selected="selected ?? null"
+        :selected-is-group="selectedIsGroup"
+        :company="company"
+        :loading-conversation="loadingConversation"
+        :detail-error="detailError"
+        :messages="messages"
+        :session-badge-label="sessionEpisodeLabel()"
+        :live-thinking="liveThinking"
+        :pending-wake="pendingWake"
+        :agent-session-waiting="agentSession?.state === 'waiting'"
+        :wake-countdown="wakeCountdown"
+        :done-wakes="doneWakes"
+        :at-bottom="atBottom"
+        :new-message-count="newMessageCount"
+        :next-cursor="nextCursor"
+        :loading-older="loadingOlder"
+        :loading-more-flag="loadingMoreConversations"
+        :can-manual-takeover="canManualTakeover"
+        :takeover-transition="takeoverTransition"
+        :action-busy="actionBusy"
+        :briefing-line="briefingLine"
+        :can-transfer="canTransfer"
+        :can-finish="canFinish"
+        :handoff-status="handoff?.state?.status"
+        :transfer-pending-label="transferPendingLabel"
+        :can-reject-transfer="Boolean(handoff?.state?.canRejectTransfer)"
+        v-model:reply-text="replyText"
+        :sending="sending"
+        :can-reply="Boolean(canReply)"
+        :is-mine="mine"
+        :media-uploading="mediaUploading"
+        :tool-hint="toolHint"
+        :reply-target="replyTarget"
+        :mention-contacts="mentionContacts"
+        :composer-placeholder="composerPlaceholder"
+        :composer-disabled="composerDisabled"
+        :retry-busy="retryBusy"
+        :outcome-busy="outcomeBusy"
+        @open-customer="openInspector('customer')"
+        @open-settings="settingsOpen = true"
+        @open-transfer="openTransfer()"
+        @open-profile="router.push('/profile')"
+        @takeover="transition('take-over')"
+        @resolve="transition('resolve')"
+        @reject-transfer="rejectIncomingTransfer"
+        @reload-detail="select(selectedId)"
+        @load-older="loadOlderMessages"
+        @jump-latest="jumpToLatest"
+        @scroll="onMessagesScroll"
+        @send="send"
+        @pick-image="() => onImagePickerProxy()"
+        @pick-file="() => onFilePickerProxy()"
+        @open-assets="assetPickerOpen = true"
+        @clear-reply="clearReplyTarget"
+        @message-contextmenu="openMessageMenu"
+        @retry-message="retryMessage"
+        @check-outcome="checkMessageOutcome"
+        @open-trace="openSessionTrace"
+      />
 
-          <!-- Brief 内容统一在右侧 Inspector（context/brief 视图）展示；thread 保持纯净 -->
-          <div ref="messagePane" class="wf-messages" @scroll="onMessagesScroll">
-            <button
-              v-if="nextCursor && !loadingConversation"
-              class="wf-load-older"
-              :disabled="loadingOlder"
-              @click="loadOlderMessages"
-            >
-              {{ loadingOlder ? "正在加载…" : "加载更早的消息" }}
-            </button>
-            <template v-if="loadingConversation"
-              ><div
-                v-for="i in 4"
-                :key="i"
-                class="wf-message-row"
-                :class="{ outbound: i % 2 === 0 }"
-              >
-                <div class="wf-skeleton wf-message">正在读取消息内容</div>
-              </div></template
-            >
-            <template v-else>
-              <template v-for="message in messages" :key="message.messageId">
-              <div
-                :id="`message-${message.messageId}`"
-                class="wf-message-row"
-                :class="{
-                  outbound: message.direction === 'outbound',
-                  agent: message.actorType === 'agent',
-                  'wf-target-highlight':
-                    route.query.messageId === message.messageId,
-                }"
-                @contextmenu="openMessageMenu($event, message)"
-              >
-                <!-- 拍一拍：居中系统小字（同微信）；其他系统事件沿用方向气泡 -->
-                <div
-                  v-if="isPatMessage(message)"
-                  class="wf-pat-notice"
-                >
-                  {{ /拍了拍/.test(message.text || "") ? message.text : "对方拍了拍你" }}
-                </div>
-                <div
-                  v-else-if="message.actorType === 'system'"
-                  class="wf-bubble-row"
-                  :class="[
-                    message.direction === 'outbound' ? 'me' : 'them',
-                    { system: true },
-                  ]"
-                >
-                  <div class="wf-bubble wf-bubble-system">
-                    {{ message.text || "系统事件" }}
-                    <span class="wf-bubble-meta">
-                      {{ messageTime(message.occurredAt) }}
-                    </span>
-                  </div>
-                </div>
-                <template v-else>
-                  <!-- 微信式气泡：正文最高视觉权重；meta 降噪（正常状态消失、
-                       异常才出现）；操作 hover/focus 按需出现，键盘可达 -->
-                  <div
-                    class="wf-bubble-row"
-                    :class="[
-                      message.direction === 'outbound' ? 'me' : 'them',
-                      {
-                        agent: message.actorType === 'agent',
-                        failed: message.sendState === 'failed',
-                        unknown: message.sendState === 'unknown',
-                      },
-                    ]"
-                  >
-                    <!-- 客户消息（inbound）：左侧显示客户头像 -->
-                    <AvatarImage
-                      v-if="message.direction === 'inbound' && selected?.contact?.contactId"
-                      :contact-id="selected.contact.contactId"
-                      :fallback-text="message.senderName || contactDisplayName(selected)"
-                      :size="28"
-                      class="wf-msg-avatar"
-                    />
-                    <div class="wf-bubble-wrap">
-                      <!-- 群聊入站消息显示发送者昵称 -->
-                      <div
-                        v-if="selectedIsGroup && message.direction === 'inbound' && message.senderName"
-                        class="wf-msg-sender"
-                      >{{ message.senderName }}</div>
-                      <div
-                        class="wf-bubble"
-                        :class="{
-                          media: isImageMessage(message) && message.mediaId,
-                          file: isFileMessage(message) && message.mediaId,
-                          // 表情包有媒体时按贴纸渲染（无气泡底、小尺寸）
-                          emotion: isEmotionSticker(message),
-                          // 语音自带气泡（微信式），外层气泡透明化
-                          voice: isVoiceMsg(message) && !!message.mediaId,
-                          long: (message.text || '').length > 144,
-                        }"
-                      >
-                        <MediaImage
-                          v-if="isImageMessage(message) && message.mediaId"
-                          :media-id="message.mediaId"
-                          :alt="`${actorLabel(message)} 发送的图片`"
-                        />
-                        <MediaImage
-                          v-else-if="isEmotionSticker(message)"
-                          :media-id="message.mediaId!"
-                          :alt="`${actorLabel(message)} 发送的表情包`"
-                          class="wf-emotion-sticker"
-                        />
-                        <MediaFile
-                          v-else-if="isFileMessage(message) && message.mediaId"
-                          :media-id="message.mediaId"
-                          :file-name="message.mediaFileName"
-                          :alt="`${actorLabel(message)} 发送的文件`"
-                        />
-                        <VoiceMessage
-                          v-else-if="isVoiceMsg(message) && message.mediaId"
-                          :media-id="message.mediaId"
-                          :alt="`${actorLabel(message)} 发送的语音`"
-                        />
-                        <template v-else>
-                          <!-- 引用回复卡片 -->
-                          <div
-                            v-if="quotedMessage(message)"
-                            class="wf-quote-card"
-                          >
-                            <span class="wf-quote-author">{{ actorLabel(quotedMessage(message)!) }}</span>
-                            <span class="wf-quote-text">{{ quotedSummary(quotedMessage(message)!) }}</span>
-                          </div>
-                          <!-- @提及高亮 -->
-                          <span v-if="!isEmotionMessage(message) && mentionSegments(bubbleText(message)).some(s => s.mention)"><template
-                            v-for="(seg, si) in mentionSegments(bubbleText(message))"
-                            :key="si"
-                          ><span
-                              v-if="seg.mention"
-                              class="wf-mention"
-                            >{{ seg.text }}</span><template v-else>{{ seg.text }}</template></template></span>
-                          <!-- 普通文本 -->
-                          <span v-else>{{
-                            bubbleText(message)
-                          }}</span>
-                        </template>
-                      </div>
-                      <div class="wf-bubble-meta">
-                        <span v-if="bubbleMetaLabel(message)">{{
-                          bubbleMetaLabel(message)
-                        }}</span>
-                        <span>{{ messageTime(message.occurredAt) }}</span>
-                        <span
-                          v-if="isNonDefaultSendState(message)"
-                          class="wf-bubble-state"
-                          :class="{
-                            bad:
-                              message.sendState === 'failed' ||
-                              message.sendState === 'unknown',
-                          }"
-                          >{{ sendStateLabel(message.sendState) }}</span
-                        >
-                        <span
-                          v-if="
-                            message.actorType !== 'agent' &&
-                            message.direction === 'outbound' &&
-                            message.sendState === 'failed'
-                          "
-                          class="wf-bubble-actions"
-                        >
-                          <button
-                            :disabled="retryBusy"
-                            @click="retryMessage(message)"
-                          >
-                            重试
-                          </button>
-                        </span>
-                        <span
-                          v-else-if="
-                            message.actorType !== 'agent' &&
-                            message.direction === 'outbound' &&
-                            message.sendState === 'unknown'
-                          "
-                          class="wf-bubble-actions"
-                        >
-                          <button
-                            :disabled="outcomeBusy"
-                            @click="checkMessageOutcome(message)"
-                          >
-                            查询结果
-                          </button>
-                        </span>
-                        <!-- 会话级人工反馈入口已下线 -->
-                      </div>
-                    </div>
-                    <!-- AI 员工消息：右侧显示该员工的 DiceBear 头像（voxel-bot，
-                         seed=员工标识；缺失/加载失败回退 AI 字标） -->
-                    <img
-                      v-if="message.actorType === 'agent' && message.actorAvatarUrl"
-                      :src="message.actorAvatarUrl"
-                      alt="AI 员工头像"
-                      class="wf-msg-avatar wf-msg-agent-avatar"
-                      @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
-                    />
-                    <span
-                      v-if="message.actorType === 'agent'"
-                      class="wf-msg-avatar wf-msg-agent-icon"
-                    >A</span>
-                    <!-- 人工客服消息（outbound 非 agent）：右侧显示客服头像 -->
-                    <StaffAvatar
-                      v-else-if="message.direction === 'outbound' && message.actorType !== 'agent'"
-                      :user-id="message.actorId || auth.user?.userId"
-                      :avatar-url="auth.user?.avatarUrl"
-                      :fallback-text="auth.user?.displayName || auth.user?.username || '我'"
-                      :size="28"
-                      class="wf-msg-avatar"
-                    />
-                  </div>
-                </template>
-              </div>
-              </template>
-              <!-- 「AI 正在思考」气泡（Phase 4）：进行中 turn 的阶段 + 思维链 -->
-              <div
-                v-if="liveThinking"
-                class="wf-message-row session-wait-row"
-              >
-                <div class="thinking-bubble">
-                  <div class="thinking-head">
-                    <span class="thinking-dots"><i></i><i></i><i></i></span>
-                    <span class="thinking-stage">{{
-                      liveThinking.lastEventLabel
-                    }}</span>
-                  </div>
-                  <details v-if="liveThinking.reasoning" class="thinking-body">
-                    <summary>思考过程</summary>
-                    <pre class="thinking-text">{{ liveThinking.reasoning }}</pre>
-                  </details>
-                </div>
-              </div>
-              <!-- wait 时间线节点（Phase 3）：scheduled=待发提醒；done=已发提醒/已唤醒 -->
-              <div
-                v-if="pendingWake && agentSession?.state === 'waiting'"
-                class="wf-message-row session-wait-row"
-              >
-                <div class="session-wait-node">
-                  <span class="session-wait-dot"></span>
-                  <span class="session-wait-text"
-                    >等待客户回复 · 超时（{{ wakeCountdown }}）后{{
-                      pendingWake.nudgeText ? "自动发送提醒" : "自动唤醒跟进"
-                    }}</span
-                  >
-                  <button
-                    class="session-trace-link"
-                    type="button"
-                    @click="openSessionTrace(pendingWake.turnId)"
-                  >
-                    决策轨迹 →
-                  </button>
-                </div>
-              </div>
-              <div
-                v-for="wake in doneWakes"
-                :key="`wake-${wake.wakeId}`"
-                class="wf-message-row session-wait-row"
-              >
-                <div class="session-wait-node session-wait-done">
-                  <span class="session-wait-dot done"></span>
-                  <span class="session-wait-text"
-                    >{{ wake.nudgeText ? "已自动发送提醒" : "已唤醒跟进" }} ·
-                    {{ messageTime(wake.wakeAt) }}</span
-                  >
-                  <button
-                    class="session-trace-link"
-                    type="button"
-                    @click="openSessionTrace(wake.turnId)"
-                  >
-                    决策轨迹 →
-                  </button>
-                </div>
-              </div>
-            </template>
-          </div>
-          <button
-            v-if="!atBottom && newMessageCount > 0"
-            class="wf-new-messages"
-            @click="jumpToLatest"
-          >
-            有 {{ newMessageCount }} 条新消息 ↓
-          </button>
-          <!-- Agent 处理中：接管条代替 Composer（能看≠能回复；接管成功 Composer 转场淡入） -->
-          <div
-            v-if="canManualTakeover"
-            class="wf-takeover-bar"
-            :class="{ entering: takeoverTransition }"
-          >
-            <div class="wf-takeover-copy">
-              <strong>Agent 正在处理此会话</strong>
-              <span class="wf-muted"
-                >接管后，Agent 将暂停回复，由你负责当前会话。</span
-              >
-            </div>
-            <button
-              class="wf-button primary"
-              :disabled="actionBusy"
-              @click="transition('take-over')"
-            >
-              {{ actionBusy ? "接管中…" : "接管处理" }}
-            </button>
-          </div>
-          <!-- 微信客户端式输入栏：表情 / 图片 / 文件 + 文本 + 发送 -->
-          <div
-            v-else
-            class="wx-composer"
-            :class="{ entering: takeoverTransition }"
-          >
-            <div v-if="toolHint" class="wx-tool-hint">{{ toolHint }}</div>
-            <div v-if="emojiPickerOpen" class="wx-emoji-picker">
-              <button
-                v-for="emoji in EMOJI_CHOICES"
-                :key="emoji"
-                type="button"
-                class="wx-emoji-item"
-                @click="insertEmoji(emoji)"
-              >
-                {{ emoji }}
-              </button>
-            </div>
-            <!-- @提及联系人浮层 -->
-            <div v-if="mentionOpen" class="wx-mention-popup">
-              <div v-if="mentionContacts.length" class="wx-mention-list">
-                <button
-                  v-for="c in mentionContacts"
-                  :key="c.id"
-                  class="wx-mention-item"
-                  @mousedown.prevent="selectMentionContact(c)"
-                >
-                  {{ c.name }}
-                </button>
-              </div>
-              <div v-else class="wx-mention-empty">无匹配联系人</div>
-            </div>
-            <!-- 隐藏的文件输入 -->
-            <input ref="imageInputRef" type="file" accept="image/*" style="display:none" @change="onImagePicked" />
-            <input ref="fileInputRef" type="file" accept="*/*" style="display:none" @change="onFilePicked" />
-            <div class="wx-composer-tools">
-              <button
-                type="button"
-                class="wx-tool-button"
-                title="表情"
-                @click="toggleEmojiPicker"
-              >
-                😊
-              </button>
-              <button
-                type="button"
-                class="wx-tool-button"
-                title="图片"
-                :disabled="mediaUploading"
-                @click="triggerImagePick"
-              >
-                <WfIcon name="upload" :size="17" />
-              </button>
-              <button
-                type="button"
-                class="wx-tool-button"
-                title="文件"
-                :disabled="mediaUploading"
-                @click="triggerFilePick"
-              >
-                <WfIcon name="audit" :size="17" />
-              </button>
-              <button
-                type="button"
-                class="wx-tool-button"
-                title="素材空间"
-                :disabled="mediaUploading"
-                @click="assetPickerOpen = true"
-              >
-                <WfIcon name="knowledge" :size="17" />
-              </button>
-              <span v-if="mediaUploading" class="wx-upload-progress">上传中…</span>
-            </div>
-            <!-- 引用回复预览条 -->
-            <div v-if="replyTarget" class="wx-reply-preview">
-              <span class="wx-reply-preview-text">回复 {{ actorLabel(replyTarget) }}：{{ replyTarget.text ? (replyTarget.text.length > 50 ? replyTarget.text.slice(0, 50) + '…' : replyTarget.text) : '〔非文本消息〕' }}</span>
-              <button class="wx-reply-preview-close" @click="clearReplyTarget">×</button>
-            </div>
-            <textarea
-              v-model="replyText"
-              class="wx-input"
-              rows="2"
-              :placeholder="
-                handoff?.state?.status === 'pending'
-                  ? '先领取会话，再回复客户'
-                  : handoff?.state?.status === 'in_progress' && !mine
-                    ? '其他客服正在处理'
-                    : '输入回复…'
-              "
-              :disabled="handoff?.state?.status === 'in_progress' && !mine"
-              @focus="closeEmojiPicker"
-              @input="onReplyInput"
-              @keydown.meta.enter.prevent="send"
-              @keydown.ctrl.enter.prevent="send"
-            ></textarea>
-            <div class="wx-composer-foot">
-              <span v-if="mine" class="wf-section-caption"
-                >Ctrl / ⌘ + Enter 发送 · 以通道回执为准</span
-              ><button
-                class="wx-send-button"
-                :disabled="sending || !canReply"
-                @click="send"
-              >
-                {{ sending ? "已受理" : "发送" }}
-              </button>
-            </div>
-          </div>
-        </template>
-        <div v-else class="wf-empty">
-          <div>
-            <strong>选择一个会话开始处理</strong>
-            <p>队列已按风险、等待状态和未读消息排序。</p>
-          </div>
-        </div>
-      </section>
-
-    <WfInspector
-      :open="inspectorOpen"
-      :title="inspectorTitle"
-      :depth="
-        inspectorView === 'context'
-          ? 0
-          : inspectorView === 'history' && historySelectedId
-            ? 2
-            : 1
-      "
-      @close="closeInspector"
-      @back="inspectorBack"
-    >
-      <template v-if="inspectorView === 'context'">
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">当前任务</span>
-          <p class="wf-brief-text">{{ ownershipLabel() }}</p>
-          <p
-            v-if="handoff && handoff.state?.status !== 'resolved'"
-            class="wf-muted"
-          >
-            Agent 已暂停自动回复
-          </p>
-        </section>
-        <section
-          v-if="agentSession && agentSession.state !== 'closed'"
-          class="wf-inspector-section"
-        >
-          <span class="wf-brief-label">会话状态</span>
-          <p class="wf-brief-text">
-            <span
-              class="session-badge"
-              :class="`session-badge--${agentSession.state}`"
-              >{{ sessionEpisodeLabel() }}</span
-            >
-          </p>
-          <p v-if="pendingWake" class="wf-muted session-wake-note">
-            ⏳ 等待客户回复，超时（{{
-              wakeCountdown
-            }}）后{{
-              pendingWake.nudgeText ? "自动发送提醒" : "自动唤醒跟进"
-            }}
-          </p>
-          <p
-            v-for="done in doneWakes.slice(0, 2)"
-            :key="done.wakeId"
-            class="wf-muted session-wake-note session-wake-done"
-          >
-            ✓ 已于 {{ messageTime(done.wakeAt) }}
-            {{ done.nudgeText ? "发送提醒" : "唤醒跟进" }}
-          </p>
-          <button
-            v-if="lastReplyTurnId"
-            class="session-trace-link"
-            type="button"
-            @click="openSessionTrace(lastReplyTurnId)"
-          >
-            查看最近决策轨迹 →
-          </button>
-        </section>
-        <section
-          v-if="handoff"
-          class="wf-inspector-section wf-inspector-link"
-          role="button"
-          tabindex="0"
-          @click="openInspector('brief')"
-          @keyup.enter="openInspector('brief')"
-        >
-          <span class="wf-brief-label">交接摘要</span>
-          <p class="wf-brief-text">{{ briefingLine }}</p>
-          <span class="wf-link">查看完整摘要 →</span>
-        </section>
-        <section
-          v-if="handoff?.briefing?.confirmedFacts?.length || unresolvedShort.length"
-          class="wf-inspector-section wf-inspector-link"
-          role="button"
-          tabindex="0"
-          @click="openInspector('brief')"
-          @keyup.enter="openInspector('brief')"
-        >
-          <span class="wf-brief-label">关键事实</span>
-          <p class="wf-brief-text">
-            {{ confirmedFactsLine }}<span
-              v-if="unresolvedShort.length"
-              > · 仍需确认：{{ unresolvedShort.join("、") }}</span
-            >
-          </p>
-        </section>
-        <section
-          class="wf-inspector-section wf-inspector-link"
-          role="button"
-          tabindex="0"
-          @click="openInspector('evidence')"
-          @keyup.enter="openInspector('evidence')"
-        >
-          <span class="wf-brief-label">依据</span>
-          <p class="wf-brief-text">{{
-            evidence.length
-              ? `${evidence.length} 条回答依据`
-              : "尚无可展示的回答依据"
-          }}</p>
-          <span class="wf-link">查看依据 →</span>
-        </section>
-        <section
-          v-if="selected"
-          class="wf-inspector-section wf-inspector-link"
-          role="button"
-          tabindex="0"
-          @click="openInspector('customer')"
-          @keyup.enter="openInspector('customer')"
-        >
-          <span class="wf-brief-label">联系人</span>
-          <p class="wf-brief-text">{{ contactDisplayName(selected) }}</p>
-          <span class="wf-link">查看资料 →</span>
-        </section>
-        <section
-          v-if="handoff?.cycles?.length"
-          class="wf-inspector-section wf-inspector-link"
-          role="button"
-          tabindex="0"
-          @click="openInspector('brief')"
-          @keyup.enter="openInspector('brief')"
-        >
-          <span class="wf-brief-label">交接历史</span>
-          <p class="wf-brief-text">{{ handoff.cycles.length }} 次交接</p>
-        </section>
-      </template>
-      <template v-else-if="inspectorView === 'brief' && handoff">
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">为什么需要人工</span>
-          <p class="wf-brief-text">
-            {{
-              handoff.briefing?.problemSummary ||
-              "客户需要人工继续处理当前问题。"
-            }}
-          </p>
-        </section>
-        <section
-          v-if="handoff.briefing?.confirmedFacts?.length"
-          class="wf-inspector-section"
-        >
-          <span class="wf-brief-label">已确认</span>
-          <p class="wf-brief-text">
-            {{
-              handoff.briefing.confirmedFacts
-                .map((fact: any) => factLabel(fact))
-                .join(" · ")
-            }}
-          </p>
-        </section>
-        <section
-          v-if="handoff.briefing?.unresolvedItems?.length"
-          class="wf-inspector-section"
-        >
-          <span class="wf-brief-label">仍需确认</span>
-          <p class="wf-brief-text">
-            {{ handoff.briefing.unresolvedItems.join("；") }}
-          </p>
-        </section>
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">当前风险</span>
-          <span class="wf-risk-text" :class="selected?.riskLevel">{{
-            riskLabel(selected?.riskLevel)
-          }}</span>
-        </section>
-        <section class="wf-inspector-section">
-          <span class="wf-brief-label">处理归属</span>
-          <p class="wf-brief-text">{{ ownershipLabel() }}</p>
-        </section>
-        <section v-if="handoff.cycles?.length" class="wf-inspector-section">
-          <span class="wf-brief-label">交接历史</span>
-          <div class="wf-cycle-list">
-            <div
-              v-for="cycle in [...handoff.cycles].reverse()"
-              :key="cycle.cycleId"
-              class="wf-cycle-row"
-            >
-              <span class="wf-cycle-dot"></span>
-              <div>
-                <strong>{{ cycleStatusLabel(cycle.status) }}</strong>
-                <span class="wf-muted">{{
-                  new Date(cycle.createdAt).toLocaleString()
-                }}</span>
-                <span v-if="cycle.reason" class="wf-muted">
-                  {{ reasonLabel(cycle.reason) || cycle.reason }}
-                </span>
-                <span
-                  v-if="cycle.result === 'transferred'"
-                  class="wf-muted"
-                  >已转交</span
-                >
-              </div>
-            </div>
-          </div>
-        </section>
-      </template>
-      <template v-else-if="inspectorView === 'evidence'">
-        <template v-if="evidence.length">
-          <div
-            v-for="item in evidence"
-            :key="item.evidenceId"
-            class="wf-evidence-row"
-            role="button"
-            tabindex="0"
-            @click="openEvidence(item)"
-            @keyup.enter="openEvidence(item)"
-          >
-            <strong>{{
-              item.title || item.sourceName || "知识证据"
-            }}</strong
-            ><span class="wf-muted">
-              {{ item.provenance === "agent_retrieval" ? "Agent 最近检索 · " : "客服固定依据 · " }}{{
-                item.excerpt || "暂无摘要"
-              }}
-            </span>
-          </div>
-          <button
-            class="wf-link wf-link-button wf-evidence-more"
-            @click="searchKnowledge"
-          >
-            检索更多知识
-          </button>
-        </template>
-        <p v-else class="wf-muted">
-          当前会话暂时没有可展示的回答依据。<button
-            class="wf-link wf-link-button"
-            @click="searchKnowledge"
-          >
-            检索知识
-          </button>
-        </p>
-      </template>
-      <template v-else-if="inspectorView === 'customer' && selected">
-        <div class="wf-inspector-customer">
-          <AvatarImage
-            :contact-id="selected.contact?.contactId"
-            :fallback-text="contactDisplayName(selected)"
-            :size="40"
-          />
-          <h3>{{ contactDisplayName(selected) }}</h3>
-          <p v-if="company" class="wf-muted">{{ company }}</p>
-          <p v-if="profile?.agentEnabled === false" class="wf-brief-need">
-            Agent 自动回复已暂停
-          </p>
-        </div>
-        <section class="wf-inspector-section">
-          <div class="wf-field">
-            <label>内部备注</label
-            ><textarea v-model="note" class="wf-textarea" rows="3"></textarea>
-          </div>
-          <div class="wf-field">
-            <label>标签</label
-            ><input
-              v-model="tags"
-              class="wf-input"
-              placeholder="用顿号或逗号分隔"
-            />
-          </div>
-          <button class="wf-button primary" @click="saveProfile">
-            保存资料
-          </button>
-        </section>
-        <section
-          class="wf-inspector-section wf-inspector-link"
-          role="button"
-          tabindex="0"
-          @click="openInspector('history')"
-          @keyup.enter="openInspector('history')"
-        >
-          <span class="wf-brief-label">历史对话</span>
-          <p class="wf-brief-text">查看该联系人的历史会话（只读）</p>
-          <span class="wf-link">查看历史 →</span>
-        </section>
-      </template>
-      <template v-else-if="inspectorView === 'history'">
-        <template v-if="historySelectedId">
-          <div class="wf-inspector-history-head">
-            <button class="wf-link wf-link-button" @click="inspectorBack()">
-              ← 全部历史
-            </button>
-            <span class="wf-muted">{{ contactDisplayName(selected) }} 的历史消息</span>
-          </div>
-          <div class="wf-history-readonly">
-            <span class="wf-muted">历史记录 · 只读</span>
-          </div>
-          <div
-            v-if="historyMessagesLoading"
-            class="wf-skeleton wf-skeleton-title"
-          ></div>
-          <div v-else class="wf-history-messages">
-            <div
-              v-for="message in historyMessages"
-              :key="message.messageId"
-              class="wf-history-message"
-              :class="{ outbound: message.direction === 'outbound' }"
-            >
-              <span class="wf-history-actor">{{
-                message.actorType === "agent"
-                  ? "Agent"
-                  : message.direction === "outbound"
-                    ? "人工客服"
-                    : "客户"
-              }}</span>
-              <template v-if="isImageMessage(message) && message.mediaId">
-                <MediaImage
-                  :media-id="message.mediaId"
-                  :alt="`${message.actorType === 'agent' ? 'Agent' : '客户'} 发送的图片`"
-                />
-              </template>
-              <template v-else-if="isFileMessage(message) && message.mediaId">
-                <MediaFile
-                  :media-id="message.mediaId"
-                  :file-name="message.mediaFileName"
-                />
-              </template>
-              <template v-else-if="isVoiceMsg(message) && message.mediaId">
-                <VoiceMessage
-                  :media-id="message.mediaId"
-                  :alt="`${message.actorType === 'agent' ? 'Agent' : '客户'} 发送的语音`"
-                />
-              </template>
-              <p v-else>{{ message.text || "〔非文本消息〕" }}</p>
-              <span class="wf-muted">{{
-                new Date(message.occurredAt).toLocaleString()
-              }}</span>
-            </div>
-          </div>
-          <button
-            v-if="historyMessagesNextCursor"
-            class="wf-link wf-link-button"
-            :disabled="historyMessagesLoading"
-            @click="loadMoreHistoryMessages()"
-          >
-            加载更早消息
-          </button>
-        </template>
-        <template v-else>
-          <div class="wf-history-readonly">
-            <span class="wf-muted">历史记录 · 只读（不可接管或回复）</span>
-          </div>
-          <div
-            v-if="historyLoading"
-            class="wf-skeleton wf-skeleton-title"
-          ></div>
-          <div v-else-if="historyConversations.length" class="wf-history-list">
-            <button
-              v-for="item in historyConversations"
-              :key="item.conversationId"
-              class="wf-history-row"
-              :class="{ active: item.conversationId === selectedId }"
-              @click="openHistoryConversation(item.conversationId)"
-            >
-              <span class="wf-history-date">{{
-                item.latestMessageAt
-                  ? new Date(item.latestMessageAt).toLocaleDateString("zh-CN", {
-                      month: "2-digit",
-                      day: "2-digit",
-                    })
-                  : "—"
-              }}</span>
-              <span class="wf-history-preview">{{
-                item.latestMessageText || "暂无消息"
-              }}</span>
-              <span v-if="item.conversationId === selectedId" class="wf-muted"
-                >当前</span
-              >
-            </button>
-            <button
-              v-if="historyNextCursor"
-              class="wf-link wf-link-button"
-              :disabled="historyLoading"
-              @click="loadHistory(true)"
-            >
-              加载更多
-            </button>
-          </div>
-          <p v-else class="wf-muted">该联系人暂无其他会话。</p>
-        </template>
-      </template>
-    </WfInspector>
+      <InspectorPanel
+        :open="inspectorOpen"
+        :view="inspectorView"
+        :title="inspectorTitle"
+        :depth="inspectorDepth"
+        :selected="selected ?? null"
+        :company="company"
+        :handoff="handoff"
+        :evidence="evidence"
+        :ownership-label="ownershipLabel()"
+        :briefing-line="briefingLine"
+        :confirmed-facts-line="confirmedFactsLine"
+        :unresolved-short="unresolvedShort"
+        :agent-session="agentSession"
+        :session-badge-label="sessionEpisodeLabel()"
+        :pending-wake="pendingWake"
+        :done-wakes="doneWakes"
+        :wake-countdown="wakeCountdown"
+        :last-reply-turn-id="lastReplyTurnId"
+        :risk="selected?.riskLevel ?? null"
+        v-model:note="note"
+        v-model:tags="tags"
+        :history-selected-id="historySelectedId"
+        :history-loading="historyLoading"
+        :history-conversations="historyConversations"
+        :history-next-cursor="historyNextCursor"
+        :history-messages="historyMessages"
+        :history-messages-loading="historyMessagesLoading"
+        :history-messages-next-cursor="historyMessagesNextCursor"
+        @close="closeInspector"
+        @back="inspectorBack"
+        @open-view="openInspector"
+        @open-evidence="openEvidence"
+        @search-knowledge="searchKnowledge"
+        @open-trace="openSessionTrace"
+        @save-profile="saveProfile"
+        @open-history-conversation="openHistoryConversation"
+        @load-history-more="loadHistory(true)"
+        @load-history-messages-more="loadMoreHistoryMessages()"
+      />
     </div>
 
-    <div
-      v-if="transferOpen"
-      class="wf-modal-mask"
-      @click.self="transferOpen = false"
-    >
-      <div class="wf-modal wf-modal-narrow">
-        <div class="wf-modal-head">
-          <h3>转交处理</h3>
-          <button class="wf-icon-button" @click="transferOpen = false">×</button>
-        </div>
-        <div class="wf-modal-body">
-          <div class="wf-field">
-            <label>转交原因</label>
-            <input
+    <!-- 转交处理 -->
+    <Dialog :open="transferOpen" @update:open="(value) => (transferOpen = value)">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>转交处理</DialogTitle>
+        </DialogHeader>
+        <div class="space-y-4">
+          <div class="space-y-2">
+            <Label for="transfer-reason">转交原因</Label>
+            <Input
+              id="transfer-reason"
               v-model="transferReason"
-              class="wf-input"
               placeholder="例如：需要设备团队处理"
             />
           </div>
-          <div class="wf-queue-tabs wf-upload-sources">
+          <div class="inline-flex rounded-md border border-border bg-muted p-0.5">
             <button
-              class="wf-tab"
-              :class="{ active: transferTargetType === 'user' }"
+              class="rounded-[5px] px-3 py-1.5 text-sm transition-colors"
+              :class="transferTargetType === 'user' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
               @click="transferTargetType = 'user'; transferTarget = ''"
             >
               转给客服
             </button>
             <button
               v-if="transferQueues.length"
-              class="wf-tab"
-              :class="{ active: transferTargetType === 'queue' }"
+              class="rounded-[5px] px-3 py-1.5 text-sm transition-colors"
+              :class="transferTargetType === 'queue' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
               @click="transferTargetType = 'queue'; transferTarget = ''"
             >
               专业队列
             </button>
           </div>
-          <p v-if="transferTargetType === 'queue'" class="wf-muted">
+          <p v-if="transferTargetType === 'queue'" class="text-xs text-muted-foreground">
             当前负责人释放，会话进入队列等待成员接手。
           </p>
-          <p v-else class="wf-muted">
+          <p v-else class="text-xs text-muted-foreground">
             等待目标客服接受；拒绝或超时后按服务端规则处理。
           </p>
-          <div v-if="transferTargetType === 'user'" class="wf-assignee-list">
-            <button
-              v-for="user in assignees"
-              :key="user.userId"
-              class="wf-assignee-row"
-              :class="{ active: transferTarget === user.userId }"
-              @click="transferTarget = user.userId"
-            >
-              {{ agentDisplayName(user) }}
-            </button>
-            <div v-if="!assignees.length" class="wf-muted">暂无可转交的客服。</div>
-          </div>
-          <div v-else class="wf-assignee-list">
-            <button
-              v-for="queue in transferQueues"
-              :key="queue.queueId"
-              class="wf-assignee-row"
-              :class="{ active: transferTarget === queue.queueId }"
-              @click="transferTarget = queue.queueId"
-            >
-              {{ queue.displayName }}
-              <span class="wf-muted">等待队列成员接手</span>
-            </button>
-            <div v-if="!transferQueues.length" class="wf-muted">
-              当前没有可接收转交的队列。
-            </div>
+          <div class="max-h-52 space-y-1 overflow-y-auto">
+            <template v-if="transferTargetType === 'user'">
+              <button
+                v-for="user in assignees"
+                :key="user.userId"
+                class="flex w-full items-center rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
+                :class="{ 'bg-muted': transferTarget === user.userId }"
+                @click="transferTarget = user.userId"
+              >
+                {{ agentDisplayName(user) }}
+              </button>
+              <p v-if="!assignees.length" class="py-2 text-sm text-muted-foreground">暂无可转交的客服。</p>
+            </template>
+            <template v-else>
+              <button
+                v-for="queue in transferQueues"
+                :key="queue.queueId"
+                class="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
+                :class="{ 'bg-muted': transferTarget === queue.queueId }"
+                @click="transferTarget = queue.queueId"
+              >
+                {{ queue.displayName }}
+                <span class="text-xs text-muted-foreground">等待队列成员接手</span>
+              </button>
+              <p v-if="!transferQueues.length" class="py-2 text-sm text-muted-foreground">
+                当前没有可接收转交的队列。
+              </p>
+            </template>
           </div>
         </div>
-        <div class="wf-modal-foot">
-          <button class="wf-button" @click="transferOpen = false">取消</button
-          ><button
-            class="wf-button primary"
+        <DialogFooter>
+          <Button variant="outline" @click="transferOpen = false">取消</Button>
+          <Button
             :disabled="!transferTarget || !transferReason.trim() || actionBusy"
             @click="doTransfer"
           >
             {{ actionBusy ? "转交中" : "确认转交" }}
-          </button>
-        </div>
-      </div>
-    </div>
-    <div
-      v-if="settingsOpen && profile"
-      class="wf-modal-mask"
-      @click.self="settingsOpen = false"
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <!-- 会话设置 -->
+    <Dialog
+      :open="settingsOpen && Boolean(profile)"
+      @update:open="(value) => (settingsOpen = value)"
     >
-      <div class="wf-modal wf-modal-narrow">
-        <div class="wf-modal-head">
-          <h3>会话设置</h3>
-          <button class="wf-icon-button" @click="settingsOpen = false">×</button>
-        </div>
-        <div class="wf-modal-body">
-          <label class="wf-checkbox-row"
-            ><input
+      <DialogContent class="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>会话设置</DialogTitle>
+        </DialogHeader>
+        <div class="space-y-3">
+          <label class="flex items-center gap-2 text-sm">
+            <Checkbox
               v-model="profile.agentEnabled"
-              type="checkbox"
               :disabled="handoff?.state?.status === 'in_progress' && !mine"
-            />允许 Agent 自动回复</label
-          >
-          <p class="wf-muted">
+            />
+            允许 Agent 自动回复
+          </label>
+          <p class="text-xs text-muted-foreground">
             关闭后，该客户的后续消息不会由 Agent 自动回复。
           </p>
         </div>
-        <div class="wf-modal-foot">
-          <button class="wf-button" @click="settingsOpen = false">取消</button
-          ><button class="wf-button primary" @click="saveProfile">保存</button>
-        </div>
-      </div>
-    </div>
+        <DialogFooter>
+          <Button variant="outline" @click="settingsOpen = false">取消</Button>
+          <Button @click="saveProfile">保存</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
     <!-- 消息右键菜单 -->
     <Teleport to="body">
       <div
         v-if="messageMenu"
-        class="wf-msg-context-menu"
+        class="fixed z-[9999] min-w-28 rounded-md border border-border bg-popover p-1 shadow-md"
         :style="{ left: messageMenu.x + 'px', top: messageMenu.y + 'px' }"
       >
-        <button class="wf-msg-context-item" @click="handleMenuReply(messageMenu.message)">↩ 回复</button>
-        <button class="wf-msg-context-item" @click="handleMenuPoke(messageMenu.message)">👋 拍一拍</button>
+        <button
+          class="block w-full rounded-sm px-3 py-1.5 text-left text-sm transition-colors hover:bg-muted"
+          @click="handleMenuReply(messageMenu.message)"
+        >
+          回复
+        </button>
+        <button
+          class="block w-full rounded-sm px-3 py-1.5 text-left text-sm transition-colors hover:bg-muted"
+          @click="handleMenuPoke(messageMenu.message)"
+        >
+          拍一拍
+        </button>
       </div>
     </Teleport>
-    <!-- 点击其他地方关闭右键菜单 -->
     <div
-      v-if="sessionTraceOpen"
-      class="session-trace-backdrop"
-      @click="sessionTraceOpen = false"
-    >
-      <div class="session-trace-drawer" @click.stop>
-        <header class="session-trace-header">
-          <strong>决策轨迹</strong>
-          <span v-if="sessionTraceLoading" class="wf-muted">加载中…</span>
-          <button
-            class="session-trace-close"
-            type="button"
-            @click="sessionTraceOpen = false"
-          >
-            ×
-          </button>
-        </header>
-        <p v-if="sessionTrace?.turn" class="session-trace-meta">
-          {{ sessionTrace.turn.turnId }}<br />
-          模型 {{ sessionTrace.turn.model || "-" }} · 状态
-          {{ sessionTrace.turn.status }} · traceId
-          {{ sessionTrace.turn.traceId || "-" }}
-        </p>
-        <ol v-if="sessionTrace?.events?.length" class="session-trace-list">
-          <li
-            v-for="(event, index) in sessionTrace.events"
-            :key="index"
-            class="session-trace-item"
-          >
-            <span class="session-trace-time">{{
-              messageTime(event.createdAt)
-            }}</span>
-            <span class="session-trace-event">{{
-              traceEventLabel(event.eventType)
-            }}</span>
-            <span
-              v-if="event.payload?.action"
-              class="session-trace-action"
-              >{{ event.payload.action }}</span
-            >
-            <span v-if="event.reasonCode" class="session-trace-reason">{{
-              event.reasonCode
-            }}</span>
-          </li>
-        </ol>
-        <p
-          v-else-if="!sessionTraceLoading"
-          class="session-trace-meta"
-        >
-          暂无可展示的决策事件。
-        </p>
-      </div>
-    </div>
-    <div v-if="messageMenu" class="wf-msg-context-backdrop" @click="closeMessageMenu" @contextmenu.prevent="closeMessageMenu"></div>
+      v-if="messageMenu"
+      class="fixed inset-0 z-[9998]"
+      @click="closeMessageMenu"
+      @contextmenu.prevent="closeMessageMenu"
+    ></div>
+
+    <!-- 决策轨迹抽屉 -->
+    <SessionTraceDrawer
+      :open="sessionTraceOpen"
+      :loading="sessionTraceLoading"
+      :trace="sessionTrace"
+      :event-labels="TRACE_EVENT_LABELS"
+      @close="sessionTraceOpen = false"
+    />
+
     <!-- 素材选择器（本机文件 / 图片空间 / 文件空间） -->
     <Teleport to="body">
       <AssetPicker
@@ -3281,656 +1905,3 @@ onUnmounted(() => {
     </Teleport>
   </div>
 </template>
-
-<style scoped>
-/* ---------- 微信客户端式列表 ---------- */
-.wx-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  cursor: pointer;
-}
-.wx-row:hover {
-  background: var(--wf-surface-hover, rgba(0, 0, 0, 0.035));
-}
-.wx-row.active {
-  background: var(--wf-surface-active, rgba(0, 0, 0, 0.06));
-}
-.wx-row-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.wx-row-top,
-.wx-row-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.wx-row-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--wf-text, #17181a);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wx-row-time,
-.wx-row-flag {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--wf-text-tertiary, #9aa0a6);
-  font-variant-numeric: tabular-nums;
-}
-.wx-row-flag {
-  color: var(--wf-risk-high, #d93025);
-  font-weight: 700;
-}
-/* 群聊标识徽标：跟随会话名后 */
-.wx-row-group-tag {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--wf-primary, #16775b);
-  background: var(--wf-primary-soft, rgba(22, 119, 91, 0.08));
-  border-radius: 4px;
-  padding: 1px 5px;
-  line-height: 1.4;
-}
-.wx-row-preview {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  color: var(--wf-text-secondary, #5f6368);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wx-row-unread {
-  flex-shrink: 0;
-  min-width: 17px;
-  height: 17px;
-  padding: 0 5px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #ea4335;
-  color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-}
-
-/* ---------- 输入栏 ---------- */
-.wx-composer {
-  position: relative;
-  border-top: 1px solid var(--wf-border, rgba(0, 0, 0, 0.08));
-  background: var(--wf-surface, #fff);
-  padding: 6px 12px 8px;
-}
-.wx-tool-hint {
-  position: absolute;
-  top: -34px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 5px 12px;
-  border-radius: 8px;
-  background: rgba(23, 24, 26, 0.86);
-  color: #fff;
-  font-size: 12px;
-  white-space: nowrap;
-  z-index: 5;
-}
-.wx-composer-tools {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding-bottom: 4px;
-}
-.wx-tool-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--wf-text-secondary, #5f6368);
-  font-size: 16px;
-  cursor: pointer;
-}
-.wx-tool-button:hover {
-  background: var(--wf-surface-hover, rgba(0, 0, 0, 0.05));
-}
-.wx-emoji-picker {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 8px;
-  z-index: 20;
-  display: grid;
-  grid-template-columns: repeat(8, 34px);
-  gap: 2px;
-  padding: 8px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.1));
-  border-radius: 12px;
-  background: var(--wf-surface, #fff);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
-}
-.wx-emoji-item {
-  width: 34px;
-  height: 32px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  font-size: 18px;
-  cursor: pointer;
-}
-.wx-emoji-item:hover {
-  background: var(--wf-surface-hover, rgba(0, 0, 0, 0.05));
-}
-.wx-input {
-  width: 100%;
-  resize: none;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--wf-text, #17181a);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.55;
-  min-height: 44px;
-}
-.wx-composer-foot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-}
-.wx-send-button {
-  min-width: 64px;
-  height: 28px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--wf-border, rgba(0, 0, 0, 0.09));
-  color: var(--wf-text-secondary, #9aa0a6);
-  font-size: 13px;
-  cursor: not-allowed;
-}
-.wx-send-button:not(:disabled) {
-  background: #c6e3bf;
-  color: #14300e;
-  font-weight: 700;
-  cursor: pointer;
-}
-.wx-send-button:not(:disabled):hover {
-  background: #b3dcab;
-}
-/* ---------- 三区列表（等待处理/我处理的/其他对话） ---------- */
-.wf-queue-mode {
-  display: flex;
-  gap: 4px;
-  padding: 6px 10px 2px;
-  border-bottom: 1px solid var(--wf-border, rgba(0, 0, 0, 0.06));
-}
-.wf-mode-btn {
-  min-height: 26px;
-  padding: 2px 12px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.1));
-  border-radius: 999px;
-  background: var(--wf-surface, #fff);
-  color: var(--wf-text-secondary, #5f6368);
-  font-size: 12px;
-  cursor: pointer;
-  text-decoration: none;
-  display: inline-flex;
-  align-items: center;
-}
-.wf-mode-btn.active {
-  background: #e8f0fe;
-  border-color: #a8c7fa;
-  color: #1a56c4;
-  font-weight: 700;
-}
-.wf-mode-link {
-  margin-left: auto;
-}
-/* ---------- 联系人页搜索栏 ---------- */
-.wf-queue-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px 4px;
-  border-bottom: 1px solid var(--wf-border, rgba(0, 0, 0, 0.06));
-}
-.wf-queue-search .wf-search {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.1));
-  border-radius: 999px;
-  background: var(--wf-surface, #fff);
-}
-.wf-queue-section {
-  margin: 2px 0;
-}
-.wf-queue-section-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px 3px;
-  font-size: 12px;
-  font-weight: 700;
-}
-.wf-queue-section-head.tone-attention {
-  color: #c5221f;
-}
-.wf-queue-section-head.tone-mine {
-  color: #1a56c4;
-}
-.wf-queue-section-head.tone-others {
-  color: #5f6368;
-}
-.wf-queue-section-count {
-  min-width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 9px;
-  background: rgba(0, 0, 0, 0.06);
-  font-size: 11px;
-  font-weight: 600;
-}
-.wf-queue-section-empty {
-  padding: 4px 12px 6px;
-  color: var(--wf-text-tertiary, #9aa0a6);
-  font-size: 12px;
-}
-.wf-queue-loading {
-  padding: 8px 12px;
-}
-/* ---------- 消息气泡头像 ---------- */
-.wf-bubble-row.them {
-  gap: 6px;
-  align-items: flex-start;
-}
-.wf-bubble-row.me {
-  gap: 6px;
-  align-items: flex-start;
-}
-.wf-msg-avatar {
-  flex-shrink: 0;
-  align-self: flex-start;
-  margin-top: 2px;
-}
-/* 群聊消息发送者昵称（气泡上方小字） */
-.wf-msg-sender {
-  font-size: 11px;
-  color: var(--wf-text-tertiary, #9aa0a6);
-  margin: 0 0 2px 4px;
-}
-.wf-msg-agent-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--wf-primary) 12%, var(--wf-surface));
-  color: #1a56c4;
-  font-weight: 800;
-  font-size: 13px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--wf-primary) 25%, transparent);
-}
-/* AI 员工 DiceBear 头像；加载失败隐藏 <img> 后仍显示下方 AI 字标 */
-.wf-msg-agent-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  object-fit: cover;
-  background: var(--wf-surface);
-}
-.wf-msg-agent-avatar + .wf-msg-agent-icon {
-  display: none;
-}
-/* ---------- 媒体上传 & 录音 ---------- */
-.wx-upload-progress {
-  font-size: 11px;
-  color: var(--wf-text-secondary, #5f6368);
-  margin-left: 6px;
-  animation: wx-pulse 1s ease-in-out infinite;
-}
-@keyframes wx-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-/* ---------- 引用回复预览条 ---------- */
-.wx-reply-preview {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  margin-bottom: 4px;
-  border-left: 3px solid var(--wf-primary, #1a73e8);
-  background: rgba(26, 115, 232, 0.06);
-  border-radius: 0 6px 6px 0;
-  font-size: 12px;
-}
-.wx-reply-preview-text {
-  flex: 1;
-  min-width: 0;
-  color: var(--wf-text-secondary, #5f6368);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.wx-reply-preview-close {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--wf-text-tertiary, #9aa0a6);
-  font-size: 14px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.wx-reply-preview-close:hover {
-  background: rgba(0, 0, 0, 0.06);
-}
-/* ---------- @提及浮层 ---------- */
-.wx-mention-popup {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  left: 8px;
-  z-index: 25;
-  min-width: 160px;
-  max-height: 180px;
-  overflow-y: auto;
-  padding: 4px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.1));
-  border-radius: 10px;
-  background: var(--wf-surface, #fff);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
-}
-.wx-mention-item {
-  display: block;
-  width: 100%;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  text-align: left;
-  font-size: 13px;
-  color: var(--wf-text, #17181a);
-  cursor: pointer;
-}
-.wx-mention-item:hover {
-  background: var(--wf-surface-hover, rgba(0, 0, 0, 0.05));
-}
-.wx-mention-empty {
-  padding: 8px 10px;
-  font-size: 12px;
-  color: var(--wf-text-tertiary, #9aa0a6);
-}
-/* ---------- 消息右键菜单 ---------- */
-.wf-msg-context-menu {
-  position: fixed;
-  z-index: 9999;
-  min-width: 120px;
-  padding: 4px;
-  border: 1px solid var(--wf-border, rgba(0, 0, 0, 0.1));
-  border-radius: 10px;
-  background: var(--wf-surface, #fff);
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
-}
-.wf-msg-context-item {
-  display: block;
-  width: 100%;
-  padding: 7px 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  text-align: left;
-  font-size: 13px;
-  color: var(--wf-text, #17181a);
-  cursor: pointer;
-}
-.wf-msg-context-item:hover {
-  background: var(--wf-surface-hover, rgba(0, 0, 0, 0.05));
-}
-.wf-msg-context-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 9998;
-}
-/* ---------- @提及渲染高亮 ---------- */
-.wf-mention {
-  color: #1a73e8;
-  font-weight: 600;
-}
-
-/* ---------- 思维链气泡（Phase 4） ---------- */
-.thinking-bubble {
-  max-width: 78%;
-  padding: 10px 14px;
-  border-radius: 14px 14px 14px 4px;
-  background: var(--wf-surface, #fff);
-  border: 1px solid rgba(26, 115, 232, 0.25);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-}
-.thinking-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.thinking-stage {
-  font-size: 13px;
-  color: #1a73e8;
-  font-weight: 500;
-}
-.thinking-dots {
-  display: inline-flex;
-  gap: 3px;
-}
-.thinking-dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #1a73e8;
-  animation: thinking-bounce 1.2s ease-in-out infinite;
-}
-.thinking-dots i:nth-child(2) {
-  animation-delay: 0.15s;
-}
-.thinking-dots i:nth-child(3) {
-  animation-delay: 0.3s;
-}
-@keyframes thinking-bounce {
-  0%,
-  80%,
-  100% {
-    opacity: 0.25;
-  }
-  40% {
-    opacity: 1;
-  }
-}
-.thinking-body {
-  margin-top: 8px;
-  border-top: 1px dashed rgba(26, 115, 232, 0.25);
-  padding-top: 6px;
-}
-.thinking-body summary {
-  font-size: 12px;
-  color: var(--wf-text-secondary, #5f6368);
-  cursor: pointer;
-  user-select: none;
-}
-.thinking-text {
-  margin: 6px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--wf-text-secondary, #5f6368);
-  max-height: 260px;
-  overflow-y: auto;
-}
-
-/* ---------- 会话模式可视化（Phase 3/4） ---------- */
-.session-badge {
-  display: inline-block;
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.6;
-}
-.session-badge--active {
-  background: rgba(26, 115, 232, 0.12);
-  color: #1a73e8;
-}
-.session-badge--waiting {
-  background: rgba(249, 171, 0, 0.15);
-  color: #b06000;
-}
-.session-badge--closed {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--wf-text-secondary, #5f6368);
-}
-.session-wake-note {
-  font-size: 12px;
-  margin-top: 4px;
-}
-.session-wake-done {
-  opacity: 0.75;
-}
-.session-wait-row {
-  justify-content: center;
-}
-.session-wait-node {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: rgba(249, 171, 0, 0.08);
-  border: 1px dashed rgba(249, 171, 0, 0.45);
-  font-size: 12px;
-  color: var(--wf-text-secondary, #5f6368);
-}
-.session-wait-node.session-wait-done {
-  background: rgba(0, 0, 0, 0.03);
-  border-color: rgba(0, 0, 0, 0.12);
-}
-.session-wait-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #f9ab00;
-  animation: session-wait-pulse 1.6s ease-in-out infinite;
-}
-.session-wait-dot.done {
-  background: #34a853;
-  animation: none;
-}
-@keyframes session-wait-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-.session-trace-link {
-  border: none;
-  background: none;
-  color: #1a73e8;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-}
-.session-trace-link:hover {
-  text-decoration: underline;
-}
-.session-trace-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(0, 0, 0, 0.3);
-  display: flex;
-  justify-content: flex-end;
-}
-.session-trace-drawer {
-  width: min(420px, 90vw);
-  height: 100%;
-  background: var(--wf-surface, #fff);
-  padding: 20px;
-  overflow-y: auto;
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
-}
-.session-trace-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-.session-trace-close {
-  margin-left: auto;
-  border: none;
-  background: none;
-  font-size: 20px;
-  cursor: pointer;
-  color: var(--wf-text-secondary, #5f6368);
-}
-.session-trace-meta {
-  font-size: 12px;
-  color: var(--wf-text-secondary, #5f6368);
-  line-height: 1.7;
-  margin-bottom: 14px;
-  word-break: break-all;
-}
-.session-trace-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.session-trace-item {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  font-size: 13px;
-}
-.session-trace-time {
-  color: var(--wf-text-secondary, #5f6368);
-  font-variant-numeric: tabular-nums;
-}
-.session-trace-event {
-  font-weight: 600;
-}
-.session-trace-action {
-  color: #1a73e8;
-}
-.session-trace-reason {
-  color: #b06000;
-  font-size: 12px;
-}
-</style>
-
