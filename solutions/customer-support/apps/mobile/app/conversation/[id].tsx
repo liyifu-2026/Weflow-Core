@@ -421,11 +421,18 @@ export default function ConversationScreen() {
         const page = pageResult.value;
         setOffline(false);
         setError(undefined);
-        const currentMessages = messagesRef.current;
-        const newMessageCount = countNewTimelineMessages(
-          currentMessages,
-          page.messages,
-        );
+        // revision 未变 → 会话无新内容：跳过合并与重渲染（handoff/collaboration
+        // 的刷新不_gate，它们可能独立于消息 revision 变化，漏刷会错过接管/协作）
+        const revisionUnchanged =
+          page.conversationRevision !== undefined &&
+          page.conversationRevision === revisionRef.current &&
+          messagesRef.current.length > 0;
+        if (!revisionUnchanged) {
+          const currentMessages = messagesRef.current;
+          const newMessageCount = countNewTimelineMessages(
+            currentMessages,
+            page.messages,
+          );
         const mergedMessages = mergeTimelineMessages(
           currentMessages,
           page.messages,
@@ -458,6 +465,7 @@ export default function ConversationScreen() {
           void markConversationRead(session!, id!, latest.messageId).catch(
             () => undefined,
           );
+        }
         }
       } else {
         setOffline(true);

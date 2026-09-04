@@ -11,6 +11,8 @@
 
 ### Changed
 
+- 会话页轮询增量化：15 秒轮询拿到相同 conversationRevision 时跳过消息合并与重渲染（空闲时会话页不再每 15 秒整树重绘）；接管/协作状态仍每轮刷新。完全增量拉取需 Core 提供 sinceRevision 契约，后续跟进。
+
 - 工作首页会话列表迁移 FlashList：分组头 + 会话行扁平化为逐行虚拟化，大会话量不再整组渲染（原「分组 FlatList 嵌套整组 map」）；折叠/搜索/左滑行为不变（新增 @shopify/flash-list，指纹变化）。
 
 - 图片隐私与性能批次：所有来自 Core 的图片（消息图、头像、素材缩略图、全屏查看）显式 `cachePolicy: "memory"`，修复此前磁盘缓存导致登出后客户图片仍留本机的隐私缺口（`clearMemoryCache` 现在完整生效）；上传前长边超 2048px 的图片自动等比压缩并归一化 JPEG（新增 `expo-image-manipulator`，指纹变化）。
