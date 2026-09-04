@@ -1,24 +1,10 @@
 /**
- * Solution API client.
+ * Product API client.
  *
- * Embedded mode (Console ExtensionHost): every request is delegated to the
- * restricted bridge handed over by the host — the bundle never touches the
- * Console's internal stores or router.
- *
- * Standalone/dev mode: falls back to direct same-origin fetch so
- * `pnpm dev` works against a locally running Core via the Vite proxy.
+ * support-web 是产品本体，所有请求都是同源 fetch（开发态经 Vite 代理到
+ * 本地 Core），Cookie 会话由浏览器自动携带。
  */
 export type ApiError = Error & { status?: number; code?: string };
-
-type BridgeFetch = (path: string, init?: RequestInit) => Promise<Response>;
-
-let bridgeFetch: BridgeFetch | null = null;
-
-export function setApiBridge(implementation: BridgeFetch | null): void {
-  bridgeFetch = implementation;
-}
-
-export type { BridgeFetch };
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
@@ -29,8 +15,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   ) {
     headers.set("content-type", "application/json");
   }
-  const send = bridgeFetch ?? ((p, i) => fetch(p, i));
-  const response = await send(path, {
+  const response = await fetch(path, {
     ...init,
     headers,
     credentials: "include",

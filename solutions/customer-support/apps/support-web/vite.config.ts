@@ -1,29 +1,20 @@
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-import cssInjectedByJsPlugin from "vite-plugin-css-injected-by-js";
 
 const CORE_API_TARGET = process.env.CORE_API_TARGET || "http://127.0.0.1:3100";
 
+// support-web 是产品本体 SPA（自带登录与布局），不再是 Console 的微前端
+// bundle —— 因此走常规 app 构建（index.html 入口），而不是 lib 模式。
 export default defineConfig({
-  base: "/support/",
-  plugins: [vue(), cssInjectedByJsPlugin()],
+  base: "/",
+  plugins: [vue()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
-  define: {
-    'process.env.NODE_ENV': JSON.stringify('production'),
-  },
   build: {
-    lib: {
-      entry: fileURLToPath(new URL("./src/entry.ts", import.meta.url)),
-      name: "WeflowCustomerSupportConsole",
-      formats: ["es"],
-      fileName: () => "support-console.js",
-    },
-    cssCodeSplit: false,
     sourcemap: true,
   },
   server: {

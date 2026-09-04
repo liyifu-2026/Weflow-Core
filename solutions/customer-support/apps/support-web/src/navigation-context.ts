@@ -52,7 +52,7 @@ export function knowledgeTarget(
   },
 ) {
   return {
-    path: "/support/knowledge",
+    path: "/knowledge",
     query: {
       mode: "content",
       ...originQuery(origin),
@@ -67,7 +67,7 @@ export function knowledgeTarget(
 export async function returnToOrigin(router: Router, origin: NavigationOrigin) {
   if (origin.type === "conversation") {
     await router.push({
-      path: "/support/conversations",
+      path: "/conversations",
       query: {
         id: origin.conversationId,
         messageId: origin.messageId,

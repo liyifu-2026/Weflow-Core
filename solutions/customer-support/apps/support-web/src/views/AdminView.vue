@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 管理页（admin only）：白名单配置、系统设置两个 Tab。
- * AI 员工入口在「接待编排」（/support/pipeline）；回复策略已随
+ * AI 员工入口在「接待编排」（/pipeline）；回复策略已随
  * pipeline 化移除（策略不再以独立版本化文档存在）。
  * 非管理员由路由守卫重定向回工作台。
  */

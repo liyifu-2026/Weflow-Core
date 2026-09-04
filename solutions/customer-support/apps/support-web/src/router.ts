@@ -1,6 +1,6 @@
 import {
   createRouter,
-  createMemoryHistory,
+  createWebHistory,
   type Router,
 } from "vue-router";
 import type { Pinia } from "pinia";
@@ -13,91 +13,149 @@ import WhitelistView from "./views/WhitelistView.vue";
 import PipelineView from "./views/PipelineView.vue";
 import ProfileView from "./views/ProfileView.vue";
 import AssetsView from "./views/AssetsView.vue";
+import LoginView from "./views/LoginView.vue";
+import ChangePasswordView from "./views/ChangePasswordView.vue";
+import AuditView from "./views/AuditView.vue";
+import UsersView from "./views/UsersView.vue";
+import SystemStatusView from "./views/SystemStatusView.vue";
+import SettingsView from "./views/SettingsView.vue";
 
 export type SupportRouter = Router;
 
 /**
- * Visible surface is the WeChat-style workbench (conversations) plus
- * knowledge retrieval. Strategy / AI employees / knowledge management
- * live on hidden admin routes: reachable by URL or the admin hub, never
- * shown in the default navigation.
- *
- * @param pinia 可选 Pinia 实例（admin 守卫需要 auth store）
- * @param initialPath 宿主传入的初始路径（ExtensionHost 按 manifest path 匹配）；
- *                    缺省落到工作台。
+ * 产品本体路由：URL 即真实路径（browser history，无 /support 前缀、
+ * 无宿主壳）。会话工作台是默认落点；审计 / 用户 / 系统状态 / 设置
+ * 是管理页（admin only）。
  */
 export function createSupportRouter(pinia?: Pinia): Router {
   const router = createRouter({
-    history: createMemoryHistory(),
+    history: createWebHistory(),
     routes: [
-      { path: "/", redirect: "/support/conversations" },
       {
-        path: "/support/conversations",
-        name: "supportConversations",
-        component: ConversationsV2,
+        path: "/login",
+        name: "login",
+        component: LoginView,
+        meta: { public: true },
       },
       {
-        path: "/support/knowledge",
-        name: "supportKnowledge",
-        component: KnowledgeV2,
+        path: "/change-password",
+        name: "changePassword",
+        component: ChangePasswordView,
       },
       {
-        path: "/support/assets",
-        name: "supportAssets",
-        component: AssetsView,
+        path: "/",
+        component: () => import("./layout/AppShell.vue"),
+        children: [
+          { path: "", redirect: "/conversations" },
+          {
+            path: "conversations",
+            name: "conversations",
+            component: ConversationsV2,
+          },
+          {
+            path: "knowledge",
+            name: "knowledge",
+            component: KnowledgeV2,
+          },
+          {
+            path: "assets",
+            name: "assets",
+            component: AssetsView,
+          },
+          {
+            path: "knowledge/validate",
+            redirect: (to) => ({
+              path: "/knowledge",
+              query: { ...to.query, mode: "validate" },
+            }),
+          },
+          {
+            path: "admin",
+            name: "admin",
+            component: AdminView,
+            meta: { admin: true },
+          },
+          {
+            path: "ai-employees",
+            name: "aiEmployees",
+            component: AiEmployeesView,
+            meta: { admin: true },
+          },
+          {
+            path: "ai-employees/:definitionId/prompt",
+            name: "aiEmployeePrompt",
+            component: AiEmployeesView,
+            meta: { admin: true },
+          },
+          {
+            path: "whitelist",
+            name: "whitelist",
+            component: WhitelistView,
+            meta: { admin: true },
+          },
+          {
+            path: "pipeline",
+            name: "pipeline",
+            component: PipelineView,
+            meta: { admin: true },
+          },
+          {
+            path: "system/audit",
+            name: "systemAudit",
+            component: AuditView,
+            meta: { admin: true },
+          },
+          {
+            path: "system/users",
+            name: "systemUsers",
+            component: UsersView,
+            meta: { admin: true },
+          },
+          {
+            path: "system/status",
+            name: "systemStatus",
+            component: SystemStatusView,
+            meta: { admin: true },
+          },
+          {
+            path: "settings",
+            name: "settings",
+            component: SettingsView,
+            meta: { admin: true },
+          },
+          {
+            path: "profile",
+            name: "profile",
+            component: ProfileView,
+          },
+        ],
       },
-      {
-        path: "/support/knowledge/validate",
-        redirect: (to) => ({
-          path: "/support/knowledge",
-          query: { ...to.query, mode: "validate" },
-        }),
-      },
-      {
-        path: "/support/admin",
-        name: "supportAdmin",
-        component: AdminView,
-        meta: { admin: true },
-      },
-      {
-        path: "/support/ai-employees",
-        name: "supportAiEmployees",
-        component: AiEmployeesView,
-        meta: { admin: true },
-      },
-      {
-        path: "/support/ai-employees/:definitionId/prompt",
-        name: "aiEmployeePrompt",
-        component: AiEmployeesView,
-        meta: { admin: true },
-      },
-      {
-        path: "/support/whitelist",
-        name: "supportWhitelist",
-        component: WhitelistView,
-        meta: { admin: true },
-      },
-      {
-        path: "/support/pipeline",
-        name: "supportPipeline",
-        component: PipelineView,
-        meta: { admin: true },
-      },
-      {
-        path: "/support/profile",
-        name: "supportProfile",
-        component: ProfileView,
-      },
-      { path: "/:pathMatch(.*)*", redirect: "/support/conversations" },
+      { path: "/:pathMatch(.*)*", redirect: "/conversations" },
     ],
   });
-  // Hidden pages are operator-invisible: non-admins are bounced back to the
-  // workbench even when typing the URL directly.
+
+  // 会话守卫：未登录去登录页（记录回跳）；首登强制改密；
+  // admin 页非管理员回工作台。
   router.beforeEach(async (to) => {
-    if (!to.meta.admin) return true;
     const auth = pinia ? useWeflowAuthStore(pinia) : useWeflowAuthStore();
-    if (!auth.initialized) await auth.ensureSession();
-    return auth.isAdmin ? true : "/support/conversations";
+    await auth.ensureSession();
+    if (to.meta.public) {
+      return auth.user ? { path: "/conversations" } : true;
+    }
+    if (!auth.user) {
+      return { path: "/login", query: { redirect: to.fullPath } };
+    }
+    if (auth.user.mustChangePassword && to.name !== "changePassword") {
+      return { path: "/change-password" };
+    }
+    if (!auth.user.mustChangePassword && to.name === "changePassword") {
+      return { path: "/conversations" };
+    }
+    if (to.meta.admin && !auth.isAdmin) {
+      return { path: "/conversations" };
+    }
+    return true;
   });
+
   return router;
 }

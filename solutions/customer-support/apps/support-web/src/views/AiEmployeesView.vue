@@ -293,7 +293,7 @@ onMounted(load);
         <button
           v-if="route.query.from === 'reception'"
           class="wf-button"
-          @click="router.push('/support/pipeline')"
+          @click="router.push('/pipeline')"
         >← 返回接待编排</button>
         <h1>AI Employees</h1>
         <p>定义可发布、可回滚的 AI 员工，并在右侧把每个联系人绑定到具体的 AI Employee。</p>

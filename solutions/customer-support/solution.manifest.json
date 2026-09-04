@@ -4,7 +4,7 @@
   "metadata": {
     "id": "weflow.customer-support",
     "name": "Customer Support Solution",
-    "version": "1.5.0",
+    "version": "2.0.0",
     "publisher": "weflow"
   },
   "compatibility": {
@@ -39,11 +39,6 @@
       "id": "mobile",
       "type": "app",
       "ref": "file:./apps/mobile"
-    },
-    {
-      "id": "operations-web",
-      "type": "app",
-      "ref": "file:./apps/operations-web"
     }
   ],
   "permissions": [
@@ -113,91 +108,5 @@
       "entry": "apps/mobile"
     }
   ],
-  "consoleExtensions": [
-    {
-      "id": "support-conversations",
-      "title": "会话",
-      "path": "/support/conversations",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "conversations",
-      "group": "客服业务"
-    },
-    {
-      "id": "support-knowledge",
-      "title": "知识",
-      "path": "/support/knowledge",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "knowledge",
-      "group": "客服业务"
-    },
-    {
-      "id": "support-assets",
-      "title": "素材",
-      "path": "/support/assets",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "image",
-      "group": "客服业务"
-    },
-    {
-      "id": "support-admin",
-      "title": "管理",
-      "path": "/support/admin",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "settings",
-      "group": "客服业务",
-      "adminOnly": true
-    },
-    {
-      "id": "support-whitelist",
-      "title": "白名单配置",
-      "path": "/support/whitelist",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "users",
-      "group": "客服业务",
-      "adminOnly": true,
-      "hidden": true
-    },
-    {
-      "id": "support-pipeline",
-      "title": "接待编排",
-      "path": "/support/pipeline",
-      "entry": "apps/support-web/dist/support-console.js",
-      "icon": "engine",
-      "group": "客服业务",
-      "adminOnly": true
-    },
-    {
-      "id": "support-operations",
-      "title": "运行",
-      "path": "/support/operations",
-      "entry": "apps/operations-web/dist/operations-console.js",
-      "icon": "runtime",
-      "group": "客服业务",
-      "adminOnly": true
-    }
-  ],
-  "healthChecks": [],
-  "dashboardContributions": [
-    {
-      "id": "today-conversations",
-      "title": "今日会话",
-      "metric": "today_conversations",
-      "unit": "个",
-      "href": "/extensions/weflow.customer-support/support-conversations"
-    },
-    {
-      "id": "pending-handoffs",
-      "title": "待人工处理",
-      "metric": "pending_handoffs",
-      "unit": "个",
-      "href": "/extensions/weflow.customer-support/support-conversations"
-    },
-    {
-      "id": "knowledge-status",
-      "title": "知识库",
-      "metric": "active_solutions",
-      "unit": "个方案",
-      "href": "/extensions/weflow.customer-support/support-knowledge"
-    }
-  ]
+  "healthChecks": []
 }

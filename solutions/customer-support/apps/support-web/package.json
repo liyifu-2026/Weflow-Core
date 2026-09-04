@@ -1,7 +1,7 @@
 {
   "name": "@weflow-leaif/support-web",
-  "version": "1.0.0",
-  "private": false,
+  "version": "2.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,16 +17,11 @@
     "@vitejs/plugin-vue": "^6.0.6",
     "typescript": "~5.9.3",
     "vite": "^7.3.5",
-    "vite-plugin-css-injected-by-js": "^5.0.2",
     "vue-tsc": "^3.2.8"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
     ]
-  },
-  "files": [
-    "dist"
-  ],
-  "main": "dist/support-console.js"
+  }
 }

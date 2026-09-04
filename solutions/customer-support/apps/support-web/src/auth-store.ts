@@ -14,15 +14,6 @@ export type WeflowUser = {
 
 export type AgentTag = { key: string; displayName: string };
 
-type UserProvider = () => WeflowUser | null;
-
-let bridgeUserProvider: UserProvider | null = null;
-
-/** Embedded mode: the ExtensionHost injects a read-only user snapshot. */
-export function setAuthBridge(provider: UserProvider | null): void {
-  bridgeUserProvider = provider;
-}
-
 export const useWeflowAuthStore = defineStore("weflow-auth", () => {
   const user = ref<WeflowUser | null>(null);
   const initialized = ref(false);
@@ -31,17 +22,6 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
   let inflight: Promise<void> | null = null;
 
   async function ensureSession() {
-    if (bridgeUserProvider) {
-      const bridged = bridgeUserProvider();
-      if (bridged) {
-        user.value = bridged;
-        initialized.value = true;
-        return;
-      }
-      // A null bridge snapshot can be stale (e.g. the host mounted the
-      // extension before auth resolved). Let the API self-heal below.
-      initialized.value = false;
-    }
     if (initialized.value) return;
     // Concurrent callers (e.g. route guards racing the App.vue bootstrap
     // fetch) must await the same request instead of seeing isAdmin=false.
@@ -80,6 +60,17 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
     }
   }
 
+  async function changePassword(currentPassword: string, newPassword: string) {
+    const result = await api<{ user: WeflowUser }>(
+      "/api/v1/auth/change-password",
+      {
+        method: "POST",
+        body: JSON.stringify({ currentPassword, newPassword }),
+      },
+    );
+    user.value = result.user;
+  }
+
   async function fetchTagVocabulary(): Promise<AgentTag[]> {
     const result = await api<{ tags: AgentTag[] }>(
       "/api/v1/auth/tag-vocabulary",
@@ -109,6 +100,7 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
     ensureSession,
     login,
     logout,
+    changePassword,
     fetchTagVocabulary,
     uploadAvatar,
   };

@@ -10,7 +10,7 @@ import {
 import { useRouter } from "vue-router";
 
 /**
- * 接待编排页（业务 UI，经 Console ExtensionHost 挂载于 /support/pipeline）。
+ * 接待编排页（业务 UI，经 Console ExtensionHost 挂载于 /pipeline）。
  *
  * 工作区唯一一张固定拓扑接待图：入库 → 预判分流 → 人工/速答/主力接待 →
  * 发送闸门 → 通道回复。节点不可增删、连线不可重拉。
@@ -450,7 +450,7 @@ async function save() {
 }
 
 function manageEmployees() {
-  void router.push({ path: "/support/ai-employees", query: { from: "reception" } });
+  void router.push({ path: "/ai-employees", query: { from: "reception" } });
 }
 
 onMounted(loadAll);

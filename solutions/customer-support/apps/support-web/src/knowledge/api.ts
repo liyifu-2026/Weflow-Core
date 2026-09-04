@@ -1,16 +1,24 @@
 /**
  * Weflow Knowledge adapter.
  *
- * THE ONLY module allowed to touch the legacy knowledge provider
- * (`legacy-knowledge/provider.ts`). Knowledge UI imports from here
- * (and from `evidence-normalizer` / `capability-registry`), never from
- * the compatibility layer directly.
+ * Knowledge UI imports from here (and from `evidence-normalizer` /
+ * `capability-registry`), never from the provider proxy directly.
  *
  * Request/response shapes follow the upstream WeKnora API contract;
  * `knowledge/api.ts` maps them into Weflow-friendly types where needed.
+ *
+ * `knowledgeProviderApi` 是 Core 网关 `/api/v1/console/knowledge-provider`
+ * 代理的薄封装（WeKnora 预设连接器；R2 将替换为通用 RESTful 连接器）。
  */
-import { legacyKnowledgeApi } from "../legacy-knowledge/provider";
 import { api } from "../api";
+
+function knowledgeProviderApi<T>(path: string, init: RequestInit = {}) {
+  if (!path.startsWith("/")) throw new Error("knowledge_provider_path_required");
+  return api<T>(`/api/v1/console/knowledge-provider${path}`, init);
+}
+
+// 兼容本文件内既有调用名（历史命名为 legacy；连接器语义不变）。
+const legacyKnowledgeApi = knowledgeProviderApi;
 
 // ---------- knowledge base ----------
 

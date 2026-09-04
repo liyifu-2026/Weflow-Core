@@ -413,7 +413,7 @@ watch(
 
 function revalidateFromChunkEdit() {
   void router.push({
-    path: "/support/knowledge",
+    path: "/knowledge",
     query: {
       mode: "validate",
       ...originQuery(props.origin),
@@ -425,7 +425,7 @@ function revalidateFromChunkEdit() {
 function openPlatformManage() {
   if (!selectedBase.value) return;
   void router.push({
-    path: "/support/knowledge",
+    path: "/knowledge",
     query: {
       mode: "platform",
       kb: selectedBase.value.id,

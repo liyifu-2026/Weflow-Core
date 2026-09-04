@@ -59,7 +59,7 @@ async function onFileSelected(event: Event) {
 }
 
 function goBack() {
-  void router.push("/support/conversations");
+  void router.push("/conversations");
 }
 </script>
 

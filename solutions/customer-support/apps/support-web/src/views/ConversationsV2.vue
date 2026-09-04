@@ -1919,7 +1919,7 @@ onUnmounted(() => {
           >联系人</button
           ><router-link
             v-if="auth.isAdmin"
-            to="/support/whitelist"
+            to="/whitelist"
             class="wf-mode-btn wf-mode-link"
             title="白名单配置"
           >白名单</router-link>
@@ -2249,7 +2249,7 @@ onUnmounted(() => {
                 <details class="wf-row-menu">
                   <summary class="wf-icon-button" title="更多操作">···</summary>
                   <div>
-                    <button @click="router.push('/support/profile')">
+                    <button @click="router.push('/profile')">
                       个人资料
                     </button>
                     <button v-if="canTransfer" @click="openTransfer()">

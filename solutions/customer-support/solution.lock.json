@@ -1,8 +1,8 @@
 {
   "apiVersion": "weflow.io/v1",
   "solutionId": "weflow.customer-support",
-  "solutionVersion": "1.5.0",
-  "manifestDigest": "sha256:65b9ef8a7e4d80b61fb478a3175ad4da2882123ea25b42217d97500c428f61b2",
+  "solutionVersion": "2.0.0",
+  "manifestDigest": "sha256:58f7b0353c39ec4983127f6729c878a9a4f0f148f4492dc8073040c069e8bc56",
   "resolvedArtifacts": [
     {
       "id": "customer-support-strategy",
@@ -19,20 +19,14 @@
     {
       "id": "support-web",
       "ref": "artifacts/support-web.tgz",
-      "digest": "sha256:49c078327914f4be425e67752ae93dc88cbe9caaf88a1fb18cea3b6421b74bff",
-      "size": 540567
+      "digest": "sha256:4f491d61b7a4b960aa48326f02bbbe58399b0dd9416a90a87e3cb07ba1254628",
+      "size": 759299
     },
     {
       "id": "mobile",
       "ref": "artifacts/mobile.tgz",
       "digest": "sha256:d16fc70f2af75b8a6be5beb479d07b51d40a0c92f744f6c186856e8b801d7e2c",
       "size": 3452400
-    },
-    {
-      "id": "operations-web",
-      "ref": "artifacts/operations-web.tgz",
-      "digest": "sha256:16afed8d541ff56d9f9a5cfecb5ab6145f67053c3141c74c3c62ac1010ff6df6",
-      "size": 282686
     }
   ]
 }
