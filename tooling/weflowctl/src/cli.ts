@@ -16,7 +16,6 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createCliOutput, renderCommandResult } from "./cli-output.js";
-import { runSolutionCommand, SOLUTION_USAGE } from "./weflowctl-solution.js";
 import { runCompletionCommand, runConfigCommand } from "./weflowctl-config.js";
 import { DEV_USAGE, renderDevResult, runDevCommand } from "./weflowctl-dev.js";
 
@@ -58,10 +57,6 @@ function topLevelUsage(): string {
     "Usage: weflowctl <domain> <command> [args] [flags]",
     "",
     "Domains:",
-    "  solution     Solution package management",
-    "               publish / install / activate / update / rollback",
-    "               key / registry / info / search / versions / history",
-    "               doctor / inspect / export / import / auto-update / list",
     "  dev          Development environment health & lifecycle",
     "               doctor / up / down",
     "  config       Read and write local CLI configuration",
@@ -84,7 +79,6 @@ if (argv.includes("--version")) {
   output.info(topLevelUsage());
   process.exitCode = 0;
 } else if (
-  domain !== "solution" &&
   domain !== "config" &&
   domain !== "completion" &&
   domain !== "dev"
@@ -102,16 +96,7 @@ if (argv.includes("--version")) {
   const commandArgs = rest.slice(1);
   const commandName = commandArgs.find((item) => !item.startsWith("--")) ?? "";
 
-  if (domain === "solution") {
-    if (commandArgs.length === 0) {
-      output.info(SOLUTION_USAGE);
-      process.exitCode = 0;
-    } else {
-      const result = await runSolutionCommand(commandArgs);
-      renderCommandResult(commandName, result, output, { json: jsonMode });
-      if (!result.ok) process.exitCode = 1;
-    }
-  } else if (domain === "config") {
+  if (domain === "config") {
     if (commandArgs.length === 0) {
       output.error({
         code: "usage_error",

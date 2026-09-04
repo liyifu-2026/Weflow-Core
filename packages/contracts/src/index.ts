@@ -7,10 +7,3 @@ export * from "./errors.js";
 export * from "./http.js";
 export * from "./domain.js";
 export * from "./runtime-console.js";
-export type {
-  SolutionManifestV1,
-  SolutionLockV1,
-  SolutionSignature,
-  SolutionDescriptor,
-  SolutionPackageDescriptor,
-} from "./solution-pack.js";

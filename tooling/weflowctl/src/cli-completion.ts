@@ -1,30 +1,12 @@
-﻿/**
+/**
  * Shell completion script generation (bash / zsh / PowerShell).
  *
- * Zero-dependency templates: subcommand lists are derived from the same
- * command registry the CLI uses, so completions stay in sync.
+ * Zero-dependency templates. R3 平台化拆除后 CLI 只剩 dev / config /
+ * completion 三个域，补全脚本同步收敛。
  */
 
-const SOLUTION_COMMANDS = [
-  "keygen",
-  "key",
-  "registry",
-  "info",
-  "search",
-  "versions",
-  "history",
-  "verify",
-  "digest",
-  "publish",
-  "install",
-  "activate",
-  "update",
-  "rollback",
-  "disable",
-  "uninstall",
-  "prune",
-  "list",
-] as const;
+const DEV_COMMANDS = ["doctor", "up", "down"] as const;
+const CONFIG_COMMANDS = ["get", "set", "list"] as const;
 
 export function bashCompletion(): string {
   // Literal dollar sign for bash variables inside a JS template literal.
@@ -32,35 +14,18 @@ export function bashCompletion(): string {
   return `# weflowctl bash completion
 _weflowctl_completions() {
   local cur="${D}{COMP_WORDS[COMP_CWORD]}"
-  local prev="${D}{COMP_WORDS[COMP_CWORD-1]}"
-  local domains="solution"
+  local domains="dev config completion"
   if [ "${D}COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "${D}domains --help --version --json --quiet" -- "${D}cur") )
     return 0
   fi
   case "${D}prev" in
-    solution)
-      COMPREPLY=( $(compgen -W "${SOLUTION_COMMANDS.join(" ")}" -- "${D}cur") )
+    dev)
+      COMPREPLY=( $(compgen -W "${DEV_COMMANDS.join(" ")}" -- "${D}cur") )
       return 0
       ;;
-    key)
-      COMPREPLY=( $(compgen -W "list import export" -- "${D}cur") )
-      return 0
-      ;;
-    registry)
-      COMPREPLY=( $(compgen -W "login logout status" -- "${D}cur") )
-      return 0
-      ;;
-    update)
-      COMPREPLY=( $(compgen -W "--strategy --version --registry" -- "${D}cur") )
-      return 0
-      ;;
-    rollback)
-      COMPREPLY=( $(compgen -W "--to" -- "${D}cur") )
-      return 0
-      ;;
-    prune)
-      COMPREPLY=( $(compgen -W "--keep" -- "${D}cur") )
+    config)
+      COMPREPLY=( $(compgen -W "${CONFIG_COMMANDS.join(" ")}" -- "${D}cur") )
       return 0
       ;;
   esac
@@ -75,16 +40,20 @@ export function zshCompletion(): string {
 # weflowctl zsh completion
 _weflowctl() {
   local -a domains
-  domains=(solution)
+  domains=(dev config completion)
   _arguments -C \\
     '1:domain:($domains)' \\
     '*::command:->args'
   case $state in
     args)
       case $words[1] in
-        solution)
+        dev)
           local -a cmds
-          cmds=(${SOLUTION_COMMANDS.map((c) => `'${c}'`).join(" ")})
+          cmds=(${DEV_COMMANDS.map((c) => `'${c}'`).join(" ")})
+          _describe "command" cmds
+          ;;
+        config)
+          cmds=(${CONFIG_COMMANDS.map((c) => `'${c}'`).join(" ")})
           _describe "command" cmds
           ;;
       esac
@@ -96,21 +65,28 @@ _weflowctl "$@"
 }
 
 export function powershellCompletion(): string {
-  const commandList = SOLUTION_COMMANDS.join("|");
+  const devList = DEV_COMMANDS.join("|");
+  const configList = CONFIG_COMMANDS.join("|");
   return `# weflowctl PowerShell completion
 Register-ArgumentCompleter -Native -CommandName weflowctl -ScriptBlock {
   param($wordToComplete, $commandAst, $cursorPosition)
   $tokens = $commandAst.ToString() -split '\\s+'
   $sub = $tokens[1]
   switch ($sub) {
-    'solution' {
+    'dev' {
       if ($tokens.Count -le 2) {
-        '${commandList}'.Split('|') | Where-Object { $_ -like "$wordToComplete*" } |
+        '${devList}'.Split('|') | Where-Object { $_ -like "$wordToComplete*" } |
+          ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) }
+      }
+    }
+    'config' {
+      if ($tokens.Count -le 2) {
+        '${configList}'.Split('|') | Where-Object { $_ -like "$wordToComplete*" } |
           ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) }
       }
     }
     default {
-      'solution' | Where-Object { $_ -like "$wordToComplete*" } |
+      'dev config completion' | Where-Object { $_ -like "$wordToComplete*" } |
         ForEach-Object { [System.Management.Automation.CompletionResult]::new($_) }
     }
   }

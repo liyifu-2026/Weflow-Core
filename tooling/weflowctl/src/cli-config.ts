@@ -1,32 +1,20 @@
 /**
  * Local CLI configuration (~/.weflow/config.json).
  *
- * Stores machine-local CLI state such as registry login tokens and the
- * auto-update strategy. Never commit this file; tokens are masked by
- * `maskToken` when displayed.
+ * Stores machine-local CLI state. Never commit this file; tokens are masked
+ * by `maskToken` when displayed.
+ *
+ * R3 平台化拆除：solution registry / auto-update / store / signing 配置段
+ * 已随机制删除；config 域保留 get/set/list 骨架供后续平台配置使用。
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  UPDATE_STRATEGIES,
-  type SolutionUpdateStrategy,
-} from "../../../core/infrastructure/solutions/solution-update.js";
 
 export type CliConfig = {
   registry?: {
     url?: string;
     token?: string;
-  };
-  update?: {
-    strategy?: SolutionUpdateStrategy;
-    enabled?: boolean;
-  };
-  store?: {
-    path?: string;
-  };
-  signing?: {
-    keyFile?: string;
   };
 };
 
@@ -37,14 +25,7 @@ export function cliConfigPath(): string {
   );
 }
 
-const KNOWN_KEYS = new Set<string>([
-  "registry.url",
-  "registry.token",
-  "update.strategy",
-  "update.enabled",
-  "store.path",
-  "signing.keyFile",
-]);
+const KNOWN_KEYS = new Set<string>(["registry.url", "registry.token"]);
 
 function setNested(config: CliConfig, key: string, value: unknown): void {
   const [section, leaf] = key.split(".");
@@ -59,35 +40,6 @@ function setNested(config: CliConfig, key: string, value: unknown): void {
       config.registry.url = value;
     if (leaf === "token" && typeof value === "string")
       config.registry.token = value;
-  }
-  if (section === "update") {
-    config.update = { ...(config.update ?? {}) };
-    if (leaf === "strategy" && typeof value === "string") {
-      config.update.strategy = value as SolutionUpdateStrategy;
-    }
-    if (leaf === "enabled" && typeof value === "boolean") {
-      config.update.enabled = value;
-    }
-  }
-  if (section === "store") {
-    config.store = { ...(config.store ?? {}) };
-    if (value === undefined) {
-      if (leaf === "path") delete config.store.path;
-      return;
-    }
-    if (leaf === "path" && typeof value === "string") {
-      config.store.path = value;
-    }
-  }
-  if (section === "signing") {
-    config.signing = { ...(config.signing ?? {}) };
-    if (value === undefined) {
-      if (leaf === "keyFile") delete config.signing.keyFile;
-      return;
-    }
-    if (leaf === "keyFile" && typeof value === "string") {
-      config.signing.keyFile = value;
-    }
   }
 }
 
@@ -107,15 +59,8 @@ export async function loadCliConfig(): Promise<CliConfig> {
 export async function updateCliConfig(
   updates: Record<string, string | boolean | undefined>,
 ): Promise<CliConfig> {
-  for (const [key, value] of Object.entries(updates)) {
+  for (const key of Object.keys(updates)) {
     if (!KNOWN_KEYS.has(key)) throw new Error(`unknown_config_key:${key}`);
-    if (key === "update.strategy" && typeof value === "string") {
-      if (!(UPDATE_STRATEGIES as readonly string[]).includes(value)) {
-        throw new Error(
-          `invalid_update_strategy:${value}:expected ${UPDATE_STRATEGIES.join("|")}`,
-        );
-      }
-    }
   }
   const config = await loadCliConfig();
   for (const [key, value] of Object.entries(updates)) {

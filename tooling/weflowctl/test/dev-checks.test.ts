@@ -176,7 +176,7 @@ describe("serviceChecks 折叠级别", () => {
     assert.equal(results[0]?.status, "fail");
   });
   it("optional 服务未运行 → warn", async () => {
-    const optional = service({ required: false, key: "solution-registry" });
+    const optional = service({ required: false, key: "some-optional" });
     const results = await serviceChecks([optional], ENV, fakeProbe());
     assert.equal(results[0]?.status, "warn");
   });

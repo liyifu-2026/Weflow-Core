@@ -1,8 +1,11 @@
-﻿/**
+/**
  * `weflowctl config` and `weflowctl completion` command layer.
  *
  * config: read/write the local CLI configuration (see cli-config.ts).
  * completion: emit shell completion scripts for bash/zsh/powershell.
+ *
+ * R3 平台化拆除：solution registry / auto-update / store / signing 键随
+ * 机制删除，config 仅保留 registry.url / registry.token 骨架。
  */
 import { loadCliConfig, maskToken, updateCliConfig } from "./cli-config.js";
 import { completionFor } from "./cli-completion.js";
@@ -12,14 +15,7 @@ export type ConfigCommandResult =
   | { ok: true; data: Record<string, unknown> }
   | { ok: false; error: string; code?: string; hint?: string };
 
-const CONFIG_KEYS = new Set([
-  "registry.url",
-  "registry.token",
-  "update.strategy",
-  "update.enabled",
-  "store.path",
-  "signing.keyFile",
-]);
+const CONFIG_KEYS = new Set(["registry.url", "registry.token"]);
 
 export async function runConfigCommand(
   args: string[],
@@ -52,15 +48,7 @@ async function dispatchConfig(
       const value =
         key === "registry.url"
           ? config.registry?.url
-          : key === "registry.token"
-            ? maskToken(config.registry?.token)
-            : key === "update.strategy"
-              ? config.update?.strategy
-              : key === "update.enabled"
-                ? config.update?.enabled
-                : key === "store.path"
-                  ? config.store?.path
-                  : config.signing?.keyFile;
+          : maskToken(config.registry?.token);
       return { key, value: value ?? null };
     }
     case "set": {
@@ -69,13 +57,7 @@ async function dispatchConfig(
       if (!key || !CONFIG_KEYS.has(key)) {
         throw new Error(`unknown_config_key:${key ?? "(none)"}`);
       }
-      let parsed: string | boolean;
-      if (key === "update.enabled") {
-        parsed = rawValue === "true";
-      } else {
-        parsed = rawValue;
-      }
-      const config = await updateCliConfig({ [key]: parsed });
+      const config = await updateCliConfig({ [key]: rawValue });
       return { key, value: flattenValue(config, key) };
     }
     case "list": {
@@ -90,13 +72,6 @@ async function dispatchConfig(
                 ? maskToken(config.registry.token)
                 : null,
           },
-          {
-            key: "update.strategy",
-            value: config.update?.strategy ?? null,
-          },
-          { key: "update.enabled", value: config.update?.enabled ?? false },
-          { key: "store.path", value: config.store?.path ?? null },
-          { key: "signing.keyFile", value: config.signing?.keyFile ?? null },
         ],
       };
     }
@@ -114,11 +89,7 @@ function flattenValue(
   key: string,
 ): unknown {
   if (key === "registry.url") return config.registry?.url ?? null;
-  if (key === "registry.token") return config.registry?.token ?? null;
-  if (key === "update.strategy") return config.update?.strategy ?? null;
-  if (key === "update.enabled") return config.update?.enabled ?? false;
-  if (key === "store.path") return config.store?.path ?? null;
-  return config.signing?.keyFile ?? null;
+  return config.registry?.token ?? null;
 }
 
 const USAGE_CONFIG = `Usage: weflowctl config <subcommand>
@@ -128,8 +99,7 @@ Subcommands:
   config set <key> <value>   Set a value; pass an empty value to clear
   config list                List all known keys with their values
 
-Keys: registry.url | registry.token | update.strategy | update.enabled |
-      store.path | signing.keyFile
+Keys: registry.url | registry.token
 `;
 
 export function runCompletionCommand(

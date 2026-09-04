@@ -1,7 +1,7 @@
 {
   "name": "@weflow-leaif/contracts",
   "version": "1.0.0",
-  "description": "Stable public contracts for Weflow Platform: AgentAction, AgentExecutionStrategy, runtime/solution state, audit and error codes.",
+  "description": "Stable public contracts for Weflow Platform: AgentAction, AgentExecutionStrategy, runtime state, audit and error codes.",
   "private": false,
   "type": "module",
   "packageManager": "pnpm@10.34.5",
@@ -20,15 +20,12 @@
     "dist"
   ],
   "scripts": {
-    "prebuild": "pnpm --dir ../solution-sdk build",
+    "prebuild": "",
     "build": "tsc -p tsconfig.build.json",
     "build:test": "tsc -p tsconfig.test.json",
-    "typecheck": "pnpm --dir ../solution-sdk build && tsc -p tsconfig.build.json --noEmit",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "npm run build:test && node dist-test/tests/agent.test.js",
     "check": "pnpm typecheck && pnpm test"
-  },
-  "dependencies": {
-    "@weflow-leaif/solution-sdk": "link:../solution-sdk"
   },
   "devDependencies": {
     "typescript": "5.9.3"
