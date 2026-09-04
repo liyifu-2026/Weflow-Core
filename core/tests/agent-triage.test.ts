@@ -159,11 +159,13 @@ describe("classifyForTriage (unit)", () => {
     expect(parsed.allowDirectReply).toBe(true);
   });
 
-  it("extractTriagePolicy 忽略接待编排新增字段（notes/defaultEmployeeKey/employeeRoutes）", () => {
+  it("extractTriagePolicy 只读取 triage 字段，忽略同包装内其他字段", () => {
     const parsed = extractTriagePolicy({
       pipeline: {
         triage: { enabled: true, riskKeywords: ["投诉"] },
         notes: { triage: "说明", gate: "永不旁路" },
+        // 历史遗留字段（R2 前接待编排的 defaultEmployeeKey/employeeRoutes）
+        // 已从运行时删除；保留陌生字段验证容错不崩溃。
         defaultEmployeeKey: "after-sales",
         employeeRoutes: [
           { id: "route-1", keywords: ["退货"], employeeKey: "after-sales" },

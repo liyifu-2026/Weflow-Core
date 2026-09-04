@@ -28,6 +28,7 @@ import {
   commitAgentTurnHandoff,
 } from "./agent-turn-outcome-command.js";
 import type { TriageVerdict } from "./triage-classifier.js";
+import type { BehaviorSettings } from "./behavior-settings.js";
 import { isTerminal, normalizeStatus } from "./turn-utils.js";
 
 type Database = NodePgDatabase<typeof schema>;
@@ -97,6 +98,12 @@ export class AgentTurnExecutor {
         fastClient?: TextModel | undefined;
         fastModel?: string | undefined;
       };
+      /**
+       * 行为参数（R2 设置中心）：会话 TTL/轮数/wait 缺省/ReAct 预算的
+       * 读取器（组合根注入，带 TTL 缓存）。未注入时逐项使用出厂默认，
+       * 与可配置前的行为逐字节一致。
+       */
+      behaviorSettings?: (() => Promise<BehaviorSettings>) | undefined;
     } = {},
   ) {}
 
@@ -242,6 +249,9 @@ export class AgentTurnExecutor {
             : {}),
           ...(this.dependencies.resolveAiEmployeeId
             ? { resolveAiEmployeeId: this.dependencies.resolveAiEmployeeId }
+            : {}),
+          ...(this.dependencies.behaviorSettings
+            ? { behaviorSettings: this.dependencies.behaviorSettings }
             : {}),
         });
 

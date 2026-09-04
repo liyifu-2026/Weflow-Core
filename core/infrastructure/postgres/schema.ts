@@ -1656,3 +1656,27 @@ export const runtimeSettings = operationsSchema.table("runtime_settings", {
     .notNull(),
   updatedBy: varchar("updated_by", { length: 100 }),
 });
+
+/**
+ * 统一模型注册表（R2 模型网关）。
+ * 模型 = 名称 + 端点 + 密钥 + 能力标签（text/vision/asr）+ 故障转移链。
+ * 密钥只写不读（读取视图仅暴露 hasApiKey）；故障转移为单跳指针，
+ * 链式语义由解析层展开（环路由由解析层防护理）。
+ */
+export const modelRegistry = operationsSchema.table("model_registry", {
+  modelId: varchar("model_id", { length: 120 }).primaryKey(),
+  displayName: varchar("display_name", { length: 200 }).notNull(),
+  baseUrl: text("base_url").notNull(),
+  apiKey: text("api_key"),
+  capabilities: jsonb("capabilities").$type<string[]>().default([]).notNull(),
+  timeoutMs: integer("timeout_ms").default(60_000).notNull(),
+  failoverTo: varchar("failover_to", { length: 120 }),
+  enabled: boolean("enabled").default(true).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedBy: varchar("updated_by", { length: 100 }),
+});

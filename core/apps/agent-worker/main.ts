@@ -13,6 +13,13 @@ import { pathToFileURL } from "node:url";
 import { runProcess } from "../../infrastructure/runtime/run-process.js";
 import { OpenAiCompatibleClient } from "../../infrastructure/model_runtime/openai-compatible-client.js";
 import { HotReloadableClient } from "../../infrastructure/model_runtime/hot-reloadable-client.js";
+import {
+  resolveSlotChainRuntime,
+} from "../../modules/operations/application/model-gateway.js";
+import {
+  FailoverTextModel,
+  type FailoverLink,
+} from "../../modules/operations/application/model-failover.js";
 import { openAiTextModelPlugin } from "../../infrastructure/model/openai-text-model-provider.js";
 import { AGENT_TURN_QUEUE } from "../../infrastructure/redis/agent-turn-dispatcher.js";
 import {
@@ -45,6 +52,7 @@ import {
   classifyForTriage,
   extractTriagePolicy,
 } from "../../modules/agent/application/triage-classifier.js";
+import { createBehaviorSettingsReader } from "../../modules/agent/application/behavior-settings.js";
 import { createCachedExtensionSettingsReader } from "../../modules/solution/application/read-extension-settings.js";
 import {
   MapSkillRegistry,
@@ -137,6 +145,12 @@ await runProcess({
         extensionId: "support-pipeline",
       },
     );
+    // 行为参数（R2 设置中心）：会话 TTL/轮数/wait 缺省/ReAct 预算，
+    // 存于 Solution 扩展设置 behavior 键；未配置时逐项回落出厂默认。
+    const readBehaviorSettings = createBehaviorSettingsReader(postgres.db, {
+      solutionId: "weflow.customer-support",
+      extensionId: "support-pipeline",
+    });
     // 当前生效的分流/直答端点快照（applyModelSettings 内整体替换）。
     let triageEndpoint:
       { client: OpenAiCompatibleClient; model: string } | undefined;
@@ -144,6 +158,34 @@ await runProcess({
       { client: OpenAiCompatibleClient; model: string } | undefined;
     // 记忆提取引用的模型名快照（随热加载刷新，经闭包读取最新值）。
     let memoryModelName = modelSettings.textModel.name;
+
+    /**
+     * 模型网关（R2）：按 text 槽位从注册表解析故障转移链。
+     * 绑定了启用模型时返回 [主 → failoverTo] 运行时链（含密钥，
+     * 仅进程内使用）；未绑定/读取失败返回 undefined（回退旧配置）。
+     */
+    const resolveTextChain = async (): Promise<FailoverLink[] | undefined> => {
+      try {
+        const endpoints = await resolveSlotChainRuntime(postgres.db, "text");
+        if (endpoints.length === 0) return undefined;
+        return endpoints.map((endpoint) => ({
+          modelId: endpoint.modelId,
+          displayName: endpoint.displayName,
+          client: new OpenAiCompatibleClient({
+            baseUrl: endpoint.baseUrl,
+            apiKey: endpoint.apiKey ?? "",
+            model: endpoint.displayName,
+            timeoutMs: endpoint.timeoutMs,
+          }),
+        }));
+      } catch (error) {
+        logger.warn(
+          { err: error },
+          "model gateway chain resolution failed; falling back to legacy model settings",
+        );
+        return undefined;
+      }
+    };
 
     /** 按最新模型设置重建/替换所有派生客户端（热加载核心）。 */
     const applyModelSettings = (settings: typeof modelSettings): void => {
@@ -188,11 +230,34 @@ await runProcess({
       );
     };
     applyModelSettings(modelSettings);
+    // 模型网关（R2）：text 槽位绑定注册表模型时，主力客户端切换为
+    // 故障转移链；未绑定/解析失败回退旧 model-settings 单端点。
+    // 链解析异步，随热加载轮询刷新。
+    const applyGatewayChain = async (): Promise<void> => {
+      const chain = await resolveTextChain();
+      if (chain) {
+        try {
+          hotTextClient.swap(
+            new FailoverTextModel(chain) as unknown as OpenAiCompatibleClient,
+          );
+          logger.info(
+            { chain: chain.map((l) => l.modelId) },
+            "model gateway failover chain applied",
+          );
+        } catch (error) {
+          logger.warn({ err: error }, "failover chain apply failed");
+        }
+      }
+    };
+    void applyGatewayChain();
     const stopModelSettingsReloader = startModelSettingsReloader(
       postgres.db,
       modelDefaults,
       modelSettings,
-      applyModelSettings,
+      (settings) => {
+        applyModelSettings(settings);
+        void applyGatewayChain();
+      },
     );
 
     if (!triageEndpoint) {
@@ -373,6 +438,7 @@ await runProcess({
                 : {}),
               ...(resolveAiEmployeeId ? { resolveAiEmployeeId } : {}),
               ...(triage ? { triage } : {}),
+              behaviorSettings: readBehaviorSettings,
             },
           );
           await executor.execute({

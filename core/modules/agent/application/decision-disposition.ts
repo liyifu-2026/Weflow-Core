@@ -75,6 +75,26 @@ export type DecisionDispositionInput = {
    * 旧版"一轮一次工具"逐字节一致（防腐回归锚点）。缺省按 1 计。
    */
   toolStepBudget?: number | undefined;
+  /**
+   * wait 决策缺省等待毫秒（R2 行为参数）；模型未给 wait_ms 时使用。
+   * 缺省 300_000 = 与可配置前行为逐字节一致。
+   */
+  defaultWaitMs?: number | undefined;
+  /**
+   * wait 唤醒的预承诺 nudge 话术（R2 行为参数）；模型自带 nudge_text
+   * 优先，仅当模型未给且配置了话术时代发。缺省不代发。
+   */
+  defaultNudgeText?: string | undefined;
+  /**
+   * 会话片段 TTL 分钟数（R2 行为参数）；仅影响新建会话行。
+   * 缺省 DEFAULT_SESSION_TTL_MS = 与可配置前行为逐字节一致。
+   */
+  defaultSessionTtlMinutes?: number | undefined;
+  /**
+   * 会话轮数上限（R2 行为参数）；仅影响新建会话行。
+   * 缺省 MAX_ROUNDS_PER_SESSION = 与可配置前行为逐字节一致。
+   */
+  defaultSessionRoundBudget?: number | undefined;
 };
 
 export type DecisionDispositionResult =
@@ -191,14 +211,24 @@ async function commitFreshDisposition(
     await scheduleSessionWake(db, {
       conversationId,
       turnId,
-      waitMs: decision.waitMs ?? 300_000,
-      ...(decision.nudgeText ? { nudgeText: decision.nudgeText } : {}),
+      waitMs: decision.waitMs ?? input.defaultWaitMs ?? 300_000,
+      ...(decision.nudgeText
+        ? { nudgeText: decision.nudgeText }
+        : input.defaultNudgeText
+          ? { nudgeText: input.defaultNudgeText }
+          : {}),
       now,
     });
     await ensureSessionOnWait(db, {
       conversationId,
       turnId,
       now,
+      ...(input.defaultSessionTtlMinutes !== undefined
+        ? { ttlMs: input.defaultSessionTtlMinutes * 60_000 }
+        : {}),
+      ...(input.defaultSessionRoundBudget !== undefined
+        ? { roundBudget: input.defaultSessionRoundBudget }
+        : {}),
     });
     return { action: "terminal" };
   }

@@ -177,28 +177,6 @@ export interface KnowledgeProvider {
   ): Promise<KnowledgeSuggestionSet | undefined>;
   getDocument(documentId: string): Promise<KnowledgeDocumentSummary>;
   preview(documentId: string): Promise<KnowledgeResourcePreview>;
-  createModel(input: {
-    name: string;
-    type: string;
-    source: string;
-    display_name?: string | undefined;
-    description?: string | undefined;
-  }): Promise<unknown>;
-  deleteModel(modelId: string): Promise<void>;
-  createVectorStore(input: {
-    name: string;
-    engine_type: string;
-    connection_config?: Record<string, unknown> | undefined;
-  }): Promise<unknown>;
-  testVectorStore(input: {
-    name: string;
-    engine_type: string;
-    connection_config?: Record<string, unknown> | undefined;
-  }): Promise<unknown>;
-  createStorageBackend(input: {
-    name: string;
-    provider: string;
-  }): Promise<unknown>;
   getRetrievalSettings(): Promise<RetrievalSettings>;
   updateRetrievalSettings(
     patch: RetrievalSettingsPatch,

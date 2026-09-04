@@ -37,6 +37,16 @@ import {
   type ModelSettingsPatch,
 } from "../application/model-settings.js";
 import { notifyModelSettingsChanged } from "../application/model-settings-hot.js";
+import {
+  listModelRegistry,
+  upsertModelRegistryEntry,
+  deleteModelRegistryEntry,
+  readSlotBindings,
+  bindModelSlot,
+  MODEL_SLOTS,
+  type ModelRegistryPatch,
+} from "../application/model-gateway.js";
+import { readModelHealth } from "../application/model-failover.js";
 import { buildDashboardCards } from "../application/dashboard-cards.js";
 import {
   readAdminOverview,
@@ -53,6 +63,7 @@ const runtimeSettingsPatchSchema = z.object({
   knowledgeEnabled: z.boolean().optional(),
   memoryEnabled: z.boolean().optional(),
   visionEnabled: z.boolean().optional(),
+  mergeWindowEnabled: z.boolean().optional(),
   textModel: z.enum(TEXT_MODEL_ALLOWLIST).optional(),
   visionModel: z.enum(VISION_MODEL_ALLOWLIST).optional(),
 });
@@ -98,6 +109,21 @@ const modelSettingsPatchSchema = z
   })
   .strict()
   .refine((patch) => Object.keys(patch).length > 0);
+
+const modelRegistryUpsertSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(200).optional(),
+    baseUrl: z.string().trim().min(1).max(500).optional(),
+    /** 空串/缺省 = 保持原值 */
+    apiKey: z.string().max(1_000).optional(),
+    capabilities: z.array(z.enum(["text", "vision", "asr"])).optional(),
+    timeoutMs: z.number().int().min(1_000).max(300_000).optional(),
+    failoverTo: z.string().trim().max(120).nullable().optional(),
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .refine((patch) => Object.keys(patch).length > 0)
+  .transform((patch) => patch as ModelRegistryPatch);
 
 export function registerOperationsRoutes(
   server: FastifyInstance,
@@ -228,6 +254,97 @@ export function registerOperationsRoutes(
         actorUserId: identity.user.userId,
         sourceIp: request.ip,
       });
+    },
+  );
+
+  // ---------- Model Gateway (R2)：统一模型注册表 + 槽位 + 健康状态 ----------
+
+  server.get("/api/v1/admin/model-gateway", async (request, reply) => {
+    if (!(await requireAdminIdentity(db, request, reply))) return;
+    const [models, slots] = await Promise.all([
+      listModelRegistry(db),
+      readSlotBindings(db),
+    ]);
+    return { models, slots, health: readModelHealth() };
+  });
+
+  server.put(
+    "/api/v1/admin/model-gateway/models/:modelId",
+    async (request, reply) => {
+      const identity = await requireAdminIdentity(db, request, reply);
+      if (!identity) return;
+      const params = z
+        .object({ modelId: z.string().trim().min(1).max(120) })
+        .safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const body = modelRegistryUpsertSchema.safeParse(request.body);
+      if (!body.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const result = await upsertModelRegistryEntry(db, {
+        actorUserId: identity.user.userId,
+        sourceIp: request.ip,
+        modelId: params.data.modelId,
+        patch: body.data,
+      });
+      if (result.status === "not_found")
+        return reply.code(404).send({ error: "model_not_found" });
+      if (result.status === "failover_cycle")
+        return reply.code(409).send({ error: "failover_cycle" });
+      if (result.status === "invalid_capabilities")
+        return reply.code(400).send({ error: "invalid_capabilities" });
+      notifyModelSettingsChanged();
+      return { model: result.model };
+    },
+  );
+
+  server.delete(
+    "/api/v1/admin/model-gateway/models/:modelId",
+    async (request, reply) => {
+      const identity = await requireAdminIdentity(db, request, reply);
+      if (!identity) return;
+      const params = z
+        .object({ modelId: z.string().trim().min(1).max(120) })
+        .safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const result = await deleteModelRegistryEntry(db, {
+        actorUserId: identity.user.userId,
+        sourceIp: request.ip,
+        modelId: params.data.modelId,
+      });
+      if (!result.deleted)
+        return reply.code(404).send({ error: "model_not_found" });
+      notifyModelSettingsChanged();
+      return { deleted: true };
+    },
+  );
+
+  server.put(
+    "/api/v1/admin/model-gateway/slots/:slot",
+    async (request, reply) => {
+      const identity = await requireAdminIdentity(db, request, reply);
+      if (!identity) return;
+      const params = z
+        .object({ slot: z.enum(MODEL_SLOTS) })
+        .safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const body = z
+        .object({ modelId: z.string().trim().max(120).nullable() })
+        .safeParse(request.body);
+      if (!body.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const result = await bindModelSlot(db, {
+        actorUserId: identity.user.userId,
+        sourceIp: request.ip,
+        slot: params.data.slot,
+        modelId: body.data.modelId || null,
+      });
+      if (result.notFound)
+        return reply.code(404).send({ error: "model_not_found" });
+      notifyModelSettingsChanged();
+      return { bound: true };
     },
   );
 

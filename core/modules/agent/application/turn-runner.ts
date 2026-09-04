@@ -10,8 +10,10 @@
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 
-/** 单个 Agent Turn 内允许的最大工具步数（有界 ReAct；1 = 旧版行为）。 */
-export const MAX_TOOL_STEPS_PER_TURN = 4;
+import {
+  DEFAULT_BEHAVIOR_SETTINGS,
+  type BehaviorSettings,
+} from "./behavior-settings.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { TextModel } from "../../model/contracts/text-model.js";
@@ -56,10 +58,12 @@ export type TurnRunnerDependencies = {
   skillRegistry?: SkillRegistry | undefined;
   strategyRegistry?: ExecutionStrategyRegistry | undefined;
   /**
-   * Optional hook called before strategy.buildModelRequest to pre-resolve
-   * AI employee prompts from the database (populates strategy cache).
-   * `triggerText` is optional and drives reception-plan keyword routing
-   * inside the Solution strategy; Core stays business-neutral.
+   * Optional hook called before the strategy's buildModelRequest to
+   * pre-resolve AI employee prompts from the database (populates the
+   * strategy cache). `triggerText` (the latest inbound text) is passed
+   * through but no longer drives any keyword routing — contact binding +
+   * workspace default are the only routing rules (R2). Core stays
+   * business-neutral.
    */
   preResolveAiEmployeePrompt?: (
     contactId: string,
@@ -77,6 +81,11 @@ export type TurnRunnerDependencies = {
     contactId: string,
     conversationId: string,
   ) => Promise<string | null | undefined>;
+  /**
+   * 行为参数读取器（R2 设置中心）：会话 TTL/轮数/wait 缺省/ReAct 预算。
+   * 未注入时使用出厂默认（与可配置前行为逐字节一致）。
+   */
+  behaviorSettings?: (() => Promise<BehaviorSettings>) | undefined;
 };
 
 /**
@@ -151,7 +160,7 @@ export async function processAgentTurn(
 
     // AI 员工 Prompt 预解析：在策略的 buildModelRequest 之前异步查询数据库，
     // 将已发布的 AI 员工 prompt 填充到策略缓存中。触发文本取最近一条
-    // 入站消息内容，供 Solution 策略做接待编排的关键词路由。
+    // 入站消息内容（R2 起仅作为上下文透传，关键词路由已删除）。
     if (dependencies.preResolveAiEmployeePrompt) {
       await dependencies.preResolveAiEmployeePrompt(
         conversation?.contactId ?? "",
@@ -215,6 +224,16 @@ export async function processAgentTurn(
       },
     });
 
+    // 行为参数（R2）：读取失败/未注入时回落出厂默认，绝不阻断 Turn。
+    let behavior: BehaviorSettings | undefined;
+    try {
+      behavior = dependencies.behaviorSettings
+        ? await dependencies.behaviorSettings()
+        : undefined;
+    } catch {
+      behavior = undefined;
+    }
+
     // 决策后处理：gate → superseded → 工具计划 → no_action → 校验 → 落库
     await commitDecisionDisposition({
       decision,
@@ -227,6 +246,14 @@ export async function processAgentTurn(
       conversationRevision: conversation?.revision ?? 0,
       model,
       aiEmployeeId,
+      ...(behavior
+        ? {
+            defaultWaitMs: behavior.defaultWaitMs,
+            defaultSessionTtlMinutes: behavior.sessionTtlMinutes,
+            defaultSessionRoundBudget: behavior.sessionRoundBudget,
+            ...(behavior.nudgeText ? { defaultNudgeText: behavior.nudgeText } : {}),
+          }
+        : {}),
     });
   } catch (error) {
     if (error instanceof AgentTurnTransitionNotApplied) throw error;
@@ -392,7 +419,18 @@ export async function processPlannedToolTurn(
       ),
     );
   const toolStepsUsed = completedToolSteps[0]?.count ?? 1;
-  const toolStepBudget = MAX_TOOL_STEPS_PER_TURN;
+  // 行为参数（R2）：读取失败/未注入时回落出厂默认。
+  let behavior: BehaviorSettings | undefined;
+  try {
+    behavior = dependencies.behaviorSettings
+      ? await dependencies.behaviorSettings()
+      : undefined;
+  } catch {
+    behavior = undefined;
+  }
+  const toolStepBudget = (
+    behavior ?? DEFAULT_BEHAVIOR_SETTINGS
+  ).toolStepBudget;
   const budgetExhausted = toolStepsUsed >= toolStepBudget;
 
   const strategySystem = strategy
@@ -442,6 +480,14 @@ export async function processPlannedToolTurn(
     aiEmployeeId,
     toolStepsUsed,
     toolStepBudget,
+    ...(behavior
+      ? {
+          defaultWaitMs: behavior.defaultWaitMs,
+          defaultSessionTtlMinutes: behavior.sessionTtlMinutes,
+          defaultSessionRoundBudget: behavior.sessionRoundBudget,
+          ...(behavior.nudgeText ? { defaultNudgeText: behavior.nudgeText } : {}),
+        }
+      : {}),
   });
 }
 

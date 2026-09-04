@@ -607,66 +607,6 @@ export class WeKnoraKnowledgeClient {
   }
 
   /**
-   * 受控治理：模型 / 向量库 / 存储的创建与删除（经 Weflow 白名单 schema 校验，
-   * 不暴露上游凭据）。上游契约实测：创建仅接受基础字段（带 parameters 会挂起），
-   * PUT 为全量替换语义（危险，不做编辑）。
-   */
-  async createModel(input: {
-    name: string;
-    type: string;
-    source: string;
-    display_name?: string | undefined;
-    description?: string | undefined;
-  }): Promise<unknown> {
-    return this.request("/models", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    });
-  }
-
-  async deleteModel(modelId: string): Promise<void> {
-    await this.request(`/models/${encodeURIComponent(modelId)}`, {
-      method: "DELETE",
-    });
-  }
-
-  async createVectorStore(input: {
-    name: string;
-    engine_type: string;
-    connection_config?: Record<string, unknown> | undefined;
-  }): Promise<unknown> {
-    return this.request("/vector-stores", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    });
-  }
-
-  async testVectorStore(input: {
-    name: string;
-    engine_type: string;
-    connection_config?: Record<string, unknown> | undefined;
-  }): Promise<unknown> {
-    return this.request("/vector-stores/test", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    });
-  }
-
-  async createStorageBackend(input: {
-    name: string;
-    provider: string;
-  }): Promise<unknown> {
-    return this.request("/storage-backends", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(input),
-    });
-  }
-
-  /**
    * 读取租户检索配置（dense / BM25 / rerank 阈值）。
    * 只把白名单字段映射回 Weflow 结构；上游未知字段不进入 Weflow 视野。
    */
