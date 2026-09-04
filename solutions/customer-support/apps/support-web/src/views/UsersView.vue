@@ -284,7 +284,7 @@ onMounted(load);
                   <p class="truncate text-sm font-medium">
                     {{ user.displayName || user.username }}
                   </p>
-                  <p v-if="user.mustChangePassword" class="text-xs text-muted-foreground">
+                  <p v-if="user.mustChangePassword && user.status === 'active'" class="text-xs text-muted-foreground">
                     等待首次设置密码
                   </p>
                 </div>
