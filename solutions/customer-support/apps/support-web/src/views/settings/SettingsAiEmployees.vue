@@ -1,4 +1,6 @@
 <script setup lang="ts">
+const emit = defineEmits<{ saved: [] }>();
+
 /**
  * 设置中心 · ① AI员工分区：员工管理入口 + 行为参数。
  * 行为参数（R2）：会话 TTL/轮数上限/wait 上限/nudge 话术/ReAct 预算，
@@ -93,6 +95,7 @@ async function save() {
       behavior: { ...config.value },
     });
     notice.value = "已保存；30 秒内生效（无需重启）";
+    emit("saved");
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "保存失败";
   } finally {

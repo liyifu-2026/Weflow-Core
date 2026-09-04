@@ -161,6 +161,9 @@ const replyText = computed({
   set: (value: string) => (workspace.replyDraft = value),
 });
 const inspectorOpen = ref(false);
+const inspectorCollapsed = ref(
+  localStorage.getItem("wf-inspector") === "collapsed",
+);
 // Race-condition 保护：快速切换会话时，旧会话的迟到响应必须被丢弃。
 let selectionGeneration = 0;
 const inspectorView = ref<
@@ -200,10 +203,17 @@ function openInspector(
   view: "context" | "brief" | "evidence" | "customer" | "history",
 ) {
   inspectorView.value = view;
+  setInspectorCollapsed(false);
   inspectorOpen.value = true;
   if (view === "history") void loadHistory();
 }
+// 收起偏好记忆（UX-DECISIONS §1）：手动收起后不再随选中自动展开
+function setInspectorCollapsed(collapsed: boolean) {
+  inspectorCollapsed.value = collapsed;
+  localStorage.setItem("wf-inspector", collapsed ? "collapsed" : "open");
+}
 function closeInspector() {
+  setInspectorCollapsed(true);
   inspectorOpen.value = false;
 }
 // 联系人的历史会话（只读，Inspector 内查看；游标分页）
@@ -519,10 +529,8 @@ const queueSections = computed<Array<{ key: SectionScope; title: string; tone: s
   ];
 });
 
-// 顶层页面：workspace=三区工作区（仅白名单客户）；contacts=联系人（全部，只读）
-type PageMode = "workspace" | "contacts";
-const pageMode = ref<PageMode>("workspace");
-// 联系人页：本地状态（独立分页/搜索，与工作区互不干扰）
+// 搜索合一（UX-DECISIONS §1）：单一搜索框，空态为队列，输入同搜会话与联系人。
+// 联系人搜索复用同一 search 词（原「联系人」Tab 已删除）。
 type ContactSummary = {
   contactId: string;
   conversationId: string;
@@ -540,9 +548,6 @@ const contactsNextCursor = ref<string | null>(null);
 const contactsLoading = ref(false);
 const contactsLoadingMore = ref(false);
 const contactsError = ref("");
-const contactSearchInput = ref("");
-const contactSearchApplied = ref("");
-
 async function loadList(selectFirst = false) {
   listError.value = "";
   try {
@@ -584,9 +589,10 @@ async function loadList(selectFirst = false) {
       ).conversations;
     }
     const routeId = typeof route.query.id === "string" ? route.query.id : "";
+    // 继续旧活优先：默认落「我处理的」第一条，其次等待处理，最后其他
     const firstInSections =
-      sectionAttention.value[0] ??
       sectionMine.value[0] ??
+      sectionAttention.value[0] ??
       sectionOthers.value[0];
     const first = search.value.trim()
       ? conversations.value[0]
@@ -656,7 +662,6 @@ async function loadOlderConversations() {
 
 // ---------- 联系人页（独立视图，仅只读浏览） ----------
 async function loadContacts(append = false) {
-  if (pageMode.value !== "contacts") return;
   if (append ? contactsLoadingMore.value : contactsLoading.value) return;
   if (append) contactsLoadingMore.value = true;
   else contactsLoading.value = true;
@@ -665,8 +670,7 @@ async function loadContacts(append = false) {
     const cursor = append ? contactsNextCursor.value : null;
     const query = new URLSearchParams();
     query.set("limit", "50");
-    if (contactSearchApplied.value)
-      query.set("q", contactSearchApplied.value);
+    if (search.value.trim()) query.set("q", search.value.trim());
     if (cursor) query.set("before", cursor);
     const result = await api<{
       contacts: ContactSummary[];
@@ -691,34 +695,38 @@ async function loadContacts(append = false) {
     else contactsLoading.value = false;
   }
 }
-function applyContactSearch() {
-  contactSearchApplied.value = contactSearchInput.value.trim();
-  void loadContacts();
-}
-function clearContactSearch() {
-  contactSearchInput.value = "";
-  contactSearchApplied.value = "";
-  void loadContacts();
-}
-// 切到联系人页时按需加载；切回工作区不重复请求。
-watch(pageMode, (next) => {
-  if (next === "contacts" && !contacts.value.length && !contactsLoading.value) {
-    void loadContacts();
-  }
-});
-// 联系人页点击联系人：切换到工作区并选中对应会话
+// 联系人搜索结果点击：清搜索回队列视图并选中对应会话
 function selectContactAndSwitch(conversationId: string) {
-  pageMode.value = "workspace";
+  workspace.search = "";
   void select(conversationId);
 }
+
+// 搜索合一驱动：输入防抖 300ms，同时搜会话（loadList 搜索分支）与联系人。
+let searchTimer: ReturnType<typeof setTimeout> | undefined;
+watch(search, (value) => {
+  clearTimeout(searchTimer);
+  const q = value.trim();
+  if (!q) {
+    contacts.value = [];
+    contactsNextCursor.value = null;
+    contactsError.value = "";
+    void loadList();
+    return;
+  }
+  searchTimer = setTimeout(() => {
+    void loadList();
+    void loadContacts();
+  }, 300);
+});
 
 async function select(id: string, syncRoute = true) {
   if (!id) return;
   const generation = ++selectionGeneration;
   selectedId.value = id;
-  // 不自动展开检查器：浮层模式下 backdrop 会遮挡工作区（回复框），
-  // 检查器改为用户主动打开（查看依据/摘要/资料等按钮）
+  // 选中即展开 Inspector（inline 第三栏，不再遮挡工作区）；
+  // 用户手动收起后记忆偏好，不再自动弹出
   inspectorView.value = "context";
+  if (!inspectorCollapsed.value) inspectorOpen.value = true;
   transferOpen.value = false;
   settingsOpen.value = false;
   if (syncRoute && route.query.id !== id) {
@@ -1575,11 +1583,20 @@ function extractMentionRefs(): string[] {
   }
   return refs;
 }
-// --- 消息右键菜单 ---
-const messageMenu = ref<{ x: number; y: number; message: Message } | null>(null);
-function openMessageMenu(event: MouseEvent, message: Message) {
+// --- 消息右键菜单（按目标拆分）：气泡=回复，头像=拍一拍 ---
+const messageMenu = ref<{
+  x: number;
+  y: number;
+  message: Message;
+  kind: "bubble" | "avatar";
+} | null>(null);
+function openMessageMenu(
+  event: MouseEvent,
+  message: Message,
+  kind: "bubble" | "avatar" = "bubble",
+) {
   event.preventDefault();
-  messageMenu.value = { x: event.clientX, y: event.clientY, message };
+  messageMenu.value = { x: event.clientX, y: event.clientY, message, kind };
 }
 function closeMessageMenu() {
   messageMenu.value = null;
@@ -1611,15 +1628,10 @@ const transferPendingLabel = computed(() => {
 </script>
 
 <template>
-  <div class="flex h-[calc(100vh-40px)] flex-col gap-3 p-3 pb-4">
-    <h1 class="min-h-6 text-lg font-semibold tracking-tight">
-      {{ pageMode === "contacts" ? "联系人" : "客户服务" }}
-    </h1>
-    <div class="grid min-h-0 flex-1 grid-cols-[clamp(220px,18vw,280px)_minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-border bg-background max-[860px]:grid-cols-[clamp(200px,30vw,260px)_minmax(0,1fr)]">
+  <div class="flex h-full min-h-0 flex-col">
+    <div class="grid min-h-0 flex-1 grid-cols-[clamp(220px,18vw,280px)_minmax(0,1fr)_auto] overflow-hidden max-[860px]:grid-cols-[clamp(200px,30vw,260px)_minmax(0,1fr)]">
       <ConversationList
-        v-model:page-mode="pageMode"
-        :search="search"
-        @update:search="search = $event"
+        v-model:search="search"
         :selected-id="selectedId"
         :conversation-permissions-enabled="conversationPermissionsEnabled"
         :flat-conversations="flatConversations"
@@ -1633,16 +1645,11 @@ const transferPendingLabel = computed(() => {
         :contacts-loading-more="contactsLoadingMore"
         :contacts-error="contactsError"
         :contacts-next-cursor="contactsNextCursor"
-        :contact-search-input="contactSearchInput"
-        :contact-search-applied="contactSearchApplied"
-        :is-admin="auth.isAdmin"
         @select="(id) => select(id)"
         @select-contact="selectContactAndSwitch"
-        @reload="pageMode === 'workspace' ? loadList() : loadContacts()"
+        @reload="() => loadList()"
         @load-more="loadOlderConversations"
         @load-contacts="(append: boolean) => loadContacts(append)"
-        @apply-contact-search="applyContactSearch"
-        @clear-contact-search="clearContactSearch"
       />
 
       <ChatPane
@@ -1701,7 +1708,8 @@ const transferPendingLabel = computed(() => {
         @pick-file="() => onFilePickerProxy()"
         @open-assets="assetPickerOpen = true"
         @clear-reply="clearReplyTarget"
-        @message-contextmenu="openMessageMenu"
+        @message-contextmenu="(event, m) => openMessageMenu(event, m, 'bubble')"
+        @avatar-contextmenu="(event, m) => openMessageMenu(event, m, 'avatar')"
         @retry-message="retryMessage"
         @check-outcome="checkMessageOutcome"
         @open-trace="openSessionTrace"
@@ -1865,12 +1873,14 @@ const transferPendingLabel = computed(() => {
         :style="{ left: messageMenu.x + 'px', top: messageMenu.y + 'px' }"
       >
         <button
+          v-if="messageMenu.kind === 'bubble'"
           class="block w-full rounded-sm px-3 py-1.5 text-left text-sm transition-colors hover:bg-muted"
           @click="handleMenuReply(messageMenu.message)"
         >
           回复
         </button>
         <button
+          v-if="messageMenu.kind === 'avatar'"
           class="block w-full rounded-sm px-3 py-1.5 text-left text-sm transition-colors hover:bg-muted"
           @click="handleMenuPoke(messageMenu.message)"
         >

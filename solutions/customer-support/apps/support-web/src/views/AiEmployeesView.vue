@@ -8,6 +8,8 @@ import {
   RotateCcw,
   Search,
   UserRound,
+  Loader2,
+  Trash2,
 } from "lucide-vue-next";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +30,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,6 +62,8 @@ import {
   type ContactSummary,
 } from "../api/ai-employees";
 import { contactDisplayName } from "../labels";
+import { confirmDialog } from "../components/confirm-dialog";
+import AvatarImage from "../components/AvatarImage.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -95,21 +106,6 @@ const bindingMap = computed(
 const activeEmployees = computed(() =>
   employees.value.filter((item) => item.status === "active"),
 );
-const visibleContacts = computed(() => {
-  const needle = search.value.trim().toLowerCase();
-  if (!needle) return contacts.value;
-  return contacts.value.filter((contact) =>
-    [
-      contact.contactId,
-      contact.channelDisplayName,
-      contact.channelNickname,
-      contact.channelRemark,
-      contact.sharedAlias,
-    ]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(needle)),
-  );
-});
 
 function contactLabel(contact: ContactSummary) {
   return contactDisplayName({ contact });
@@ -255,7 +251,7 @@ async function createVersion() {
 
 async function publish() {
   if (!selectedVersion.value || selectedVersion.value.status !== "draft") return;
-  if (!window.confirm("发布后，新创建的 Agent Turn 将使用此版本。确认发布？")) return;
+  if (!(await confirmDialog("发布后，新创建的 Agent Turn 将使用此版本。确认发布？", { danger: true }))) return;
   saving.value = true;
   try {
     await publishAiEmployeeVersion(selectedVersion.value.versionId);
@@ -269,7 +265,7 @@ async function publish() {
 
 async function rollback() {
   if (!selectedVersion.value || selectedVersion.value.status !== "retired") return;
-  if (!window.confirm("将这个历史版本恢复为线上版本？")) return;
+  if (!(await confirmDialog("将这个历史版本恢复为线上版本？"))) return;
   saving.value = true;
   try {
     await rollbackAiEmployeeVersion(selectedVersion.value.versionId);
@@ -282,7 +278,7 @@ async function rollback() {
 }
 
 async function archive() {
-  if (!selected.value || !window.confirm("归档这个 AI Employee？归档后不会再作为默认绑定解析。")) return;
+  if (!selected.value || !(await confirmDialog("归档这个 AI Employee？归档后不会再作为默认绑定解析。", { danger: true }))) return;
   saving.value = true;
   try {
     await archiveAiEmployee(selected.value.definitionId);
@@ -303,16 +299,51 @@ async function changeDefault(value: string) {
   }
 }
 
-async function changeBinding(contactId: string, value: string) {
+// ---- 员工服务名单（以员工为中心的绑定，UX-DECISIONS §4）----
+// 名单 = 显式绑定到当前员工的联系人；名单外联系人走共享默认。
+const roster = computed(() =>
+  contacts.value.filter(
+    (c) => bindingMap.value.get(c.contactId)?.definitionId === selectedId.value,
+  ),
+);
+// 可添加：未绑定到当前员工的联系人，按搜索词过滤
+const addableContacts = computed(() => {
+  const q = search.value.trim().toLowerCase();
+  return contacts.value.filter((c) => {
+    if (bindingMap.value.get(c.contactId)?.definitionId === selectedId.value)
+      return false;
+    if (!q) return true;
+    return (
+      contactLabel(c).toLowerCase().includes(q) ||
+      c.contactId.toLowerCase().includes(q)
+    );
+  });
+});
+
+async function addRosterMember(contactId: string) {
+  if (!selectedId.value) return;
   savingBindingContactId.value = contactId;
   bindingError.value = "";
   try {
-    if (value) await setContactAgentBinding(contactId, value);
-    else await removeContactAgentBinding(contactId);
+    await setContactAgentBinding(contactId, selectedId.value);
     await load();
   } catch (reason) {
     bindingError.value =
-      reason instanceof Error ? reason.message : "联系人绑定保存失败";
+      reason instanceof Error ? reason.message : "添加绑定失败";
+  } finally {
+    savingBindingContactId.value = "";
+  }
+}
+
+async function removeRosterMember(contactId: string) {
+  savingBindingContactId.value = contactId;
+  bindingError.value = "";
+  try {
+    await removeContactAgentBinding(contactId);
+    await load();
+  } catch (reason) {
+    bindingError.value =
+      reason instanceof Error ? reason.message : "移除绑定失败";
   } finally {
     savingBindingContactId.value = "";
   }
@@ -330,7 +361,7 @@ onMounted(load);
     <header class="mb-6">
       <h1 class="text-2xl font-semibold tracking-tight">AI Employees</h1>
       <p class="mt-1 text-sm text-muted-foreground">
-        定义可发布、可回滚的 AI 员工，并在右侧把每个联系人绑定到具体的 AI Employee。
+        定义可发布、可回滚的 AI 员工；选中后在右侧维护它的服务名单。
       </p>
     </header>
 
@@ -348,61 +379,6 @@ onMounted(load);
       <AlertDescription>{{ bindingError }}</AlertDescription>
     </Alert>
 
-    <!-- 新建表单 -->
-    <Card class="mb-6">
-      <CardHeader>
-        <CardTitle>建立 AI Employee</CardTitle>
-        <CardDescription>完整 Prompt 文本由版本管理</CardDescription>
-        <CardAction>
-          <Button
-            :variant="creating ? 'outline' : 'default'"
-            size="sm"
-            @click="creating = !creating"
-          >
-            <Plus class="size-4" />
-            {{ creating ? "取消" : "新建" }}
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent v-if="creating">
-        <form class="grid gap-4 sm:grid-cols-3" @submit.prevent="createEmployee">
-          <div class="space-y-2">
-            <Label for="new-emp-key">Key</Label>
-            <Input id="new-emp-key" v-model="newKey" placeholder="product-support" />
-          </div>
-          <div class="space-y-2">
-            <Label for="new-emp-name">名称</Label>
-            <Input id="new-emp-name" v-model="newName" placeholder="产品支持顾问" />
-          </div>
-          <div class="space-y-2">
-            <Label for="new-emp-desc">说明</Label>
-            <Input
-              id="new-emp-desc"
-              v-model="newDescription"
-              placeholder="处理产品故障与售后咨询"
-            />
-          </div>
-          <div class="space-y-2 sm:col-span-3">
-            <Label for="new-emp-prompt">首个 Prompt 草稿</Label>
-            <Textarea
-              id="new-emp-prompt"
-              v-model="newPrompt"
-              rows="4"
-              placeholder="描述这个 AI Employee 的工作目标、语气、业务范围与限制。"
-            />
-          </div>
-          <div class="sm:col-span-3">
-            <Button
-              type="submit"
-              :disabled="creating || !newKey || !newName || !newPrompt"
-            >
-              {{ creating ? "建立中" : "建立草稿" }}
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
-
     <!-- loading -->
     <div v-if="loading" class="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)_320px]">
       <Skeleton class="h-72 w-full" />
@@ -417,14 +393,24 @@ onMounted(load);
         <CardHeader>
           <CardTitle class="text-base">AI Employee</CardTitle>
           <CardDescription>{{ employees.length }} 个</CardDescription>
+          <CardAction>
+            <Button size="sm" @click="creating = true">
+              <Plus class="size-4" />
+              新建
+            </Button>
+          </CardAction>
         </CardHeader>
         <CardContent class="p-2 pt-0">
-          <div v-if="!employees.length" class="flex flex-col items-center gap-1 px-4 py-10 text-center">
+          <div v-if="!employees.length" class="flex flex-col items-center gap-2 px-4 py-10 text-center">
             <UserRound class="size-8 text-muted-foreground/60" />
             <p class="text-sm font-medium">还没有 AI Employee</p>
             <p class="text-sm text-muted-foreground">
               先建立一个草稿，再发布给新建的 Agent Turn 使用。
             </p>
+            <Button size="sm" variant="outline" class="mt-1" @click="creating = true">
+              <Plus class="size-4" />
+              新建 AI Employee
+            </Button>
           </div>
           <button
             v-for="employee in employees"
@@ -615,11 +601,13 @@ onMounted(load);
         </CardContent>
       </Card>
 
-      <!-- 右：联系人绑定 -->
+      <!-- 右：服务名单（以员工为中心的绑定，UX-DECISIONS §4） -->
       <Card class="lg:sticky lg:top-6">
         <CardHeader>
-          <CardTitle class="text-base">联系人绑定</CardTitle>
-          <CardDescription>{{ contacts.length }} 个联系人</CardDescription>
+          <CardTitle class="text-base">服务名单</CardTitle>
+          <CardDescription>
+            {{ selected ? `由「${selected.name}」服务的联系人` : "先在左侧选择 AI Employee" }}
+          </CardDescription>
         </CardHeader>
         <CardContent class="border-t p-3">
           <div class="relative">
@@ -628,80 +616,143 @@ onMounted(load);
             />
             <Input
               v-model="search"
-              placeholder="搜索联系人名称、备注或渠道 ID"
+              placeholder="搜索联系人并加入名单"
               class="pl-8"
+              :disabled="!selected"
             />
           </div>
+          <p class="mt-1.5 text-xs text-muted-foreground">
+            名单外的联系人使用共享工作空间默认。
+          </p>
         </CardContent>
         <CardContent class="max-h-[560px] overflow-auto p-3 pt-0">
+          <Alert v-if="bindingError" variant="destructive" class="mb-2">
+            <AlertDescription class="text-xs">{{ bindingError }}</AlertDescription>
+          </Alert>
+
+          <!-- 名单 -->
           <div
-            v-if="!visibleContacts.length"
+            v-if="!selected"
             class="flex flex-col items-center gap-1 py-10 text-center"
           >
-            <p class="text-sm font-medium">没有可绑定的联系人</p>
-            <p class="text-sm text-muted-foreground">
-              联系人必须先通过 Channel Host 进入 Core。
+            <p class="text-sm font-medium">未选择 AI Employee</p>
+            <p class="text-sm text-muted-foreground">左侧选择后即可维护服务名单。</p>
+          </div>
+          <div v-else-if="!roster.length" class="py-6 text-center">
+            <p class="text-sm font-medium">名单还是空的</p>
+            <p class="mt-1 text-xs text-muted-foreground">
+              用上方搜索把联系人加入该员工的服务名单。
             </p>
           </div>
           <div v-else class="divide-y">
             <div
-              v-for="contact in visibleContacts"
+              v-for="contact in roster"
               :key="contact.contactId"
-              class="flex flex-col gap-1.5 py-3 first:pt-1 last:pb-1"
+              class="flex items-center gap-2 py-2.5"
             >
-              <div class="min-w-0">
-                <p class="truncate text-sm font-medium">{{ contactLabel(contact) }}</p>
-                <!--
-                  contactId 是内部通道标识（contact:channel:wxid_...），对客服无意义：
-                  仅当它是人类可读的短 id（不含冒号）时展示，否则 hover 看原文（ISS C-1）
-                -->
-                <p
-                  v-if="!contact.contactId.includes(':')"
-                  class="truncate font-mono text-xs text-muted-foreground"
-                  :title="contact.contactId"
-                >
-                  {{ contact.contactId }}
-                </p>
-              </div>
-              <div class="flex items-center gap-2">
-                <Badge
-                  v-if="bindingMap.get(contact.contactId)"
-                  variant="secondary"
-                  class="max-w-28 shrink-0"
-                >
-                  <span class="truncate">
-                    {{ bindingMap.get(contact.contactId)?.definition.name }}
-                  </span>
-                </Badge>
-                <span v-else class="shrink-0 text-xs text-muted-foreground">
-                  使用共享默认
-                </span>
-                <Select
-                  :model-value="bindingMap.get(contact.contactId)?.definitionId ?? ''"
-                  :disabled="savingBindingContactId === contact.contactId"
-                  @update:model-value="changeBinding(contact.contactId, String($event))"
-                >
-                  <SelectTrigger size="sm" class="ml-auto h-8 min-w-0 flex-1">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="">使用共享默认</SelectItem>
-                    <SelectItem
-                      v-for="employee in activeEmployees"
-                      :key="employee.definitionId"
-                      :value="employee.definitionId"
-                    >
-                      {{ employee.name }}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <AvatarImage
+                :contact-id="contact.contactId"
+                :fallback-text="contactLabel(contact)"
+                :size="28"
+              />
+              <span class="min-w-0 flex-1 truncate text-sm font-medium">
+                {{ contactLabel(contact) }}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                class="size-7 shrink-0 text-destructive hover:text-destructive"
+                title="移出名单"
+                :disabled="savingBindingContactId === contact.contactId"
+                @click="removeRosterMember(contact.contactId)"
+              >
+                <Trash2 class="size-3.5" />
+              </Button>
             </div>
           </div>
+
+          <!-- 可添加（搜索过滤） -->
+          <template v-if="selected && addableContacts.length">
+            <div class="border-t border-border pb-1 pt-3 text-xs font-semibold text-muted-foreground">
+              可添加
+            </div>
+            <div class="divide-y">
+              <button
+                v-for="contact in addableContacts.slice(0, 20)"
+                :key="contact.contactId"
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent"
+                :disabled="savingBindingContactId === contact.contactId"
+                @click="addRosterMember(contact.contactId)"
+              >
+                <AvatarImage
+                  :contact-id="contact.contactId"
+                  :fallback-text="contactLabel(contact)"
+                  :size="24"
+                />
+                <span class="min-w-0 flex-1 truncate text-sm">{{ contactLabel(contact) }}</span>
+                <Loader2
+                  v-if="savingBindingContactId === contact.contactId"
+                  class="size-3.5 shrink-0 animate-spin text-muted-foreground"
+                />
+                <Plus v-else class="size-3.5 shrink-0 text-muted-foreground" />
+              </button>
+            </div>
+            <p
+              v-if="addableContacts.length > 20 && !search.trim()"
+              class="pt-2 text-xs text-muted-foreground"
+            >
+              共 {{ addableContacts.length }} 人可添加，输入关键词缩小范围。
+            </p>
+          </template>
         </CardContent>
       </Card>
     </div>
 
     <Separator class="opacity-0" />
   </div>
+    <!-- 新建 AI Employee（Dialog） -->
+    <Dialog :open="creating" @update:open="(v: boolean) => (creating = v)">
+      <DialogContent class="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>建立 AI Employee</DialogTitle>
+          <DialogDescription>完整 Prompt 文本由版本管理。</DialogDescription>
+        </DialogHeader>
+        <form class="grid gap-4" @submit.prevent="createEmployee">
+          <div class="space-y-2">
+            <Label for="new-emp-key">Key</Label>
+            <Input id="new-emp-key" v-model="newKey" placeholder="product-support" />
+          </div>
+          <div class="space-y-2">
+            <Label for="new-emp-name">名称</Label>
+            <Input id="new-emp-name" v-model="newName" placeholder="产品支持顾问" />
+          </div>
+          <div class="space-y-2">
+            <Label for="new-emp-desc">说明</Label>
+            <Input
+              id="new-emp-desc"
+              v-model="newDescription"
+              placeholder="处理产品故障与售后咨询"
+            />
+          </div>
+          <div class="space-y-2">
+            <Label for="new-emp-prompt">首个 Prompt 草稿</Label>
+            <Textarea
+              id="new-emp-prompt"
+              v-model="newPrompt"
+              rows="6"
+              placeholder="描述这个 AI Employee 的工作目标、语气、业务范围与限制。"
+            />
+          </div>
+          <div class="flex justify-end gap-2">
+            <Button type="button" variant="outline" size="sm" @click="creating = false">
+              取消
+            </Button>
+            <Button type="submit" :disabled="creating || !newKey || !newName || !newPrompt">
+              {{ creating ? "建立中" : "建立草稿" }}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
 </template>

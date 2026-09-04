@@ -1,4 +1,6 @@
 <script setup lang="ts">
+const emit = defineEmits<{ saved: [] }>();
+
 /**
  * 设置中心 · ⑥ 安全分区：白名单入口 + 群聊策略（自接待编排页收编）+
  * 审计日志入口。群策略读扩展设置 groupChat 键（Core group-chat-policy 消费）。
@@ -78,7 +80,7 @@ const GROUP_MODE_OPTIONS: Array<{
 ];
 
 const ENTRY_LINKS: Array<{ label: string; desc: string; to: string }> = [
-  { label: "联系人白名单", desc: "逐联系人启用/停用 AI", to: "/whitelist" },
+  { label: "联系人白名单", desc: "逐联系人启用/停用 AI（管理页内）", to: "/admin" },
   { label: "审计日志", desc: "设置变更 / Handoff / 运营操作", to: "/system/audit" },
   { label: "用户与角色", desc: "账号与权限管理", to: "/system/users" },
 ];
@@ -188,6 +190,7 @@ async function save() {
       groupChat: { ...config.value },
     });
     notice.value = "已保存；30 秒内生效（无需重启）";
+    emit("saved");
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "保存失败";
   } finally {

@@ -21,6 +21,8 @@ import {
   Users,
   LogOut,
   type LucideIcon,
+  Clock,
+
 } from "lucide-vue-next";
 import { useWeflowAuthStore } from "../auth-store";
 import { Button } from "../components/ui/button";
@@ -42,6 +44,7 @@ const workbenchItems: NavItem[] = [
   { to: "/conversations", icon: MessageSquare, label: "会话" },
   { to: "/knowledge", icon: BookOpen, label: "知识库" },
   { to: "/assets", icon: Images, label: "素材" },
+  { to: "/scheduled-sends", icon: Clock, label: "定时任务" },
 ];
 
 const adminItems: NavItem[] = [
@@ -137,7 +140,7 @@ onMounted(applyTheme);
 
       <Separator class="bg-sidebar-border" />
 
-      <div class="flex items-center gap-2 p-2">
+      <div class="flex items-center gap-1 p-2" :class="collapsed && 'flex-col'">
         <router-link
           to="/profile"
           class="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 transition-colors hover:bg-sidebar-accent"
@@ -158,9 +161,21 @@ onMounted(applyTheme);
           </span>
         </router-link>
         <Button
+          variant="ghost"
+          size="icon"
+          class="shrink-0"
+          :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'"
+          :aria-label="theme === 'light' ? '切换深色模式' : '切换浅色模式'"
+          @click="toggleTheme"
+        >
+          <Moon v-if="theme === 'light'" class="size-4" />
+          <Sun v-else class="size-4" />
+        </Button>
+        <Button
           v-if="!collapsed"
           variant="ghost"
           size="icon"
+          class="shrink-0"
           title="退出登录"
           aria-label="退出登录"
           @click="signOut"
@@ -170,20 +185,8 @@ onMounted(applyTheme);
       </div>
     </aside>
 
-    <div class="flex min-w-0 flex-1 flex-col">
-      <header class="flex h-14 shrink-0 items-center justify-end border-b border-border px-4">
-        <Button
-          variant="ghost"
-          size="icon"
-          :title="theme === 'light' ? '切换深色模式' : '切换浅色模式'"
-          :aria-label="theme === 'light' ? '切换深色模式' : '切换浅色模式'"
-          @click="toggleTheme"
-        >
-          <Moon v-if="theme === 'light'" class="size-4" />
-          <Sun v-else class="size-4" />
-        </Button>
-      </header>
-      <main class="min-h-0 flex-1 overflow-auto" tabindex="-1">
+    <div class="min-w-0 flex-1">
+      <main class="h-full overflow-auto" tabindex="-1">
         <router-view />
       </main>
     </div>

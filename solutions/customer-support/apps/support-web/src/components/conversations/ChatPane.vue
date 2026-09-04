@@ -5,7 +5,7 @@
  * 状态与动作全部由父级注入，本组件不持有业务状态。
  */
 import { computed, ref } from "vue";
-import { Ellipsis, ArrowDown } from "lucide-vue-next";
+import { Ellipsis, ArrowDown, Loader2 } from "lucide-vue-next";
 import { useRoute } from "vue-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -101,6 +101,7 @@ const emit = defineEmits<{
   "open-assets": [];
   "clear-reply": [];
   "message-contextmenu": [event: MouseEvent, message: Message];
+  "avatar-contextmenu": [event: MouseEvent, message: Message];
   "retry-message": [message: Message];
   "check-outcome": [message: Message];
   "open-trace": [turnId: string];
@@ -108,6 +109,16 @@ const emit = defineEmits<{
 
 const route = useRoute();
 const messagePane = ref<HTMLElement | null>(null);
+
+/** 无限滚动：滚近顶部自动加载更早；同时向父级同步 atBottom 状态 */
+function onPaneScroll() {
+  emit("scroll");
+  const pane = messagePane.value;
+  if (!pane) return;
+  if (pane.scrollTop <= 48 && props.nextCursor && !props.loadingOlder && !props.loadingConversation) {
+    emit("load-older");
+  }
+}
 defineExpose({ messagePane });
 
 const selectedDisplay = computed(() =>
@@ -179,7 +190,7 @@ function onComposerTextUpdate(value: string) {
             </DropdownMenu>
           </div>
         </div>
-        <p class="mt-0.5 text-xs text-muted-foreground">{{ briefingLine }}</p>
+        <p class="mt-0.5 truncate text-xs text-muted-foreground" :title="briefingLine">{{ briefingLine }}</p>
         <p v-if="transferPendingLabel" class="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
           <span>{{ transferPendingLabel }}</span>
           <button
@@ -200,22 +211,16 @@ function onComposerTextUpdate(value: string) {
         </AlertDescription>
       </Alert>
 
-      <!-- 消息滚动区 -->
+      <!-- 消息滚动区：滚到顶自动加载更早（无限滚动） -->
       <div
         ref="messagePane"
         class="min-h-0 flex-1 overflow-auto px-5 py-4"
-        @scroll="emit('scroll')"
+        @scroll="onPaneScroll"
       >
-        <Button
-          v-if="nextCursor && !loadingConversation"
-          variant="outline"
-          size="sm"
-          class="mx-auto mb-3 block rounded-full"
-          :disabled="loadingOlder"
-          @click="emit('load-older')"
-        >
-          {{ loadingOlder ? "正在加载…" : "加载更早的消息" }}
-        </Button>
+        <div v-if="loadingOlder" class="mb-3 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          <Loader2 class="size-3.5 animate-spin" />
+          正在加载更早的消息…
+        </div>
 
         <template v-if="loadingConversation">
           <div v-for="i in 4" :key="i" class="my-3 flex" :class="i % 2 === 0 ? 'justify-end' : ''">
@@ -235,6 +240,7 @@ function onComposerTextUpdate(value: string) {
             :retry-busy="retryBusy"
             :outcome-busy="outcomeBusy"
             @contextmenu="(event, m) => emit('message-contextmenu', event, m)"
+            @avatar-contextmenu="(event, m) => emit('avatar-contextmenu', event, m)"
             @retry="(m) => emit('retry-message', m)"
             @check-outcome="(m) => emit('check-outcome', m)"
           />

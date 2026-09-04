@@ -9,7 +9,6 @@ import ConversationsV2 from "./views/ConversationsV2.vue";
 import KnowledgeV2 from "./views/KnowledgeV2.vue";
 import AdminView from "./views/AdminView.vue";
 import AiEmployeesView from "./views/AiEmployeesView.vue";
-import WhitelistView from "./views/WhitelistView.vue";
 import ProfileView from "./views/ProfileView.vue";
 import AssetsView from "./views/AssetsView.vue";
 import LoginView from "./views/LoginView.vue";
@@ -52,6 +51,11 @@ export function createSupportRouter(pinia?: Pinia): Router {
             component: ConversationsV2,
           },
           {
+            path: "scheduled-sends",
+            name: "scheduledSends",
+            component: () => import("./views/ScheduledSendsView.vue"),
+          },
+          {
             path: "knowledge",
             name: "knowledge",
             component: KnowledgeV2,
@@ -84,12 +88,6 @@ export function createSupportRouter(pinia?: Pinia): Router {
             path: "ai-employees/:definitionId/prompt",
             name: "aiEmployeePrompt",
             component: AiEmployeesView,
-            meta: { admin: true },
-          },
-          {
-            path: "whitelist",
-            name: "whitelist",
-            component: WhitelistView,
             meta: { admin: true },
           },
           {

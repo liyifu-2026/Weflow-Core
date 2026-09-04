@@ -1,4 +1,6 @@
 <script setup lang="ts">
+const emit = defineEmits<{ saved: [] }>();
+
 /**
  * 设置中心 · ② 模型分区：统一模型注册表 + 槽位绑定 + 健康状态。
  * 模型 = 名称 + 端点 + 密钥 + 能力标签（文本/视觉/语音）+ 故障转移链。
@@ -157,6 +159,7 @@ async function saveModel(model: ModelEntry) {
     );
     cancelEdit(model.modelId);
     notice.value = "已保存；约 15 秒内生效，无需重启";
+    emit("saved");
     await load();
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "模型保存失败";

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+const emit = defineEmits<{ saved: [] }>();
+
 /**
  * 设置中心 · ③ 知识库分区：通用 RESTful 连接器。
  * 连接器类型 / 检索端点 / 认证方式 / 请求响应字段映射 JSON / 管理端点可选。
@@ -132,6 +134,7 @@ async function save() {
       knowledgeConnector: { ...config.value },
     });
     notice.value = "已保存；30 秒内生效（无需重启）";
+    emit("saved");
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "保存失败";
   } finally {

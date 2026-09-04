@@ -5,12 +5,11 @@
  * 独立导航入口（非会话内弹窗）：全量网格浏览、分类切换、搜索、
  * 上传入空间、改名/删除整理、分页加载。轻量：keyset 分页按需取数。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import {
   CircleAlert,
   FileText,
   FolderOpen,
-  MoreHorizontal,
   Pencil,
   Search,
   Trash2,
@@ -171,7 +170,25 @@ function formatDate(value: string): string {
     : date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
 
-onMounted(load);
+// 无限滚动：哨兵进入视口即续页（哨兵随 nextCursor 条件渲染，需动态观察）
+const sentinel = ref<HTMLElement | null>(null);
+let observer: IntersectionObserver | null = null;
+
+function observeSentinel() {
+  if (sentinel.value) observer?.observe(sentinel.value);
+}
+onMounted(() => {
+  void load();
+  observer = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting) && nextCursor.value && !loadingMore.value) {
+      void loadMore();
+    }
+  });
+});
+onUnmounted(() => observer?.disconnect());
+watch(sentinel, (el) => {
+  if (el) observeSentinel();
+});
 </script>
 
 <template>
@@ -284,7 +301,7 @@ onMounted(load);
               {{ formatAssetSize(asset.size) }} · {{ formatDate(asset.createdAt) }}
             </span>
           </div>
-          <div class="flex items-center gap-1 p-1.5 pt-0">
+          <div class="flex items-center gap-1 p-1.5 pt-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
             <Button
               variant="ghost"
               size="sm"
@@ -335,11 +352,13 @@ onMounted(load);
           </div>
         </div>
       </div>
-      <div v-if="nextCursor" class="flex justify-center pt-6">
-        <Button variant="outline" :disabled="loadingMore" @click="loadMore">
-          <MoreHorizontal class="size-4" />
-          {{ loadingMore ? "加载中…" : "加载更多" }}
-        </Button>
+      <!-- 无限滚动哨兵：进入视口即续页 -->
+      <div
+        v-if="nextCursor"
+        ref="sentinel"
+        class="flex justify-center pt-6 text-xs text-muted-foreground"
+      >
+        {{ loadingMore ? "正在加载…" : "" }}
       </div>
     </template>
   </div>

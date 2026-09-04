@@ -43,6 +43,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   contextmenu: [event: MouseEvent, message: Message];
+  /** 右键头像（入站）：拍一拍入口 */
+  "avatar-contextmenu": [event: MouseEvent, message: Message];
   retry: [message: Message];
   "check-outcome": [message: Message];
 }>();
@@ -91,11 +93,32 @@ function bubbleMetaLabel(message: Message): string {
 
     <template v-else>
       <div class="flex w-full items-start gap-1.5" :class="message.direction === 'outbound' ? 'flex-row-reverse' : ''">
-        <!-- 入站：客户头像 -->
+        <!-- 头像槽（DOM 首位）：入站在左；出站行 flex-row-reverse 反转后落在气泡右侧。
+             入站头像可右键 → 拍一拍（见 avatar-contextmenu）。 -->
         <AvatarImage
           v-if="message.direction === 'inbound' && contactId"
           :contact-id="contactId"
           :fallback-text="message.senderName || contactFallbackName || ''"
+          :size="28"
+          class="mt-0.5 shrink-0"
+          @contextmenu.stop.prevent="emit('avatar-contextmenu', $event, message)"
+        />
+        <img
+          v-else-if="message.actorType === 'agent' && message.actorAvatarUrl"
+          :src="message.actorAvatarUrl"
+          alt="AI 员工头像"
+          class="mt-0.5 size-7 shrink-0 rounded-full object-cover"
+          @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
+        />
+        <span
+          v-else-if="message.actorType === 'agent'"
+          class="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-secondary text-xs font-bold text-secondary-foreground"
+        >A</span>
+        <StaffAvatar
+          v-else-if="message.direction === 'outbound'"
+          :user-id="message.actorId || auth.user?.userId"
+          :avatar-url="auth.user?.avatarUrl"
+          :fallback-text="auth.user?.displayName || auth.user?.username || '我'"
           :size="28"
           class="mt-0.5 shrink-0"
         />
@@ -204,27 +227,6 @@ function bubbleMetaLabel(message: Message): string {
             </button>
           </div>
         </div>
-
-        <!-- 出站：AI 员工头像 / 人工客服头像 -->
-        <img
-          v-if="message.actorType === 'agent' && message.actorAvatarUrl"
-          :src="message.actorAvatarUrl"
-          alt="AI 员工头像"
-          class="mt-0.5 size-7 shrink-0 rounded-full object-cover"
-          @error="(e: Event) => (e.target as HTMLImageElement).style.display = 'none'"
-        />
-        <span
-          v-else-if="message.actorType === 'agent'"
-          class="mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full border border-border bg-secondary text-xs font-bold text-secondary-foreground"
-        >A</span>
-        <StaffAvatar
-          v-else-if="message.direction === 'outbound' && message.actorType !== 'agent'"
-          :user-id="message.actorId || auth.user?.userId"
-          :avatar-url="auth.user?.avatarUrl"
-          :fallback-text="auth.user?.displayName || auth.user?.username || '我'"
-          :size="28"
-          class="mt-0.5 shrink-0"
-        />
       </div>
     </template>
   </div>

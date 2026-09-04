@@ -52,6 +52,31 @@ type AgentTurn = {
 const route = useRoute();
 const router = useRouter();
 const status = ref<StatusResponse | null>(null);
+
+// 通道 Host 连接健康（原设置中心「通道」分区并入，只读）
+type OperatorStatus = {
+  channelOnline: boolean;
+  queuedTurnCount: number;
+  runningTurnCount: number;
+  pendingHandoffCount: number;
+  lastCompletedTurnAt: string | null;
+};
+const channelStatus = ref<OperatorStatus | null>(null);
+const channelLoading = ref(false);
+const channelError = ref("");
+
+async function loadChannelStatus() {
+  channelLoading.value = true;
+  channelError.value = "";
+  try {
+    channelStatus.value = await api<OperatorStatus>("/api/v1/admin/operator-status");
+  } catch (reason) {
+    channelError.value =
+      reason instanceof Error ? reason.message : "通道状态加载失败";
+  } finally {
+    channelLoading.value = false;
+  }
+}
 const turns = ref<AgentTurn[]>([]);
 const loading = ref(true);
 const error = ref("");
@@ -189,6 +214,7 @@ function stopAutoRefresh() {
 
 onMounted(() => {
   void load();
+  void loadChannelStatus();
   startAutoRefresh();
 });
 onBeforeUnmount(stopAutoRefresh);
@@ -328,6 +354,44 @@ onBeforeUnmount(stopAutoRefresh);
         <p class="text-sm">暂无可展示的服务</p>
       </div>
     </template>
+
+    <!-- 通道 Host（原设置中心「通道」分区并入） -->
+    <section class="mt-6">
+      <h2 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        通道
+      </h2>
+      <Card class="gap-0 overflow-hidden py-0">
+        <CardContent class="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div class="flex items-center gap-3">
+            <Badge :variant="channelStatus?.channelOnline ? 'secondary' : 'destructive'">
+              {{ channelLoading ? "检测中…" : channelStatus?.channelOnline ? "在线（15 秒内有事件心跳）" : "离线 / 未运行" }}
+            </Badge>
+            <span class="text-sm text-muted-foreground">Channel Host（微信通道）</span>
+          </div>
+          <div
+            v-if="channelStatus"
+            class="flex flex-wrap items-center gap-4 text-xs text-muted-foreground"
+          >
+            <span>排队 Turn {{ channelStatus.queuedTurnCount }}</span>
+            <span>运行中 {{ channelStatus.runningTurnCount }}</span>
+            <span>待人工 {{ channelStatus.pendingHandoffCount }}</span>
+            <span v-if="channelStatus.lastCompletedTurnAt">
+              最近完成 {{ new Date(channelStatus.lastCompletedTurnAt).toLocaleTimeString() }}
+            </span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="channelLoading"
+            @click="loadChannelStatus"
+          >
+            <RotateCw class="size-4" :class="channelLoading && 'animate-spin'" />
+            刷新
+          </Button>
+        </CardContent>
+      </Card>
+      <p v-if="channelError" class="mt-2 text-xs text-destructive">{{ channelError }}</p>
+    </section>
 
     <details class="mt-8">
       <summary class="cursor-pointer text-sm font-medium text-foreground">

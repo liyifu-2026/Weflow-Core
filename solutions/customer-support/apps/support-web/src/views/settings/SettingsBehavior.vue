@@ -1,4 +1,6 @@
 <script setup lang="ts">
+const emit = defineEmits<{ saved: [] }>();
+
 /**
  * 设置中心 · ④ 行为分区：全局运行开关（含合并窗口——R2 补 UI）
  * + Kill Switch 瞬时暂停。对接 Core GET/PATCH /api/v1/admin/runtime-settings。
@@ -100,6 +102,7 @@ async function patch(key: keyof RuntimeSettings) {
     );
     settings.value = result.settings;
     notice.value = "已保存，即时生效";
+    emit("saved");
   } catch (reason) {
     settings.value = snapshot;
     error.value = reason instanceof Error ? reason.message : "保存失败";

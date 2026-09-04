@@ -48,10 +48,7 @@ async function submit() {
     <form class="w-full max-w-sm space-y-6" @submit.prevent="submit">
       <div class="space-y-2 text-center">
         <p class="text-2xl font-semibold tracking-tight">WeFlow</p>
-        <h1 class="text-lg font-medium">登录 Weflow</h1>
-        <p class="text-sm text-muted-foreground">
-          使用由管理员发放的 Weflow 账号
-        </p>
+        <h1 class="text-lg font-medium">使用由管理员发放的 Weflow 账号</h1>
       </div>
 
       <Alert v-if="error" variant="destructive" role="alert">
@@ -86,7 +83,7 @@ async function submit() {
         :disabled="submitting || !username || !password"
       >
         <Loader2 v-if="submitting" class="size-4 animate-spin" />
-        <span>{{ submitting ? "验证中" : "登录 Weflow" }}</span>
+        <span>{{ submitting ? "验证中" : "登录" }}</span>
       </Button>
     </form>
   </div>

@@ -63,7 +63,6 @@ import {
 import KnowledgeBaseEditorDialog from "./KnowledgeBaseEditorDialog.vue";
 import KnowledgeFaq from "./KnowledgeFaq.vue";
 import KnowledgePreviewDrawer from "./KnowledgePreviewDrawer.vue";
-import KnowledgeStats from "./KnowledgeStats.vue";
 import KnowledgeUploadDialog from "./KnowledgeUploadDialog.vue";
 import KnowledgeWiki from "./KnowledgeWiki.vue";
 
@@ -491,7 +490,6 @@ onUnmounted(() => {
 
 <template>
   <div class="flex flex-col gap-4">
-    <KnowledgeStats />
 
     <!-- 工具栏：知识库选择 + 搜索 + 筛选 + 主操作 -->
     <div class="flex flex-wrap items-center gap-2">

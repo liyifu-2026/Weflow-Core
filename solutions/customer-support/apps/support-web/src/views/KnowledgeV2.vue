@@ -75,7 +75,8 @@ const mode = computed<KnowledgeMode>({
     if (typeof raw === "string" && MODES.some((item) => item.key === raw)) {
       return raw as KnowledgeMode;
     }
-    return "validate";
+    // 默认内容模式；验证模式由会话深链（?mode=validate）触发
+    return "content";
   },
   set: (value: KnowledgeMode) => {
     void router.replace({ query: { ...route.query, mode: value } });
@@ -158,17 +159,6 @@ function openEvidence(item: WeflowEvidence) {
   );
 }
 
-/** 跳转到外部知识库管理界面（Core 代管登录 → bridge.html → 知识库 UI） */
-const manageHref = computed(() => {
-  const params = new URLSearchParams();
-  const target =
-    typeof route.query.kb === "string" && route.query.kb
-      ? `/platform/knowledge-bases/${encodeURIComponent(route.query.kb)}`
-      : "/";
-  params.set("target", target);
-  return `/api/v1/knora/redirect?${params.toString()}`;
-});
-
 watch(origin, (value) => navigation.setOrigin(value), { immediate: true });
 onMounted(() => {
   // 从会话/策略带入的验证：进入验证模式且已带问题 → 自动验证
@@ -182,19 +172,11 @@ onMounted(() => {
   <div class="flex flex-col gap-6 p-6">
     <header class="flex flex-wrap items-center justify-between gap-3">
       <h1 class="text-2xl font-semibold tracking-tight">知识</h1>
-      <div class="flex items-center gap-2">
-        <Button variant="outline" size="sm" @click="mode = 'content'">浏览知识</Button>
-        <Button variant="outline" size="sm" as-child>
-          <a :href="manageHref" target="_blank" rel="noopener">管理知识库</a>
-        </Button>
-      </div>
-    </header>
-
-    <div
-      class="inline-flex w-fit rounded-md border border-border bg-muted p-0.5"
-      role="tablist"
-      aria-label="知识工作模式"
-    >
+      <div
+        class="inline-flex rounded-md border border-border bg-muted p-0.5"
+        role="tablist"
+        aria-label="知识工作模式"
+      >
       <button
         v-for="item in MODES"
         :key="item.key"
@@ -211,6 +193,7 @@ onMounted(() => {
         {{ item.label }}
       </button>
     </div>
+    </header>
 
     <template v-if="mode === 'validate'">
       <section class="flex flex-col gap-3">

@@ -4,6 +4,8 @@
  * 五个视图的内容。替代旧 WfInspector 内联模板；仍用 WfInspector 外壳
  * （AuditView 等共享组件不属于本批边界，外壳在第 6 批统一处理）。
  */
+import { ref, watch } from "vue";
+import { api } from "../../api";
 import { useWeflowAuthStore } from "../../auth-store";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -79,6 +81,58 @@ const emit = defineEmits<{
 }>();
 
 const auth = useWeflowAuthStore();
+
+// 定时消息（SCHEDULED-SEND-PLAN）：待发/待审/最近作废项进入上下文面板，
+// 人工客服在会话详情即可知晓 agent 的既定承诺。
+const scheduledSends = ref<
+  Array<{
+    scheduledSendId: string;
+    content: string;
+    status: "pending" | "fired" | "cancelled" | "frozen";
+    sendAt: string;
+    cancelReason: string | null;
+  }>
+>([]);
+
+async function loadScheduledSends() {
+  const conversationId = props.selected?.conversationId;
+  if (!conversationId || !props.open) {
+    scheduledSends.value = [];
+    return;
+  }
+  try {
+    const result = await api<{
+      scheduledSends: Array<{
+        scheduledSendId: string;
+        content: string;
+        status: "pending" | "fired" | "cancelled" | "frozen";
+        sendAt: string;
+        cancelReason: string | null;
+      }>;
+    }>(`/api/v1/conversations/${encodeURIComponent(conversationId)}/scheduled-sends`);
+    scheduledSends.value = result.scheduledSends.filter(
+      (item) => item.status !== "fired",
+    );
+  } catch {
+    scheduledSends.value = [];
+  }
+}
+
+watch(
+  () => [props.open, props.view, props.selected?.conversationId] as const,
+  ([open, view]) => {
+    if (open && view === "context") void loadScheduledSends();
+  },
+  { immediate: true },
+);
+
+function scheduledStatusLabel(status: ScheduledSendStatus): string {
+  if (status === "pending") return "待发送";
+  if (status === "frozen") return "待审";
+  return "已作废";
+}
+
+type ScheduledSendStatus = "pending" | "fired" | "cancelled" | "frozen";
 const note = defineModel<string>("note", { default: "" });
 const tags = defineModel<string>("tags", { default: "" });
 
@@ -132,6 +186,21 @@ function historyActorLabel(message: Message) {
         >
           查看最近决策轨迹 →
         </Button>
+      </section>
+      <section v-if="scheduledSends.length" class="border-b border-border py-4">
+        <span class="mb-1 block text-xs font-bold text-muted-foreground">定时消息</span>
+        <div v-for="item in scheduledSends" :key="item.scheduledSendId" class="mt-1 first:mt-0">
+          <p class="m-0 flex items-center gap-2 leading-relaxed">
+            <Badge :variant="item.status === 'pending' ? 'secondary' : item.status === 'frozen' ? 'destructive' : 'outline'">
+              {{ scheduledStatusLabel(item.status) }}
+            </Badge>
+            <span class="text-xs text-muted-foreground">原定 {{ messageTime(item.sendAt) }}</span>
+          </p>
+          <p class="m-0 text-sm leading-relaxed">{{ item.content }}</p>
+          <p v-if="item.status === 'cancelled' && item.cancelReason === 'new_inbound'" class="m-0 text-xs text-muted-foreground">
+            因用户新消息作废，AI 将在回复中处理
+          </p>
+        </div>
       </section>
       <section
         v-if="handoff"
