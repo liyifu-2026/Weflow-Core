@@ -1,6 +1,6 @@
 # Weflow Console — Changelog
 
-> 版本化变更记录。详细回归证据见 `RELEASE_CHECKLIST.md`。
+> 版本化变更记录。
 
 ## Unreleased
 

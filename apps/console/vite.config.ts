@@ -41,8 +41,8 @@ const PLUGIN_STATIC_ROOT = fileURLToPath(
 /**
  * solutionId → 磁盘目录名 映射（本地开发）。
  * Solution Pack 的 metadata.id 是 weflow.customer-support，而工作区目录
- * 是 customer-support；store 解包目录则按 id 命名。生产走 store（见
- * docs/solution-assets.md），dev 用此映射落到工作区源码目录。
+ * 是 customer-support；store 解包目录则按 id 命名。store 机制已退役，
+ * 此映射仅服务本地开发。
  */
 const SOLUTION_ID_DIR: Record<string, string> = {
   "weflow.customer-support": "customer-support",
@@ -82,8 +82,7 @@ const STATIC_MIME_TYPES: Record<string, string> = {
  * 例如 entry `/plugins/customer-support/apps/support-web/dist/support-console.js`
  * 在本地映射到 weflow-solutions/solutions/customer-support/apps/support-web/dist/。
  *
- * 生产形态不经过本中间件：由 web 服务器把这两个前缀托管到解包目录
- * （见 apps/console/docs/solution-assets.md）。
+ * 原「生产由 web 服务器托管这两个前缀」的形态已随 Solution Pack 机制退役。
  */
 function solutionAssetsServe() {
   function handle(req: any, res: any, next: any) {
