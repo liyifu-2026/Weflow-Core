@@ -31,6 +31,7 @@ import {
   collectSkillHintsAfterKnowledge,
 } from "./reply-policy.js";
 import { parseAgentDecision } from "./agent-decision.js";
+import { decisionFieldContractText } from "./decision-contract.js";
 import { agentActionToDecision } from "./agent-action-to-decision.js";
 import { executeToolPlan } from "./execute-tool-plan.js";
 import {
@@ -510,15 +511,15 @@ export async function processPlannedToolTurn(
       );
 
   const decisionInstruction = toolFailure
-    ? "请基于以上情况生成最终决策：可基于既有对话信息直接作答，或坦诚告知对方暂时无法完成该项查询；不得虚构工具结果。"
-    : "请基于工具结果生成自然语言或结构化最终决策；不得依据常识补全工具结果或声称执行了尚未执行的动作。";
+    ? "请基于以上情况生成最终决策：可基于既有对话信息直接作答，或坦诚告知对方暂时无法完成该项查询；不得虚构工具结果。只输出 JSON。"
+    : "请基于工具结果输出最终决策：只输出 JSON，不要 Markdown，不要自然语言叙述；不得依据常识补全工具结果或声称执行了尚未执行的动作。\n- " + decisionFieldContractText();
 
   const response = await completeAgentDecision(
     client,
     [
       {
         role: "system",
-        content: `${strategySystem}${context.prompt}${toolFacts}${skillHintSection}\n${decisionInstruction}next_action 必须为 reply、ask_for_information、handoff、no_action、wait 或 end_session${budgetExhausted ? "，不得再次调用工具（工具步数预算已耗尽）" : "；确有必要时可再次调用 retrieve_knowledge 或 call_tool 继续查证"}。`,
+        content: `${strategySystem}${context.prompt}${toolFacts}${skillHintSection}\n${decisionInstruction}next_action 必须为 reply、ask_for_information、handoff、no_action、wait、end_session 或 schedule_send${budgetExhausted ? "，不得再次调用工具（工具步数预算已耗尽）" : "；确有必要时可再次调用 retrieve_knowledge 或 call_tool 继续查证"}。`,
       },
       ...context.history,
     ],
