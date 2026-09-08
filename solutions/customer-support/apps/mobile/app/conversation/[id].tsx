@@ -65,6 +65,10 @@ import { HandoffHistorySheet } from "@/handoffs/handoff-history-sheet";
 import { deriveConversationUiState } from "@/conversations/ui-state";
 import { useConversationList } from "@/conversations/use-conversation-list";
 import { notifyConversationRefresh } from "@/conversations/sync-store";
+import {
+  REALTIME_REFRESH_DEBOUNCE_MS,
+  subscribeConversationEvents,
+} from "@/realtime/conversation-event-stream";
 
 
 import { useTheme, useThemedStyles } from "@/ui/theme-context";
@@ -80,6 +84,10 @@ import { ArchivedDraftPanel, ContactProfileModal, ConversationMenuModal } from "
 import { CollaborationResponseModal, CollaborationSummary } from "@/conversation/collaboration-ui";
 import { Composer } from "@/conversation/composer";
 import { ActionPanel } from "@/conversation/action-panel";
+
+/** 结果未知消息的后台复查节奏：约 20s 内自动确认；超时后保留手动点击入口 */
+const OUTCOME_RECHECK_INTERVAL_MS = 2_500;
+const OUTCOME_RECHECK_MAX_ATTEMPTS = 8;
 
 /** 会话详情页面组件 */
 export default function ConversationScreen() {
@@ -104,6 +112,13 @@ export default function ConversationScreen() {
   const [draftStatus, setDraftStatus] = useState<LocalDraft["status"]>();
   const [archivedDraftId, setArchivedDraftId] = useState<string>();
   const [draftFailure, setDraftFailure] = useState<SendFailure>();
+  /** 结果未知的消息：后台自动复查落库结果，免去手动点气泡才能继续发送 */
+  const [pendingOutcomeKey, setPendingOutcomeKey] = useState<string>();
+  /** 发送期间的软提示（如「发送期间客户又发了新消息」），几秒后自动消失 */
+  const [sendNotice, setSendNotice] = useState<string>();
+  const sendNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const [reviewedAtRevision, setReviewedAtRevision] = useState<number | null>(
     null,
   );
@@ -200,6 +215,49 @@ export default function ConversationScreen() {
   useEffect(() => {
     revisionRef.current = conversationRevision;
   }, [conversationRevision]);
+  // 发送结果未知：后台自动复查（上限 8 次 / 约 20s），确认后自动解锁输入框。
+  useEffect(() => {
+    if (!session || !id || !pendingOutcomeKey) return undefined;
+    const pending = messagesRef.current.find(
+      (item) => item.clientRequestId === pendingOutcomeKey,
+    );
+    if (!pending) return undefined;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      if (cancelled) return;
+      attempts += 1;
+      void checkUnknownOutcome(pending, { silent: true }).finally(() => {
+        if (cancelled || attempts >= OUTCOME_RECHECK_MAX_ATTEMPTS) return;
+        timer = setTimeout(tick, OUTCOME_RECHECK_INTERVAL_MS);
+      });
+    };
+    timer = setTimeout(tick, OUTCOME_RECHECK_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+    // checkUnknownOutcome 每次渲染都会重建，纳入依赖会让复查定时器永远重启；
+    // 这里只按 pendingOutcomeKey 重排复查（session/id 变化时整体重挂）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOutcomeKey, id, session]);
+  // 软提示定时器随组件卸载清理
+  useEffect(
+    () => () => {
+      if (sendNoticeTimerRef.current) clearTimeout(sendNoticeTimerRef.current);
+    },
+    [],
+  );
+  /** 非阻塞软提示：不打断操作，4 秒后自动消失 */
+  function showSendNotice(text: string) {
+    setSendNotice(text);
+    if (sendNoticeTimerRef.current) clearTimeout(sendNoticeTimerRef.current);
+    sendNoticeTimerRef.current = setTimeout(
+      () => setSendNotice(undefined),
+      4_000,
+    );
+  }
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
@@ -333,6 +391,7 @@ export default function ConversationScreen() {
                 );
               } else {
                 setDraftFailure("outcome_unknown");
+                setPendingOutcomeKey(storedPending.clientRequestId);
               }
             } else {
               setDraft(savedDraft.content);
@@ -405,7 +464,7 @@ export default function ConversationScreen() {
     if (!session || !id || !handoff?.state.cycleId) return;
     void markBriefRead(session.user.userId, id, handoff.state.cycleId);
   }, [session, id, handoff?.state.cycleId]);
-  // 实时轮询：应用活跃时每 15 秒刷新聊天记录、人工接管和协作状态
+  // 实时对账：SSE 事件驱动为主，这里每 30 秒回拉一次兜底（含接管/协作状态）
   useEffect(() => {
     if (!session || !id || !isActive) return;
     let disposed = false;
@@ -522,11 +581,24 @@ export default function ConversationScreen() {
         setCollaborations(collaborationResult.value);
       }
     }
-    const interval = setInterval(() => void refreshLiveState(), 15_000);
+    const interval = setInterval(() => void refreshLiveState(), 30_000);
     void refreshLiveState();
+    // 实时事件：本会话有新内容立即回拉（一轮 Agent 回复连发多条，去抖合并）。
+    // 15s 轮询保留为对账兜底（SSE 断线/不支持时仍然工作）。
+    let realtimeTimer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = subscribeConversationEvents((event) => {
+      if (event.conversationId !== id) return;
+      if (realtimeTimer) clearTimeout(realtimeTimer);
+      realtimeTimer = setTimeout(() => {
+        realtimeTimer = undefined;
+        void refreshLiveState();
+      }, REALTIME_REFRESH_DEBOUNCE_MS);
+    });
     return () => {
       disposed = true;
       clearInterval(interval);
+      if (realtimeTimer) clearTimeout(realtimeTimer);
+      unsubscribe();
     };
   }, [id, isActive, reviewedAtRevision, session]);
   // 判断当前用户是否为会话负责人：只有负责人才能发送回复
@@ -1013,7 +1085,7 @@ export default function ConversationScreen() {
     if (!session || !id || !message.clientRequestId) return;
     setActing(true);
     try {
-      const sent = await sendManualReply(
+      const submission = await sendManualReply(
         session,
         id,
         message.text,
@@ -1028,9 +1100,19 @@ export default function ConversationScreen() {
       );
       setMessages((current) =>
         current.map((item) =>
-          item.clientRequestId === message.clientRequestId ? sent : item,
+          item.clientRequestId === message.clientRequestId
+            ? submission.message
+            : item,
         ),
       );
+      // 同步服务端权威版本：否则 15s 后的轮询会把自己刚发的这条当成
+      // 「会话有新内容」，把下一条草稿误标为过期并禁止发送。
+      if (submission.conversationRevision !== undefined) {
+        setConversationRevision(submission.conversationRevision);
+      }
+      if (submission.contextChanged) {
+        showSendNotice("发送期间客户又发了新消息");
+      }
       // 发送成功才删除草稿存储
       if (handoff?.state.cycleId) {
         await deleteDraft(session.user.userId, id, handoff.state.cycleId);
@@ -1066,6 +1148,7 @@ export default function ConversationScreen() {
         }
       }
       if (handoff?.state.cycleId && failure === "outcome_unknown") {
+        setPendingOutcomeKey(message.clientRequestId);
         await saveDraft({
           accountId: session.user.userId,
           conversationId: id,
@@ -1096,9 +1179,12 @@ export default function ConversationScreen() {
     }
   }
 
-  async function checkUnknownOutcome(message: DisplayMessage) {
+  async function checkUnknownOutcome(
+    message: DisplayMessage,
+    options?: { silent?: boolean },
+  ) {
     if (!session || !id || !message.clientRequestId) return;
-    setActing(true);
+    if (!options?.silent) setActing(true);
     try {
       const outcome = await getManualReplyOutcome(
         session,
@@ -1114,6 +1200,7 @@ export default function ConversationScreen() {
           ),
         );
         setDraftFailure(undefined);
+        setPendingOutcomeKey(undefined);
         if (handoff?.state.cycleId) {
           await deleteDraft(session.user.userId, id, handoff.state.cycleId);
         }
@@ -1128,6 +1215,7 @@ export default function ConversationScreen() {
           ),
         );
         setDraftFailure(undefined);
+        setPendingOutcomeKey(undefined);
         if (handoff?.state.cycleId) {
           await deleteDraft(session.user.userId, id, handoff.state.cycleId);
         }
@@ -1137,7 +1225,7 @@ export default function ConversationScreen() {
     } catch {
       setDraftFailure("outcome_unknown");
     } finally {
-      setActing(false);
+      if (!options?.silent) setActing(false);
     }
   }
 
@@ -1708,6 +1796,7 @@ export default function ConversationScreen() {
               offline={offline}
               draftStatus={draftStatus}
               draftFailure={draftFailure}
+              notice={sendNotice}
               onReviewLatest={reviewLatestContent}
               reviewedAtRevision={reviewedAtRevision}
               conversationRevision={conversationRevision}

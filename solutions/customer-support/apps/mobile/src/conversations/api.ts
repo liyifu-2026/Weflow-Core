@@ -567,6 +567,15 @@ export async function getHandoffOperationOutcome(
   };
 }
 
+/** 人工回复提交结果：权威消息 + 落库后的会话版本 */
+export type ManualReplySubmission = {
+  message: ServerMessage;
+  /** 落库后的会话版本：客户端据此推进本地版本，避免把自己的发送误判成「他人新消息」 */
+  conversationRevision?: number;
+  /** 发送期间会话已有新消息（软提示；版本过期不再拒绝发送） */
+  contextChanged?: boolean;
+};
+
 /** 发送手动回复消息给客户，支持可选的媒体文件、素材空间引用和引用回复 */
 export async function sendManualReply(
   session: MobileSession,
@@ -581,7 +590,7 @@ export async function sendManualReply(
     assetId?: string;
     replyToChannelMessageId?: string;
   },
-): Promise<ServerMessage> {
+): Promise<ManualReplySubmission> {
   const body: Record<string, unknown> = {
     text,
     clientRequestId,
@@ -592,7 +601,7 @@ export async function sendManualReply(
   if (options?.assetId) body.assetId = options.assetId;
   if (options?.replyToChannelMessageId)
     body.replyToChannelMessageId = options.replyToChannelMessageId;
-  const result = await request<{ message: ServerMessage }>(
+  return request<ManualReplySubmission>(
     `/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
     {
       method: "POST",
@@ -600,7 +609,6 @@ export async function sendManualReply(
       body: JSON.stringify(body),
     },
   );
-  return result.message;
 }
 
 /** 查询手动回复的执行结果（用于处理发送结果未知的情况） */

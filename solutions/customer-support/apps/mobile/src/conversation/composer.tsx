@@ -37,6 +37,7 @@ export function Composer({
   onPickImage,
   onPickFile,
   onPickAsset,
+  notice,
 }: {
   draft: string;
   onChange: (value: string) => void;
@@ -48,6 +49,8 @@ export function Composer({
   offline: boolean;
   draftStatus?: LocalDraft["status"];
   draftFailure?: SendFailure;
+  /** 非阻塞软提示（几秒后由调用方清除） */
+  notice?: string;
   reviewedAtRevision: number | null;
   conversationRevision?: number;
   replyTarget?: DisplayMessage | null;
@@ -235,6 +238,8 @@ export function Composer({
             : "发送结果未知，请点击失败消息确认"}
         </Text>
       )}
+      {/* 软提示：不阻塞发送，几秒后自动消失 */}
+      {notice ? <Text style={styles.draftWarning}>{notice}</Text> : null}
     </View>
   );
 }
