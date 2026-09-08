@@ -19,11 +19,14 @@ export type ManualReplyResult =
       status: "accepted";
       created: boolean;
       message: typeof schema.messages.$inferSelect;
+      /** 落库后的会话 revision：客户端据此推进本地版本，避免把自己的发送误判成他人新消息 */
+      conversationRevision: number;
+      /** 携带的 expectedConversationRevision 已过期（发送期间会话有新消息）：软提示，不阻塞 */
+      contextChanged: boolean;
     }
   | { status: "conversation_not_found" }
   | { status: "handoff_not_assignee" }
   | { status: "asset_not_found" }
-  | { status: "conversation_revision_conflict"; conversationRevision: number }
   | { status: "idempotency_conflict" };
 
 /** 人工回复的投递状态查询结果 */
@@ -116,18 +119,25 @@ export async function createManualReply(
         .from(schema.conversations)
         .where(eq(schema.conversations.conversationId, input.conversationId))
         .limit(1);
-      if (!conversations[0]) {
+      const conversation = conversations[0];
+      if (!conversation) {
         return { status: "conversation_not_found" };
       }
-      if (
+      // 人工回复是纯追加操作，不存在 read-modify-write 竞态：版本过期只作为
+      // 「发送期间会话有新消息」的软提示返回，绝不阻塞发送（并发来消息时
+      // 用户的回复照样落库）。需要硬闸门的是 handoff 状态机（认领/接管/结束）。
+      const contextChanged =
         input.expectedConversationRevision !== undefined &&
-        conversations[0].revision !== input.expectedConversationRevision
-      ) {
-        return {
-          status: "conversation_revision_conflict",
-          conversationRevision: conversations[0].revision,
-        };
-      }
+        conversation.revision !== input.expectedConversationRevision;
+      /** 读取落库后的权威 revision（messages 插入触发器自增，同事务可见）。 */
+      const readConversationRevision = async (): Promise<number> => {
+        const rows = await transaction
+          .select({ revision: schema.conversations.revision })
+          .from(schema.conversations)
+          .where(eq(schema.conversations.conversationId, input.conversationId))
+          .limit(1);
+        return rows[0]?.revision ?? conversation.revision;
+      };
 
       const handoffs = await transaction
         .select({
@@ -230,7 +240,7 @@ export async function createManualReply(
         }
         await scheduleMemoryCaptureInTransaction(transaction, {
           conversationId: input.conversationId,
-          contactId: conversations[0].contactId,
+          contactId: conversation.contactId,
           watermarkMessageId: created.messageId,
         });
         await transaction.insert(schema.auditEvents).values({
@@ -251,7 +261,13 @@ export async function createManualReply(
           messageId,
           occurredAt: new Date().toISOString(),
         });
-        return { status: "accepted", created: true, message: created };
+        return {
+          status: "accepted",
+          created: true,
+          message: created,
+          conversationRevision: await readConversationRevision(),
+          contextChanged,
+        };
       }
 
       const existing = await transaction
@@ -268,7 +284,13 @@ export async function createManualReply(
       ) {
         return { status: "idempotency_conflict" };
       }
-      return { status: "accepted", created: false, message: replay };
+      return {
+        status: "accepted",
+        created: false,
+        message: replay,
+        conversationRevision: await readConversationRevision(),
+        contextChanged,
+      };
     },
   );
   return result;

@@ -68,6 +68,7 @@ const manualReplyBody = z
       .optional()
       .transform((v) => v?.trim() || ""),
     clientRequestId: z.uuid(),
+    /** 客户端发送时看到的会话版本；过期只回 contextChanged 软提示，不拒绝发送 */
     expectedConversationRevision: z.number().int().min(0).optional(),
     /** 出站媒体（ADR：人工回复携带媒体）；mediaId 来自 POST /api/v1/media 上传 */
     mediaId: z
@@ -289,18 +290,15 @@ export function registerConversationRoutes(
       if (result.status === "asset_not_found") {
         return reply.code(404).send({ error: "asset_not_found" });
       }
-      if (result.status === "conversation_revision_conflict") {
-        return reply.code(409).send({
-          error: "conversation_revision_conflict",
-          conversationRevision: result.conversationRevision,
-        });
-      }
       if (result.status === "idempotency_conflict") {
         return reply.code(409).send({ error: "idempotency_conflict" });
       }
       return reply.code(202).send({
         message: result.message,
         replayed: !result.created,
+        // 落库后的权威版本 + 发送期间会话是否有新消息（软提示，不阻塞发送）
+        conversationRevision: result.conversationRevision,
+        contextChanged: result.contextChanged,
       });
     },
   );

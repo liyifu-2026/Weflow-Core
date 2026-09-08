@@ -950,4 +950,44 @@ integration("Mobile Handoff V2 real business scenarios", () => {
       .where(eq(schema.handoffCycles.conversationId, conversationId));
     expect(cycles.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("人工回复的版本过期只回软提示，不拒绝发送", async () => {
+    const conversationId = await seedOwned("stale-revision-reply");
+    const revisionBefore = await conversationRevision(conversationId);
+    const send = (revision: number) =>
+      server.inject({
+        method: "POST",
+        url: `/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+        headers: { cookie: user(0).cookie },
+        payload: {
+          text: "版本过期也要发出去。",
+          clientRequestId: randomUUID(),
+          expectedConversationRevision: revision,
+        },
+      });
+
+    const first = await send(revisionBefore);
+    expect(first.statusCode, first.body).toBe(202);
+    const firstBody = first.json<{
+      message: { messageId: string };
+      conversationRevision: number;
+      contextChanged: boolean;
+    }>();
+    expect(firstBody.message.messageId).toMatch(/^manual-message:/);
+    expect(firstBody.contextChanged).toBe(false);
+    expect(firstBody.conversationRevision).toBe(revisionBefore + 1);
+
+    // 仍携带发送前的旧版本：模拟「发送期间对方发来新消息」，必须照常落库。
+    const second = await send(revisionBefore);
+    expect(second.statusCode, second.body).toBe(202);
+    const secondBody = second.json<{
+      message: { messageId: string };
+      conversationRevision: number;
+      contextChanged: boolean;
+    }>();
+    expect(secondBody.message.messageId).toMatch(/^manual-message:/);
+    expect(secondBody.message.messageId).not.toBe(firstBody.message.messageId);
+    expect(secondBody.contextChanged).toBe(true);
+    expect(secondBody.conversationRevision).toBe(revisionBefore + 2);
+  });
 });
