@@ -36,6 +36,7 @@ import { CHANNEL_CONTACTS_CAPABILITY } from "../../infrastructure/runtime/capabi
 import { RuntimeKernel } from "../../infrastructure/runtime/kernel/index.js";
 import { registerConversationRoutes } from "../../modules/conversations/interface/http-routes.js";
 import { registerConsoleEventRoutes } from "../../modules/console-events/interface/http-routes.js";
+import { startConversationEventBus } from "../../infrastructure/events/conversation-events.js";
 import { registerHandoffRoutes } from "../../modules/handoff/interface/http-routes.js";
 import { registerIdentityRoutes } from "../../modules/identity/interface/http-routes.js";
 import { registerContactProfileRoutes } from "../../modules/contacts/interface/http-routes.js";
@@ -249,6 +250,13 @@ await runProcess({
   },
   /** 启动后台调度器和正式 Channel Host 轮询器，返回清理函数 */
   start: async ({ config, logger, postgres }) => {
+    // 跨进程事件总线：api 是 SSE 消费端，必须订阅 worker 侧发布的事件
+    // （Agent 回复、媒体转写完成），否则这些事件到不了前端连接。
+    const stopConversationEventBus = startConversationEventBus({
+      redisUrl: config.redisUrl,
+      logger,
+      subscribe: true,
+    });
     let channelKernel: RuntimeKernel | undefined;
     if (config.channelHost) {
       channelKernel = new RuntimeKernel();
@@ -401,6 +409,7 @@ await runProcess({
         stopMemoryMaintenance();
         stopMediaProcessingDispatcher();
         stopPushDispatcher();
+        stopConversationEventBus();
         await channelKernel.stop();
       };
     }
@@ -416,6 +425,7 @@ await runProcess({
       stopMemoryMaintenance();
       stopMediaProcessingDispatcher();
       stopPushDispatcher();
+      stopConversationEventBus();
     };
   },
 });

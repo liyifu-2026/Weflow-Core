@@ -30,8 +30,14 @@ export function registerConsoleEventRoutes(
     });
 
     const send = (event: ConversationEvent) => {
+      // id 是给 Last-Event-ID 断线重放预留的稳定标识（重放尚未实现）：
+      // 有 messageId 时按消息定位，否则按事件类型 + 会话定位。
+      const eventId =
+        event.messageId === undefined
+          ? `${event.occurredAt}#${event.type}#${event.conversationId}`
+          : `${event.occurredAt}#${event.messageId}`;
       reply.raw.write(
-        `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        `id: ${eventId}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
       );
     };
     const unsubscribe = conversationEvents.on(send);

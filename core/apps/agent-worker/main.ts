@@ -11,6 +11,7 @@ import { Worker } from "bullmq";
 import { and, eq } from "drizzle-orm";
 import { pathToFileURL } from "node:url";
 import { runProcess } from "../../infrastructure/runtime/run-process.js";
+import { startConversationEventBus } from "../../infrastructure/events/conversation-events.js";
 import { OpenAiCompatibleClient } from "../../infrastructure/model_runtime/openai-compatible-client.js";
 import { HotReloadableClient } from "../../infrastructure/model_runtime/hot-reloadable-client.js";
 import {
@@ -67,10 +68,19 @@ await runProcess({
   name: "agent-worker",
   healthPort: (config) => config.agentWorkerHealthPort,
   start: async ({ config, logger, postgres }) => {
+    // 跨进程事件总线（只发布）：本进程产出的 Agent 回复消息必须广播给
+    // api 进程，才能经 SSE 即时到达工作台，而不是等 Channel Host 回采。
+    const stopConversationEventBus = startConversationEventBus({
+      redisUrl: config.redisUrl,
+      logger,
+      subscribe: false,
+    });
     // 如果未配置模型运行时，Worker 进入空闲状态
     if (!config.model) {
       logger.warn("Model Runtime is not configured; Agent Worker is idle");
-      return () => undefined;
+      return () => {
+        stopConversationEventBus();
+      };
     }
     // 平台大模型设置（Operator Control Plane）：DB 覆盖 env 默认值。
     // 热加载：Console 保存后即时生效，无需重启 worker（见 model-settings-hot）。
@@ -535,6 +545,7 @@ await runProcess({
       stopModelSettingsReloader();
       await Promise.all([worker.close(), memoryWorker.close()]);
       await kernel.stop();
+      stopConversationEventBus();
     };
   },
 });

@@ -11,6 +11,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
 import type { MimoVisionClient } from "../../../infrastructure/model_runtime/mimo-vision-client.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
+import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
 import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
 
 /** 视觉描述用原图字节上限：超过则回退缩略图（防模型超时与账单暴涨） */
@@ -109,6 +110,13 @@ export async function processImageDescription(
           })
           .onConflictDoNothing();
       }
+    });
+    // 描述落库即广播：工作台不必等下一次对账就能回拉到带描述的转录。
+    conversationEvents.publish({
+      type: "conversation_updated",
+      conversationId: row.media.conversationId,
+      messageId: row.media.messageId,
+      occurredAt: new Date().toISOString(),
     });
   } catch (error) {
     await db

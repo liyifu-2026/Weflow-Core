@@ -16,6 +16,7 @@ import type { SilkToMp3Transcoder } from "../../../infrastructure/media/audio-tr
 import type { MimoAudioClient } from "../../../infrastructure/model_runtime/mimo-audio-client.js";
 import type { AudioTranscriptionsClient } from "../../../infrastructure/model_runtime/audio-transcriptions-client.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
+import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
 import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
 
 /** ASR 客户端统一接缝（MiMo 内联音频 / 标准 audio/transcriptions 均可） */
@@ -198,6 +199,13 @@ export async function processVoiceTranscription(
           })
           .onConflictDoNothing();
       }
+    });
+    // 转写落库即广播：工作台不必等下一次对账就能回拉到带转写文本的转录。
+    conversationEvents.publish({
+      type: "conversation_updated",
+      conversationId: row.media.conversationId,
+      messageId: row.media.messageId,
+      occurredAt: new Date().toISOString(),
     });
   } catch (error) {
     // 转写/转码失败：回退排队等待有界重试；错误向上抛给 BullMQ 记录

@@ -17,6 +17,7 @@ import {
   type JobEnvelope,
 } from "../../infrastructure/redis/job-queue.js";
 import { runProcess } from "../../infrastructure/runtime/run-process.js";
+import { startConversationEventBus } from "../../infrastructure/events/conversation-events.js";
 import * as schema from "../../infrastructure/postgres/schema.js";
 import { MimoVisionClient } from "../../infrastructure/model_runtime/mimo-vision-client.js";
 import { MimoAudioClient } from "../../infrastructure/model_runtime/mimo-audio-client.js";
@@ -29,6 +30,13 @@ await runProcess({
   name: "ingestion-worker",
   healthPort: (config) => config.ingestionWorkerHealthPort,
   start: ({ config, logger, postgres }) => {
+    // 跨进程事件总线（只发布）：媒体转写/描述落库后广播 conversation_updated，
+    // 让工作台不用等下一次对账就能看到转写结果。
+    const stopConversationEventBus = startConversationEventBus({
+      redisUrl: config.redisUrl,
+      logger,
+      subscribe: false,
+    });
     // 初始化本地文件存储，用于读取媒体文件
     const mediaStorage = new LocalFileStorage(
       `${config.fileStorageRoot}/media`,
@@ -135,6 +143,7 @@ await runProcess({
     });
     return () => {
       void mediaWorker?.close();
+      stopConversationEventBus();
     };
   },
 });
