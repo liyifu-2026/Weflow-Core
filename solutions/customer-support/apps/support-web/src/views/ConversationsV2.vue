@@ -43,6 +43,7 @@ import {
   type Message,
   type SectionScope,
 } from "../components/conversations/types";
+import { mergeTranscriptMessages } from "../components/conversations/transcript-merge";
 
 const auth = useWeflowAuthStore();
 const route = useRoute();
@@ -104,6 +105,10 @@ const liveThinking = ref<{
 } | null>(null);
 let livePollTimer: ReturnType<typeof setInterval> | null = null;
 const LIVE_POLL_MS = 2_000;
+// 实时事件按尾沿合并（一轮 Agent 回复会连发多条事件），对账轮询只兜底。
+const REALTIME_DEBOUNCE_MS = 250;
+const RECONCILE_POLL_MS = 15_000;
+const FALLBACK_POLL_MS = 5_000;
 const STAGE_LABELS: Record<string, string> = {
   triaged: "正在判断消息类型…",
   context_built: "正在装配上下文…",
@@ -729,6 +734,10 @@ async function select(id: string, syncRoute = true) {
   if (!id) return;
   const generation = ++selectionGeneration;
   selectedId.value = id;
+  // 切会话重置跟随状态：否则上一个会话的「不在底部」会泄漏到新会话，
+  // 新消息只累加角标、正文不追加，角标计数也会串台。
+  atBottom.value = true;
+  newMessageCount.value = 0;
   // 选中即展开 Inspector（inline 第三栏，不再遮挡工作区）；
   // 用户手动收起后记忆偏好，不再自动弹出
   inspectorView.value = "context";
@@ -806,6 +815,7 @@ async function select(id: string, syncRoute = true) {
   } finally {
     loadingConversation.value = false;
   }
+  flushPendingTranscriptRefresh();
   void autoCheckUnknownOutcomes();
 }
 
@@ -1176,10 +1186,16 @@ function onMessagesScroll() {
   workspace.scrollTop = pane.scrollTop;
 }
 
-// 后台增量刷新：新消息只 append 到 Transcript，绝不重载整个会话。
+// 后台增量刷新：新消息 append、已有行就地 patch，绝不重载整个会话。
 // 不进入 Skeleton、不重置 Inspector、不清 Draft、不重挂载图片。
 async function refreshTranscriptIncrementally() {
-  if (!selectedId.value || loadingConversation.value) return;
+  if (!selectedId.value) return;
+  if (loadingConversation.value) {
+    // 初次加载（select 的 7 个并发请求）期间到达的事件不能丢：
+    // 记下会话，select 结束后补刷一次。
+    pendingTranscriptRefreshId = selectedId.value;
+    return;
+  }
   const conversationId = selectedId.value;
   try {
     const result = await api<{
@@ -1190,26 +1206,37 @@ async function refreshTranscriptIncrementally() {
     );
     // 响应期间切了会话 → 丢弃（避免旧会话数据覆盖新会话）。
     if (selectedId.value !== conversationId) return;
-    const fresh = (result.messages ?? []).filter(
-      (item) => !messages.value.some((known) => known.messageId === item.messageId),
-    );
+    const incoming = result.messages ?? [];
+    // 两类同步：新增行追加；已存在的行按字段差异就地打补丁——sendState 迁移、
+    // 媒体转写/描述回填都必须就地可见，否则只能等整会话重载。
+    const merged = mergeTranscriptMessages(messages.value, incoming);
     if (result.conversationRevision !== undefined)
       conversationRevision.value = result.conversationRevision;
-    const newestId = result.messages?.[0]?.messageId ?? "";
+    const newestId = incoming[0]?.messageId ?? "";
     if (newestId) latestKnownMessageId.value = newestId;
-    if (!fresh.length) return;
+    if (merged.patchedCount > 0) messages.value = merged.messages;
+    if (!merged.appended.length) return;
     if (atBottom.value) {
-      messages.value = [...messages.value, ...fresh];
+      messages.value = [...messages.value, ...merged.appended];
       await nextTick();
       scrollToLatest(() => selectedId.value === conversationId);
       // 静默刷新 handoff/依据/联系人（不显示任何 loading）
       void refreshContextSilently();
     } else {
-      newMessageCount.value += fresh.length;
+      newMessageCount.value += merged.appended.length;
     }
   } catch {
     // 后台刷新失败静默；下一轮重试，会话本身不受影响。
   }
+}
+
+// 初次加载期间被丢弃的刷新请求（见 refreshTranscriptIncrementally）。
+let pendingTranscriptRefreshId: string | null = null;
+function flushPendingTranscriptRefresh() {
+  const pendingId = pendingTranscriptRefreshId;
+  pendingTranscriptRefreshId = null;
+  if (pendingId && pendingId === selectedId.value)
+    void refreshTranscriptIncrementally();
 }
 
 // ---------- 建议回复已下线 ----------
@@ -1358,6 +1385,10 @@ const REALTIME_EVENT_TYPES = [
 let eventSource: EventSource | null = null;
 let fallbackTimer: ReturnType<typeof setInterval> | undefined;
 let reconcileTimer: ReturnType<typeof setInterval> | undefined;
+let realtimeTimer: ReturnType<typeof setTimeout> | undefined;
+let realtimeEverOpened = false;
+let pendingTranscriptRefresh = false;
+let pendingContextRefresh = false;
 const realtimeConnected = ref(false);
 
 function refreshFromServer() {
@@ -1366,13 +1397,17 @@ function refreshFromServer() {
 }
 function scheduleReconcile() {
   clearInterval(fallbackTimer);
+  fallbackTimer = undefined;
   clearInterval(reconcileTimer);
-  // Realtime 健康：60s 对账一次，事件驱动增量更新为主。
-  reconcileTimer = setInterval(refreshFromServer, 60_000);
+  // Realtime 健康：15s 对账一次，事件驱动增量更新为主。
+  reconcileTimer = setInterval(refreshFromServer, RECONCILE_POLL_MS);
 }
 function scheduleFallback() {
   clearInterval(reconcileTimer);
-  if (!fallbackTimer) fallbackTimer = setInterval(refreshFromServer, 5_000);
+  reconcileTimer = undefined;
+  // 断开期间 5s 轮询兜底。clear 之后必须置空：否则「已清除但非空」的
+  // 引用会让下一次断线再也装不上兜底定时器（重连后等于完全没有轮询）。
+  if (!fallbackTimer) fallbackTimer = setInterval(refreshFromServer, FALLBACK_POLL_MS);
 }
 function connectRealtime() {
   if (eventSource) return;
@@ -1380,6 +1415,10 @@ function connectRealtime() {
   eventSource.onopen = () => {
     realtimeConnected.value = true;
     scheduleReconcile();
+    // 重连（非首次连接）后立即对账一次：断线期间的事件已丢失，
+    // 不能等下一个对账周期。
+    if (realtimeEverOpened) refreshFromServer();
+    realtimeEverOpened = true;
   };
   eventSource.onerror = () => {
     // EventSource 自动重连；断开期间用 5s 轮询兜底。
@@ -1401,11 +1440,28 @@ function handleRealtimeEvent(type: string, raw: MessageEvent) {
   }
   if (data.conversationId === selectedId.value) {
     // 只失效相关资源：消息事件增量补 Transcript，handoff 事件静默刷上下文。
-    void refreshTranscriptIncrementally();
+    pendingTranscriptRefresh = true;
     if (type.startsWith("handoff") || type === "ownership_changed")
-      void refreshContextSilently();
+      pendingContextRefresh = true;
   }
-  void loadList();
+  scheduleRealtimeRefresh();
+}
+/** 事件风暴合并：一轮 Agent 回复会连发 step/tool_note/final 多条事件，
+ * 按 250ms 尾沿合并成一次刷新，避免一次回复打出十几个请求。 */
+function scheduleRealtimeRefresh() {
+  if (realtimeTimer) clearTimeout(realtimeTimer);
+  realtimeTimer = setTimeout(() => {
+    realtimeTimer = undefined;
+    void loadList();
+    if (pendingTranscriptRefresh) {
+      pendingTranscriptRefresh = false;
+      void refreshTranscriptIncrementally();
+    }
+    if (pendingContextRefresh) {
+      pendingContextRefresh = false;
+      void refreshContextSilently();
+    }
+  }, REALTIME_DEBOUNCE_MS);
 }
 
 function onVisibilityChange() {
@@ -1415,6 +1471,7 @@ onUnmounted(() => {
   rememberScroll();
   clearInterval(fallbackTimer);
   clearInterval(reconcileTimer);
+  clearTimeout(realtimeTimer);
   eventSource?.close();
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("keydown", onTakeoverShortcut);
