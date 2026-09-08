@@ -167,6 +167,13 @@ Core 与 Channel Host 之间只暴露四个正式 Channel 能力：
 
 完整路由以 Core 源码 `core/modules/*/interface/http-routes.ts` 为准。
 
+**实时事件扇出**：会话事件由 `core/infrastructure/events/conversation-events.ts` 统一发布
+（`publish` = 本进程即时投递 + Redis 频道 `weflow:conversation-events` 广播，信封带
+`origin` 去重回环副本）。api 进程订阅 Redis 并经 SSE 推给前端；agent-worker /
+ingestion-worker 只发布。事件只作「失效信号」：前端收到后回拉 Core 权威状态，
+轮询（web 15s、mobile 详情 30s / 列表 60s）降为对账兜底；Redis 不可用时自动退化为
+进程内投递。见 ADR-0009。
+
 ### 5.3 业务插件（weflow-solutions）
 
 业务能力通过**插件目录直读**加载（R3 后唯一插件机制）：Core 从 `WEFLOW_PLUGIN_DIR` 指向的目录直读
