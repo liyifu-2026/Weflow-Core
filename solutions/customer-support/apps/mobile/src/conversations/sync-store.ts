@@ -18,6 +18,11 @@ import {
   type MobileCapabilities,
 } from "@/api/capabilities";
 import { loadSession } from "@/auth/session";
+import {
+  REALTIME_REFRESH_DEBOUNCE_MS,
+  startConversationEventStream,
+  subscribeConversationEvents,
+} from "@/realtime/conversation-event-stream";
 import { listAllConversations } from "./api";
 import type { ConversationPreview } from "./model";
 import { conversationsDiffer } from "./sync-order";
@@ -47,6 +52,7 @@ let snapshot: ConversationSyncSnapshot = {
 let started = false;
 let active = AppState.currentState === "active";
 let inFlight = false;
+let realtimeTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** 订阅会话同步状态变化 */
 export function subscribeConversationSync(listener: () => void): () => void {
@@ -69,8 +75,11 @@ export function startConversationSync(): void {
   });
   setInterval(() => {
     if (active) void refreshConversations();
-  }, 30_000);
+  }, 60_000);
   void refreshConversations();
+  // 实时事件：任意会话有新内容即刷新列表。SSE 是快路径，30s 轮询只兜底。
+  subscribeConversationEvents(() => scheduleRealtimeRefresh());
+  startConversationEventStream();
   // The singleton lives for the app lifetime; this subscription must not be
   // removed by an individual screen unmounting.
   void appStateSubscription;
@@ -127,6 +136,15 @@ export async function refreshConversations(manual = false): Promise<void> {
     inFlight = false;
     update({ loading: false, refreshing: false });
   }
+}
+
+/** SSE 事件触发的列表刷新：去抖合并同一轮的连续事件 */
+function scheduleRealtimeRefresh(): void {
+  if (realtimeTimer) clearTimeout(realtimeTimer);
+  realtimeTimer = setTimeout(() => {
+    realtimeTimer = undefined;
+    if (active) void refreshConversations();
+  }, REALTIME_REFRESH_DEBOUNCE_MS);
 }
 
 /** 外部通知需要刷新会话（如收到推送通知时调用） */

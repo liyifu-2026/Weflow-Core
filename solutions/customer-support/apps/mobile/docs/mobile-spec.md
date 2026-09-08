@@ -165,8 +165,8 @@ pending → claimed → answered → closed
 
 - 会话列表只返回联系人、最后消息摘要、Handoff、负责人、未读数和发送状态；完整记录仅在进入会话后分页获取。
 - 历史分页使用稳定排序键（如 `(occurredAt, messageId)`）和 `before` 游标；实时增量使用单独的 `after` 游标，避免混用方向。
-- 首版移动端使用前台 15 秒轮询作为实时增量的临时实现；后台停止，回到前台立即刷新。后续若使用 Push 或 WebSocket，仍必须复用 revision 和 Core 权限裁决。
-- 唯一 Handoff Inbox 和打开的会话使用同一个刷新信号；Push 到达时立即刷新，前台 15 秒轮询兜底，后台停止。
+- 实时增量：前台通过 SSE（`GET /api/v1/console/events/stream`，expo/fetch 流式响应 + Bearer Token）接收事件；事件只作失效信号，收到后回拉权威状态。断线按指数退避重连，进后台断开、回前台立即重连并对账；详情 30 秒 / 列表 60 秒轮询保留为对账兜底（运行时不支持流式响应时自动退回纯轮询）。任何实时通道都必须复用 revision 和 Core 权限裁决。
+- 唯一 Handoff Inbox 和打开的会话使用同一个刷新信号；SSE 事件驱动增量（按会话去抖合并），Push 到达时立即刷新，前台轮询兜底，后台停止。
 - 图片消息只通过带 Bearer Token 的 Core Media 内容接口加载；Core 必须确认媒体仍关联有效会话。Mobile 不保存媒体文件到离线缓存。
 - 人工接手关闭自动 Agent 回复，但不预设关闭未来的内部 AI 辅助能力。后续可区分 `auto_agent_enabled` 与 `human_assist_enabled`，例如草拟回复、会话摘要或知识推荐。
 - 存量 Assist Request 继续使用独立模型；新的专业队列升级必须进入 Handoff ownership transfer，不得创建 Collaboration Request。
