@@ -86,6 +86,8 @@ type MobileHandoffInboxResponse = {
 /** Core 返回的消息数据结构 */
 export type ServerMessage = {
   messageId: string;
+  /** 人工回复的客户端请求 id（Core 由幂等键回带）：用于把乐观气泡与权威消息对账 */
+  clientRequestId?: string | null;
   actorType: string;
   actorId?: string | null;
   /** AI 员工头像（平台 DiceBear 代理 URL）；人工/客户消息为 null */

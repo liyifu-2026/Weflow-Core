@@ -11,7 +11,7 @@
  */
 import type { ServerMessage } from "./api";
 
-type MessageWithLocalId = ServerMessage & { clientRequestId?: string };
+type MessageWithLocalId = ServerMessage;
 
 /** 合并两批消息列表，按时间排序；messageId 相同且内容有变才替换（未变保留原引用），
  * 且服务端消息会顶替同 clientRequestId 的本地乐观消息 */

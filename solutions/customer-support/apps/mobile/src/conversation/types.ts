@@ -5,7 +5,8 @@ import type { ServerMessage } from "@/conversations/api";
 
 /** 展示用消息类型，扩展了客户端请求 ID 用于追踪发送状态 */
 export type DisplayMessage = ServerMessage & {
-  clientRequestId?: string;
+  /** 客户端请求 id（乐观气泡与服务端权威消息对账用）；非人工回复的服务端消息为 null */
+  clientRequestId?: string | null;
   expectedConversationRevision?: number;
 };
 /** 发送失败类型 */

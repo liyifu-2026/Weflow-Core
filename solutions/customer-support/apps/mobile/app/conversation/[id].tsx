@@ -1095,13 +1095,18 @@ export default function ConversationScreen() {
           replyToChannelMessageId: message.replyToChannelMessageId ?? undefined,
         },
       );
-      setMessages((current) =>
-        current.map((item) =>
-          item.clientRequestId === message.clientRequestId
-            ? submission.message
-            : item,
-        ),
-      );
+      // 发送回执可能晚于 SSE 事件到达：此时列表里可能已经有同一条服务端消息，
+      // 只有乐观占位还在。先移除占位、再按 messageId 合并，避免重复气泡。
+      setMessages((current) => {
+        const withoutPlaceholder = current.filter(
+          (item) => item.clientRequestId !== message.clientRequestId,
+        );
+        const merged = mergeTimelineMessages(withoutPlaceholder, [
+          submission.message,
+        ]);
+        messagesRef.current = merged;
+        return merged;
+      });
       // 同步服务端权威版本：否则 15s 后的轮询会把自己刚发的这条当成
       // 「会话有新内容」，把下一条草稿误标为过期并禁止发送。
       if (submission.conversationRevision !== undefined) {
