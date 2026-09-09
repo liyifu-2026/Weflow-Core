@@ -1,0 +1,36 @@
+# Shared workspace artifacts
+.env
+.env.*
+!.env.example
+.data/
+*.log
+/*.tgz
+.tmp/
+.dev-secrets/
+.dist/
+
+# npm auth (local-only, contains tokens)
+**/.npmrc
+
+# Build artifacts / debug captures
+*.apk
+*.png
+
+# Node / TypeScript
+node_modules/
+dist/
+dist-test/
+.test-dist/
+.pnpm-store/
+.npm-cache/
+coverage/
+.turbo/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# R3: 构建产物出库——CI 产物或本地目录，不再入库
+solutions/customer-support/artifacts/

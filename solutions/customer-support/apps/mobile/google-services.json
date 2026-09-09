@@ -1,0 +1,29 @@
+﻿{
+  "project_info": {
+    "project_number": "696327025310",
+    "project_id": "clientpe-cfe33",
+    "storage_bucket": "clientpe-cfe33.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:696327025310:android:f61fa3ff9504524636c18f",
+        "android_client_info": {
+          "package_name": "com.weflow.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAKMFWED5UWXu_DgqG-ojTB93_i-RyJcss"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,75 @@
+<svg width="1440" height="2560" viewBox="0 0 1440 2560" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="180" y1="120" x2="1260" y2="2440" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EAF6FF"/>
+      <stop offset="0.32" stop-color="#B9E1FF"/>
+      <stop offset="0.68" stop-color="#5EA9F5"/>
+      <stop offset="1" stop-color="#1F5FAF"/>
+    </linearGradient>
+
+    <radialGradient id="glow1" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(1120 410) rotate(132) scale(760 620)">
+      <stop stop-color="#F4FBFF" stop-opacity="0.95"/>
+      <stop offset="0.42" stop-color="#BDE8FF" stop-opacity="0.46"/>
+      <stop offset="1" stop-color="#74BAF8" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="glow2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(200 1770) rotate(-24) scale(840 690)">
+      <stop stop-color="#A9DFFF" stop-opacity="0.72"/>
+      <stop offset="0.45" stop-color="#5FB1FA" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#2F79C9" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="waveA" x1="0" y1="0" x2="1440" y2="0">
+      <stop stop-color="#FFFFFF" stop-opacity="0.10"/>
+      <stop offset="0.5" stop-color="#DDF4FF" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.05"/>
+    </linearGradient>
+
+    <linearGradient id="waveB" x1="120" y1="0" x2="1320" y2="0">
+      <stop stop-color="#D7F3FF" stop-opacity="0.08"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#8BC7FF" stop-opacity="0.04"/>
+    </linearGradient>
+
+    <filter id="blur120" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="120"/>
+    </filter>
+
+    <filter id="blur70" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="70"/>
+    </filter>
+
+    <filter id="blur24" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+  </defs>
+
+  <!-- Base -->
+  <rect width="1440" height="2560" fill="url(#bg)"/>
+
+  <!-- Soft lighting -->
+  <ellipse cx="1120" cy="410" rx="690" ry="560" fill="url(#glow1)" filter="url(#blur70)"/>
+  <ellipse cx="200" cy="1770" rx="760" ry="640" fill="url(#glow2)" filter="url(#blur120)"/>
+
+  <!-- Frosted flowing ribbons -->
+  <path d="M-180 600C170 450 410 500 720 720C1000 920 1180 880 1620 560V1010C1230 1220 960 1220 690 1050C360 850 120 850-180 1010V600Z"
+        fill="url(#waveA)" filter="url(#blur24)"/>
+
+  <path d="M-260 1510C80 1310 390 1370 690 1580C990 1790 1230 1770 1680 1410V1880C1280 2140 980 2150 660 1970C340 1780 70 1800-260 2000V1510Z"
+        fill="url(#waveB)" filter="url(#blur24)"/>
+
+  <!-- Thin glass contours -->
+  <path d="M-120 790C200 650 480 700 760 890C1040 1080 1260 1040 1530 820"
+        stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="2"/>
+  <path d="M-100 1710C240 1510 480 1570 760 1760C1030 1940 1260 1920 1510 1740"
+        stroke="#EAF8FF" stroke-opacity="0.18" stroke-width="2"/>
+
+  <!-- Small atmospheric highlights -->
+  <circle cx="1220" cy="1560" r="170" fill="#BFE7FF" fill-opacity="0.14" filter="url(#blur70)"/>
+  <circle cx="270" cy="420" r="140" fill="#FFFFFF" fill-opacity="0.16" filter="url(#blur70)"/>
+
+  <!-- Quiet vignette for readable UI -->
+  <rect width="1440" height="2560" fill="#0B3E78" fill-opacity="0.035"/>
+</svg>

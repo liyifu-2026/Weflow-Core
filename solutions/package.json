@@ -1,0 +1,19 @@
+{
+  "name": "weflow-solutions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "install:all": "pnpm install && pnpm --dir packages/contracts install --config.confirmModulesPurge=false && pnpm --dir packages/plugin-sdk install --config.confirmModulesPurge=false && pnpm --dir solutions/customer-support/plugins/customer-support-strategy install --config.confirmModulesPurge=false && pnpm --dir solutions/customer-support/plugins/product-troubleshooting install --config.confirmModulesPurge=false && pnpm --dir solutions/customer-support/apps/support-web install --config.confirmModulesPurge=false",
+    "build": "pnpm --dir packages/contracts build && pnpm --dir packages/plugin-sdk build && pnpm --dir solutions/customer-support/plugins/customer-support-strategy build && pnpm --dir solutions/customer-support/plugins/product-troubleshooting build && pnpm --dir solutions/customer-support/apps/support-web build",
+    "e2e:gate": "node scripts/e2e-gate.mjs"
+  },
+  "devDependencies": {
+    "bullmq": "5.81.2",
+    "pg": "8.22.0"
+  }
+}
