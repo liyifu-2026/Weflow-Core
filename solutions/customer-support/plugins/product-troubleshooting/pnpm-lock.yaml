@@ -35,6 +35,7 @@ packages:
     resolution: {integrity: sha512-Rz3v8KG6KERLfn1GLEHuTfJtmcdegzgOTzHVtSLZL0wuC2OCujQCZ0YQ9WTNb4Rwh6ohfgAU2gJpeo4KVhTnLg==}
     engines: {node: '>=24 <25'}
 
+  '@weflow-leaif/solution-sdk@1.0.0':
     resolution: {integrity: sha512-Icnqn6mua5kdFDMd5OvdXeDiuA8jndvl+MbHxBwLwwvcp1OKykfAT8sVjpiXgGbTlWTNEHRmL6wSRUFeJDfqnQ==}
     engines: {node: '>=24 <25'}
 
@@ -57,11 +58,13 @@ snapshots:
 
   '@weflow-leaif/contracts@1.0.0':
     dependencies:
+      '@weflow-leaif/solution-sdk': 1.0.0
 
   '@weflow-leaif/plugin-sdk@1.0.0':
     dependencies:
       '@weflow-leaif/contracts': 1.0.0
 
+  '@weflow-leaif/solution-sdk@1.0.0':
     dependencies:
       zod: 4.4.3
 
