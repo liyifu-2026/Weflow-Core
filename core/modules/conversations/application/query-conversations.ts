@@ -701,6 +701,14 @@ export async function getSharedTranscript(
   const rows = await db
     .select({
       messageId: schema.messages.messageId,
+      // 人工回复的客户端请求 id（幂等键 manual:<uuid>）回带：客户端据此把乐观
+      // 气泡与服务端权威消息对账；不回带会让发送回执先于 POST 响应到达时
+      // 出现重复气泡，并把「自己刚发的消息」误计为未读。
+      clientRequestId: sql<string | null>`
+        case when ${schema.messages.idempotencyKey} like 'manual:%'
+          then substring(${schema.messages.idempotencyKey} from 8)
+        end
+      `,
       direction: schema.messages.direction,
       actorType: schema.messages.actorType,
       actorId: schema.messages.actorId,

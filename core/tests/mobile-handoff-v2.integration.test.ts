@@ -954,19 +954,20 @@ integration("Mobile Handoff V2 real business scenarios", () => {
   it("人工回复的版本过期只回软提示，不拒绝发送", async () => {
     const conversationId = await seedOwned("stale-revision-reply");
     const revisionBefore = await conversationRevision(conversationId);
-    const send = (revision: number) =>
+    const send = (revision: number, clientRequestId: string) =>
       server.inject({
         method: "POST",
         url: `/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
         headers: { cookie: user(0).cookie },
         payload: {
           text: "版本过期也要发出去。",
-          clientRequestId: randomUUID(),
+          clientRequestId,
           expectedConversationRevision: revision,
         },
       });
 
-    const first = await send(revisionBefore);
+    const firstRequestId = randomUUID();
+    const first = await send(revisionBefore, firstRequestId);
     expect(first.statusCode, first.body).toBe(202);
     const firstBody = first.json<{
       message: { messageId: string };
@@ -977,8 +978,20 @@ integration("Mobile Handoff V2 real business scenarios", () => {
     expect(firstBody.contextChanged).toBe(false);
     expect(firstBody.conversationRevision).toBe(revisionBefore + 1);
 
+    // 转录回带 clientRequestId：客户端据此把乐观气泡与服务端权威消息对账
+    const transcript = await server.inject({
+      method: "GET",
+      url: `/api/v1/conversations/${encodeURIComponent(conversationId)}/messages?limit=10`,
+      headers: { cookie: user(0).cookie },
+    });
+    expect(transcript.statusCode, transcript.body).toBe(200);
+    const echoed = transcript
+      .json<{ messages: Array<{ messageId: string; clientRequestId?: string | null }> }>()
+      .messages.find((item) => item.messageId === firstBody.message.messageId);
+    expect(echoed?.clientRequestId).toBe(firstRequestId);
+
     // 仍携带发送前的旧版本：模拟「发送期间对方发来新消息」，必须照常落库。
-    const second = await send(revisionBefore);
+    const second = await send(revisionBefore, randomUUID());
     expect(second.statusCode, second.body).toBe(202);
     const secondBody = second.json<{
       message: { messageId: string };
