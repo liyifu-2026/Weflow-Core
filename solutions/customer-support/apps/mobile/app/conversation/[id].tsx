@@ -480,40 +480,38 @@ export default function ConversationScreen() {
         const page = pageResult.value;
         setOffline(false);
         setError(undefined);
-        // revision 未变 → 会话无新内容：跳过合并与重渲染（handoff/collaboration
-        // 的刷新不_gate，它们可能独立于消息 revision 变化，漏刷会错过接管/协作）
-        const revisionUnchanged =
-          page.conversationRevision !== undefined &&
-          page.conversationRevision === revisionRef.current &&
-          messagesRef.current.length > 0;
-        if (!revisionUnchanged) {
-          const currentMessages = messagesRef.current;
-          const newMessageCount = countNewTimelineMessages(
-            currentMessages,
-            page.messages,
-          );
+        // 服务端是唯一事实源：每次对账都合并（新增追加、已有行就地 patch）。
+        // 无变化时 mergeTimelineMessages 返回原数组引用 → 不 setState、不重渲染，
+        // 因此不需要「revision 未变就跳过」这种推断：它既会漏掉不改版本号的更新
+        // （sendState 迁移、媒体转写回填），也会在本地版本被发送成功推进后
+        // 把并发到达的客户消息误判成「无新内容」。
+        const currentMessages = messagesRef.current;
+        const newMessageCount = countNewTimelineMessages(
+          currentMessages,
+          page.messages,
+        );
         const mergedMessages = mergeTimelineMessages(
           currentMessages,
           page.messages,
         );
-        messagesRef.current = mergedMessages;
-        setMessages(mergedMessages);
+        if (mergedMessages !== currentMessages) {
+          messagesRef.current = mergedMessages;
+          setMessages(mergedMessages);
+        }
         if (newMessageCount > 0) {
           if (atBottomRef.current) shouldAutoFollowRef.current = true;
           else setUnseenCount((count) => count + newMessageCount);
-        }
-        if (
-          revisionRef.current !== undefined &&
-          page.conversationRevision !== undefined &&
-          page.conversationRevision !== revisionRef.current
-        ) {
+          // 出现未见过的内容 → 草稿过期。用「未见过的消息数」而不是 revision
+          // 比较：自己刚发的消息也会推进 revision，但那不是需要复核的新内容。
           setDraftStatus((status) =>
             draftRef.current && status !== "locked_reauth"
               ? "stale_revision"
               : status,
           );
         }
-        setConversationRevision(page.conversationRevision);
+        if (page.conversationRevision !== undefined) {
+          setConversationRevision(page.conversationRevision);
+        }
         const latest = page.messages.at(-1);
         if (
           latest &&
@@ -524,7 +522,6 @@ export default function ConversationScreen() {
           void markConversationRead(session!, id!, latest.messageId).catch(
             () => undefined,
           );
-        }
         }
       } else {
         setOffline(true);

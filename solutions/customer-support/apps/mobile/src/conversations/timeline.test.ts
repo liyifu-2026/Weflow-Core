@@ -72,4 +72,44 @@ describe("conversation timeline", () => {
     } as ServerMessage & { clientRequestId?: string };
     expect(countNewTimelineMessages([pending], [ack])).toBe(0);
   });
+
+  it("returns the same array reference when nothing changed", () => {
+    const current = [message("m1", 1), message("m2", 2)];
+    const same = [message("m1", 1), message("m2", 2)];
+    expect(mergeTimelineMessages(current, same)).toBe(current);
+  });
+
+  it("keeps unchanged rows by reference while appending new ones", () => {
+    const first = message("m1", 1);
+    const second = message("m2", 2);
+    const merged = mergeTimelineMessages(
+      [first, second],
+      [message("m1", 1), message("m2", 2), message("m3", 3)],
+    );
+    expect(merged.map((item) => item.messageId)).toEqual(["m1", "m2", "m3"]);
+    expect(merged[0]).toBe(first);
+    expect(merged[1]).toBe(second);
+  });
+
+  it("patches an existing row when only a non-revision field changed", () => {
+    const before: ServerMessage = { ...message("m1", 1), sendState: "pending" };
+    const after: ServerMessage = { ...message("m1", 1), sendState: "sent" };
+    const merged = mergeTimelineMessages([before], [after]);
+    expect(merged).not.toBe([before]);
+    expect(merged[0]?.sendState).toBe("sent");
+    // 原数组不被就地修改
+    expect(before.sendState).toBe("pending");
+  });
+
+  it("patches fields the local type does not declare (media transcription backfill)", () => {
+    const before = message("m1", 1) as ServerMessage & { mediaDescription?: string };
+    const after = {
+      ...message("m1", 1),
+      mediaDescription: "一只猫",
+    } as ServerMessage & { mediaDescription?: string };
+    const merged = mergeTimelineMessages([before], [after]);
+    expect(
+      (merged[0] as { mediaDescription?: string }).mediaDescription,
+    ).toBe("一只猫");
+  });
 });
