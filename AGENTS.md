@@ -2,7 +2,14 @@
 
 ## Scope
 
-本目录是 Weflow 的平台仓库。**Weflow 是一个「单进程部署、配置集中、可高效热更新的 AI 客服产品」**——不是 AI 员工平台，没有方案市场，没有微前端。进行修改时，优先保持职责清晰、接口稳定和迁移可回滚；不要把旧仓库的临时编号重新带回正式命名。
+本目录是 Weflow 的唯一仓库（引擎层 + 业务层同仓）。**Weflow 是一个「单进程部署、配置集中、可高效热更新的 AI 客服产品」**——不是 AI 员工平台，没有方案市场，没有微前端。进行修改时，优先保持职责清晰、接口稳定和迁移可回滚；不要把旧仓库的临时编号重新带回正式命名。
+
+## 仓库形态（2026-09 双仓合并）
+
+- 原独立仓库 **Weflow-Solutions** 已整仓并入本仓 `solutions/` 子目录，历史经 filter-repo 重写保留（`git log --follow` 可追溯）。
+- 边界从「仓库边界」降级为「目录边界」：引擎层（`core/`、`apps/`）不加业务语义；业务逻辑、业务 UI、业务 BFF 一律在 `solutions/`。
+- 插件直读机制不变：`WEFLOW_PLUGIN_DIR` 现在指向仓内 `solutions/customer-support`（core/.env 默认 `../solutions/customer-support`）。
+- 旧仓 `github.com/liyifu-2026/Weflow-Solutions` 已归档，仅作历史存档，不再接收提交。
 
 ## Canonical names
 
@@ -14,21 +21,21 @@
 ## 产品收敛现状（R1 + R3 平台化拆除）
 
 - 平台化系统已整体拆除（R3）：solution pack / store / signature / registry / runner / npm-market / lock / `packages/solution-sdk` 全部删除；示例 solution（`weflow/solutions/knowledge|memory`）删除。
-- 插件加载 = 「插件目录直读」：Core 从 `WEFLOW_PLUGIN_DIR`（core/.env 配置，指向如 `weflow-solutions/solutions/customer-support`）直读 backend 插件（`backend/**/index.js` 的 `registerRoutes(server, ctx)` 契约不变）与 agent 插件（`plugins/*/dist`，`SKILL_PLUGIN_PATH`/`STRATEGY_PLUGIN_PATH` 仍可显式覆盖）。
+- 插件加载 = 「插件目录直读」：Core 从 `WEFLOW_PLUGIN_DIR`（core/.env 配置，默认 `../solutions/customer-support`）直读 backend 插件（`backend/**/index.js` 的 `registerRoutes(server, ctx)` 契约不变）与 agent 插件（`plugins/*/dist`，`SKILL_PLUGIN_PATH`/`STRATEGY_PLUGIN_PATH` 仍可显式覆盖）。
 - `solution.extension_settings` 表保留为设置中心通用 JSON 设置存储（主键 scope/key）；读写端点收编至 operations 模块（`/api/v1/admin/solutions/:solutionId/extensions/:extensionId/settings`）。
 - weflowctl 只保留 dev（doctor/up/down）+ config/completion；solution 命令族全部删除。
 - 0070 迁移删除 `solution` schema 的 installations/versions/operations/operation_payloads/resource_ownership/events/secret_assignments 表。
 
 ## 产品收敛现状（R1）
 
-- 产品唯一网页端是 `weflow-solutions/solutions/customer-support/apps/support-web`（自带登录 + 布局 + browser history 真实路径）。
+- 产品唯一网页端是 `solutions/customer-support/apps/support-web`（自带登录 + 布局 + browser history 真实路径）。
 - 微前端机制已删除：`ExtensionHost`、`consoleExtensions` 消费端、extensions store、mount 契约均不存在于本仓库。禁止重建。
 - `apps/console` 仅保留平台级页面：登录 / 改密 / 帮助 / Profile / 审计 / 用户 / 系统状态。总览路由重定向到系统状态。
 
 ## 职责边界：Core / Console / Solutions
 
 - **Core（`weflow`）**：平台层。负责认证、会话/消息/Handoff 等领域事实、系统管理、审计、设置等平台级能力。
-- **Solutions（`weflow-solutions`）**：业务层 + 产品网页端唯一来源。业务 UI（support-web）、业务策略、业务技能、业务 BFF 都在这里。
+- **Solutions（本仓 `solutions/` 子目录）**：业务层 + 产品网页端唯一来源。业务 UI（support-web）、业务策略、业务技能、业务 BFF 都在这里。
 - 业务 UI 不再通过 `consoleExtensions` 嵌入 Console（该机制已删除）；support-web 直接访问 Core API。
 
 ## 绝对禁止
@@ -39,30 +46,30 @@
   - 微信 / 具体通道相关 UI
   - 任何只属于某个 Solution 的页面
 - 禁止在 Core 中硬编码业务策略、业务 Prompt、业务状态机。
-- 禁止把 `weflow-solutions` 里的业务功能反向搬到 `weflow`（含 `apps/console`、`core` 及其他平台目录）。
+- 禁止把 `solutions/` 里的业务功能反向搬到引擎层（`core/`、`apps/` 及其他平台目录）。
 - 禁止重建 ExtensionHost / solution pack 消费端 / 微前端 mount 契约。
 - 禁止恢复 solution store / registry / runner / npm-market / signature / lock 机制或 `@weflow-leaif/solution-sdk`。
 - 业务插件的加载只走插件目录直读；不要引入打包安装/激活/回滚流程。
 
 ## 正确开发路径
 
-- 产品网页端（业务 UI）：`weflow-solutions/solutions/customer-support/apps/support-web`。
-- 业务 Agent 能力：`weflow-solutions/solutions/<solution>/plugins`。
-- 业务后端：`weflow-solutions/solutions/<solution>/backend`。
+- 产品网页端（业务 UI）：`solutions/customer-support/apps/support-web`。
+- 业务 Agent 能力：`solutions/<solution>/plugins`。
+- 业务后端：`solutions/<solution>/backend`。
 - 平台级页面（登录、审计、用户、系统状态等）：放 support-web（事实来源已迁移）；`apps/console` 仅维护既有页面，不新增功能。
 
 ## 提交前自检清单
 
 - 本次改动是否修改了 `weflow/apps/console`？
-  - 如果是，是否包含业务专属页面/路由/文案/组件？→ 必须移到 `weflow-solutions`。
+  - 如果是，是否包含业务专属页面/路由/文案/组件？→ 必须移到 `solutions/`。
   - 是否是新增功能？→ Console 已冻结，新增平台功能应放 support-web 或 Core。
-- 本次业务改动是否放在了 `weflow-solutions/solutions/<solution>/`？
+- 本次业务改动是否放在了 `solutions/<solution>/`？
   - 如果没有，说明放错仓库。
 
 ## 示例
 
 - 正确：
-  - `weflow-solutions/solutions/customer-support/apps/support-web/src/views/ConversationsV2.vue`
+  - `solutions/customer-support/apps/support-web/src/views/ConversationsV2.vue`
 - 错误：
   - `weflow/apps/console/src/weflow/views/ConversationsView.vue`
   - 在 Console 中直接写“客服工作台 / 会话 / Handoff 业务页面”

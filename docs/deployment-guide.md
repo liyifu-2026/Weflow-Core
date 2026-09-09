@@ -93,20 +93,19 @@ CREATE DATABASE weflow OWNER weflow;
 mkdir C:\weflow; cd C:\weflow
 
 git clone https://github.com/liyifu-2026/Weflow.git weflow
-git clone https://github.com/liyifu-2026/Weflow-Solutions.git weflow-solutions
 
-# 安装依赖（两个仓库）
+# 安装依赖（平台 + 业务，单仓两段）
 cd C:\weflow\weflow
 pnpm --dir packages/contracts install
 pnpm --dir packages/contracts build     # core 的类型别名指向 contracts 产物，必须先构建
 pnpm --dir core install
 pnpm --dir tooling/weflowctl install && pnpm --dir tooling/weflowctl build
 
-cd C:\weflow\weflow-solutions
+cd C:\weflow\weflow\solutions
 pnpm install:all
 ```
 
-> 目录约定：以下文档统一假设产品根为 `C:\weflow`，两个仓库并列于其下。
+> 目录约定：以下文档统一假设产品根为 `C:\weflow`，业务代码在仓内 `solutions/` 子目录。
 
 ---
 
@@ -126,7 +125,7 @@ notepad C:\weflow\weflow\core\.env
 | `WEB_DIST_DIR` | ✅ | 指向前端构建产物（见第 9 节） |
 | `SESSION_COOKIE_SECURE` | ✅ | 局域网 HTTP 必须为 `false`；HTTPS 部署保持 `true` |
 | `CHANNEL_HOST_BASE_URL` / `TOKEN` | 微信功能 | 与 Channel Host 配对 |
-| `WEFLOW_PLUGIN_DIR` | ✅ | 业务插件目录直读根，指向 `weflow-solutions\solutions\customer-support` |
+| `WEFLOW_PLUGIN_DIR` | ✅ | 业务插件目录直读根，指向仓内 `solutions\customer-support`（默认 `../solutions/customer-support`） |
 
 > `.env` 修改后需重启进程生效：`weflowctl service restart`。
 
@@ -159,15 +158,12 @@ node --env-file=.env dist/scripts/reset-password.js admin --password=新密码
 cd C:\weflow\weflow\core
 pnpm build
 
-# 前端产物（support-web/dist/）
-cd C:\weflow\weflow-solutions
+# 前端产物（support-web/dist/）+ 业务插件产物（plugins/*/dist，Core 直读）
+cd C:\weflow\weflow\solutions
 pnpm build
-
-# 业务插件产物（plugins/*/dist，Core 直读）
-# pnpm build 已包含
 ```
 
-> 顺序约束：`packages/contracts` 改动后，先 `pnpm --dir packages/contracts build` 再构建 core；`weflow-solutions` 的 `pnpm build` 已按依赖顺序串联。
+> 顺序约束：`packages/contracts` 改动后，先 `pnpm --dir packages/contracts build` 再构建 core；`solutions/` 子树的 `pnpm build` 已按依赖顺序串联。
 
 ---
 
@@ -280,7 +276,7 @@ Weflow 的部署形态让「改代码 → 上线」不需要停机窗口：api �
 ### 12.1 前端更新（无重启，秒级）
 
 ```powershell
-cd C:\weflow\weflow-solutions
+cd C:\weflow\weflow
 git pull
 pnpm --dir solutions/customer-support/apps/support-web build
 

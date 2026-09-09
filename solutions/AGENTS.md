@@ -1,6 +1,8 @@
-# Weflow Solutions 仓库守则
+# Weflow Solutions 子树守则（`weflow/solutions/`）
 
-本仓库（`weflow-solutions`）是**业务 Solution 的唯一来源**，同时也是 **Weflow 产品网页端的唯一来源**：`apps/support-web` 是产品本体 SPA（自带登录 + 应用布局 + browser history），直接访问 Core API。
+本目录是**业务 Solution 的唯一来源**，同时也是 **Weflow 产品网页端的唯一来源**：`customer-support/apps/support-web` 是产品本体 SPA（自带登录 + 应用布局 + browser history），直接访问 Core API。
+
+2026-09 起本子树即原独立仓库 **Weflow-Solutions**（已归档），整仓并入 `weflow` 仓，历史保留。上一条边界条款「业务在 `weflow-solutions` 仓」一律按本目录理解。
 
 ## 产品收敛现状（R1）
 
@@ -11,8 +13,8 @@
 
 ## 职责边界
 
-- **`weflow-solutions`（业务层 + 产品网页端）**：业务逻辑、业务 UI（support-web）、业务策略、业务技能、业务 BFF。
-- **`weflow`（平台层）**：认证、会话/消息/Handoff 等领域事实、系统管理、审计、设置等平台级能力。
+- **本子树 `solutions/`（业务层 + 产品网页端）**：业务逻辑、业务 UI（support-web）、业务策略、业务技能、业务 BFF。
+- **引擎层 `core/`、`apps/`（平台层）**：认证、会话/消息/Handoff 等领域事实、系统管理、审计、设置等平台级能力。
 - support-web 通过 Cookie 会话直接调用 Core API（`/api/v1/*`）；业务 BFF（`backend/`）提供 `ai-employees` 等业务端点。
 
 ## 仓库布局约定
@@ -27,14 +29,14 @@ solutions/
                                #   由 Core 从 WEFLOW_PLUGIN_DIR/backend 直读
 ```
 
-R3 平台化拆除：`solution.manifest.json` / `solution.lock.json` / `signature.json` / `artifacts/` 已删除；插件不再打包安装，Core 通过 `WEFLOW_PLUGIN_DIR` 环境变量直读本仓库的插件目录。
+R3 平台化拆除：`solution.manifest.json` / `solution.lock.json` / `signature.json` / `artifacts/` 已删除；插件不再打包安装，Core 通过 `WEFLOW_PLUGIN_DIR` 环境变量直读本目录的插件目录。
 
 ## 绝对禁止
 
 - 禁止把业务 UI、业务页面、业务路由、业务文案、业务组件实现到 `weflow/apps/console`。
 - 禁止在 Core 中硬编码业务策略、业务 Prompt、业务状态机。
-- 禁止把本仓库已下沉的业务功能反向搬回 `weflow`（含 `apps/console`、`core`）。
-- 禁止在本仓库放置平台壳代码（如 Console 本体、Core 内部模块）。
+- 禁止把本子树已下沉的业务功能反向搬回引擎层（`core/`、`apps/`）。
+- 禁止在本子树放置平台壳代码（如 Console 本体、Core 内部模块）。
 - 禁止恢复微前端机制（entry.ts mount 契约 / memory history / `vite-plugin-css-injected-by-js` lib 构建模式）。
 
 ## 正确开发路径
@@ -45,7 +47,7 @@ R3 平台化拆除：`solution.manifest.json` / `solution.lock.json` / `signatur
   - 登录/改密/审计/用户/系统状态/设置页面在 `src/views/`
 - 业务 Agent 能力：`solutions/<solution>/plugins`（Skill、Execution Strategy 等）。
 - 业务后端：`solutions/<solution>/backend`。
-- 平台壳问题去 `weflow` 仓库处理，且必须是平台级、业务中立的维护性改动。
+- 平台壳问题去引擎层目录处理，且必须是平台级、业务中立的维护性改动。
 
 ## 提交前自检清单
 
@@ -67,7 +69,7 @@ R3 平台化拆除：`solution.manifest.json` / `solution.lock.json` / `signatur
 ## 违规检测方法
 
 - 检查 PR / diff：如果 `weflow/apps/console` 下新增了业务专属标题、路由、组件或文案，立即拦截。
-- 检查本仓库：`src/entry.ts`、`createMemoryHistory`、`consoleExtensions` 消费端代码不得存在。
+- 检查本子树：`src/entry.ts`、`createMemoryHistory`、`consoleExtensions` 消费端代码不得存在。
 
 ## 验证
 

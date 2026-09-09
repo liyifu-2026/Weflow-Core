@@ -11,6 +11,8 @@
 
 # npm auth (local-only, contains tokens)
 **/.npmrc
+# 例外：插件包内的无密钥 .npmrc（scoped registry 指向 npmjs，供任意机器安装）
+!customer-support/plugins/*/.npmrc
 
 # Build artifacts / debug captures
 *.apk
