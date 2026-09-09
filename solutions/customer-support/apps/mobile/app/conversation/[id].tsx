@@ -1095,15 +1095,19 @@ export default function ConversationScreen() {
           replyToChannelMessageId: message.replyToChannelMessageId ?? undefined,
         },
       );
-      // 发送回执可能晚于 SSE 事件到达：此时列表里可能已经有同一条服务端消息，
-      // 只有乐观占位还在。先移除占位、再按 messageId 合并，避免重复气泡。
+      // 发送回执可能晚于 SSE 事件到达：此时列表里可能已经有同一条服务端消息
+      // （转录投影，字段更全、sendState 更新）。有则只移除乐观占位、保留已有
+      // 权威行；没有才用回执行补上。两条路径都按 messageId 去重，避免重复气泡。
       setMessages((current) => {
         const withoutPlaceholder = current.filter(
           (item) => item.clientRequestId !== message.clientRequestId,
         );
-        const merged = mergeTimelineMessages(withoutPlaceholder, [
-          submission.message,
-        ]);
+        const known = withoutPlaceholder.some(
+          (item) => item.messageId === submission.message.messageId,
+        );
+        const merged = known
+          ? withoutPlaceholder
+          : mergeTimelineMessages(withoutPlaceholder, [submission.message]);
         messagesRef.current = merged;
         return merged;
       });
