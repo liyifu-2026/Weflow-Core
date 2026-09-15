@@ -58,6 +58,8 @@ class WeChatChannelHost:
         self.account = str(account).strip() or None if account else None
         self._self_ref: Optional[str] = None
         self._self_nickname: Optional[str] = None
+        # SenderName2Id 中属于本机账号的 rowid 集合（新版微信非空，缓存）
+        self._self_sender_ids_cache: Optional[frozenset] = None
         self._last_message_chat_discovery = 0.0
         # 运行期新发现会话的基线时刻（unix 秒，与微信 create_time 同源）：
         # 早于该时刻的消息视为历史，不导入；晚于该时刻的是真新消息，
@@ -275,11 +277,16 @@ class WeChatChannelHost:
 
         self_ref = self._get_self_ref()
         sender_id = message.get("sender_id")
-        sender_ref, normalized_content = _sender_and_content(
-            content, sender_id, self_ref
+        is_self = self._is_self_sender(sender_id)
+        # 私聊会话的对端即联系人 wxid：对方消息的 sender_ref 直接用它，
+        # 兼容 4.1.15+ 无法从索引反查的 sender_id（如 2）。
+        peer_ref = (
+            conversation_ref
+            if not conversation_ref.endswith("@chatroom")
+            else None
         )
-        is_self = sender_id in (2, "2") or (
-            self_ref is not None and str(sender_id) == self_ref
+        sender_ref, normalized_content = _sender_and_content(
+            content, sender_id, self_ref, is_self=is_self, peer_ref=peer_ref
         )
         occurred_at = _timestamp(message.get("create_time"))
         local_id_text = str(local_id)
@@ -338,6 +345,53 @@ class WeChatChannelHost:
             nick = info.get("nick_name") if isinstance(info, dict) else None
             self._self_nickname = str(nick).strip() if nick else ""
         return self._self_ref or None
+
+    def _self_sender_ids(self) -> frozenset:
+        """SenderName2Id 中属于本机账号的 rowid 集合（缓存）。
+
+        新版微信（4.1.15+）在 SenderName2Id 里为本机账号保留真实 rowid
+        （如 id=1 → 本机 wxid）；旧版（≤4.1.12）索引中不含本机行，
+        返回空集合，调用方回退到经典约定。
+        """
+        if self._self_sender_ids_cache is None:
+            ids: set = set()
+            self_ref = self._get_self_ref()
+            if self_ref:
+                try:
+                    index = self.db._sender_id_index()
+                except Exception:
+                    index = {}
+                if isinstance(index, dict):
+                    for rid, name in index.items():
+                        if name == self_ref:
+                            try:
+                                ids.add(int(rid))
+                            except (TypeError, ValueError):
+                                continue
+            self._self_sender_ids_cache = frozenset(ids)
+        return self._self_sender_ids_cache
+
+    def _is_self_sender(self, sender_id) -> bool:
+        """消息是否由本机账号发出（自适应新旧 real_sender_id 语义）。
+
+        - 新版（4.1.15+，``_self_sender_ids()`` 非空）：以「sender_id ==
+          本机 rowid」判定。经典约定「2=自己」在该代库中已不成立——2
+          可能是对方（实测：本机=1、对方=2）。
+        - 旧版：沿用经典约定「2=自己」。
+        """
+        if sender_id is None:
+            return False
+        self_ref = self._get_self_ref()
+        if self_ref is None:
+            return False
+        try:
+            sid_int = int(sender_id)
+        except (TypeError, ValueError):
+            return str(sender_id) == self_ref
+        self_ids = self._self_sender_ids()
+        if self_ids:
+            return sid_int in self_ids
+        return sid_int == 2
 
     def _get_self_nickname(self) -> Optional[str]:
         """Return the current user's display nickname for @ detection."""
@@ -777,14 +831,27 @@ def _required_int(message: dict, field: str) -> int:
 
 
 def _sender_and_content(
-    content: str, sender_id, self_ref: Optional[str]
+    content: str,
+    sender_id,
+    self_ref: Optional[str],
+    *,
+    is_self: bool = False,
+    peer_ref: Optional[str] = None,
 ) -> tuple[Optional[str], str]:
     match = GROUP_SENDER_RE.match(content)
     if match:
         return match.group(1), content[match.end() :]
-    if sender_id in (None, 2, "2"):
-        return (self_ref if sender_id in (2, "2") else None), content
-    return str(sender_id), content
+    if is_self:
+        return self_ref, content
+    if sender_id is None:
+        return None, content
+    sid_text = str(sender_id)
+    # 纯数字 sender_id（无法从索引反查）在私聊中即会话对端 wxid
+    # （4.1.15+ 实测本机=1、对方=2，旧约定 2=自己 已失效）；
+    # 字符串身份（wxid/群成员）保持原样。
+    if sid_text.isdigit() and peer_ref:
+        return peer_ref, content
+    return sid_text, content
 
 
 def _timestamp(value) -> Optional[str]:
