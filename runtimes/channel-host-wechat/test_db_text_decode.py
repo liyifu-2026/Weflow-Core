@@ -31,14 +31,15 @@ class WeChatTextDecodeTests(unittest.TestCase):
 
 
 class _MsgConnDb(WeChatDB):
-    """单次使用的 _msg_conn 替身（连接在 _run_msg_query finally 中关闭）。"""
+    """单次使用的 _msg_conns 替身（连接在 _run_msg_query finally 中关闭）。"""
 
     def __init__(self, conn, table):
         self._conn = conn
         self._table = table
+        self._db_files = []  # 不调用父类 __init__：发送者索引退化为空
 
-    def _msg_conn(self, user):
-        return self._conn, self._table
+    def _msg_conns(self, user, _retry=True):
+        return [(self._conn, self._table)]
 
 
 def _msg_table_conn():
@@ -49,7 +50,7 @@ def _msg_table_conn():
         f"CREATE TABLE {table} (local_id INTEGER, local_type INTEGER, "
         "real_sender_id TEXT, create_time INTEGER, message_content BLOB, "
         "source BLOB, packed_info_data BLOB, compress_content BLOB, "
-        "sort_seq INTEGER)"
+        "server_id INTEGER, sort_seq INTEGER)"
     )
     return conn, table
 
@@ -62,8 +63,8 @@ class CompressContentFallbackTests(unittest.TestCase):
         cc = zstandard.ZstdCompressor().compress(expected.encode("utf-8"))
         conn, table = _msg_table_conn()
         conn.execute(
-            f"INSERT INTO {table} VALUES (?,?,?,?,?,?,?,?,?)",
-            (1, 1, "wxid_x", 100, b"\xff\xfe\xfd\xfc", None, None, cc, 1),
+            f"INSERT INTO {table} VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (1, 1, 1001, 100, b"\xff\xfe\xfd\xfc", None, None, cc, 5001, 1),
         )
         conn.commit()
 
@@ -76,9 +77,9 @@ class CompressContentFallbackTests(unittest.TestCase):
         # compress_content 也不是可解文本 → 保持占位符，不抛异常
         conn, table = _msg_table_conn()
         conn.execute(
-            f"INSERT INTO {table} VALUES (?,?,?,?,?,?,?,?,?)",
-            (1, 47, "wxid_x", 100, b"\xff\xfe\xfd\xfc", None, None,
-             b"\x00\x01\x02", 1),
+            f"INSERT INTO {table} VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (1, 47, 1001, 100, b"\xff\xfe\xfd\xfc", None, None,
+             b"\x00\x01\x02", 5002, 1),
         )
         conn.commit()
 
@@ -88,8 +89,8 @@ class CompressContentFallbackTests(unittest.TestCase):
     def test_direct_plaintext_not_overridden_by_placeholder_logic(self):
         conn, table = _msg_table_conn()
         conn.execute(
-            f"INSERT INTO {table} VALUES (?,?,?,?,?,?,?,?,?)",
-            (1, 1, "wxid_x", 100, b"direct text", None, None, None, 1),
+            f"INSERT INTO {table} VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (1, 1, 1001, 100, b"direct text", None, None, None, 5003, 1),
         )
         conn.commit()
 

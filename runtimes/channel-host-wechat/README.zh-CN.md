@@ -12,10 +12,10 @@
 本项目复刻上游 wxauto 项目，目标是实现对当前微信 4.x Windows 客户端的自动化
 （读取消息、发送消息、媒体下载、朋友圈），非网页版，直接操作本机客户端。
 
-> 当前版本：1.2.0
+> 当前版本：1.2.2.2（同步上游 1.2.2.2 + Weflow 加固补丁）
 >
-> **兼容范围**：Windows 10/11 ｜ Python 3.9+（已在 3.12 验证）｜ 微信 **4.1.12+**
-> （数据库读取路线对微信版本不敏感；坐标+OCR 发送路线依赖 4.1.12+ 自绘渲染
+> **兼容范围**：Windows 10/11 ｜ Python 3.9+（已在 3.12 验证）｜ 微信 **4.1.13+**
+> （数据库读取路线对微信版本不敏感；坐标+OCR 发送路线依赖自绘渲染
 > 布局，其它 4.x 小版本可能需校准 `guia.py` 布局常量）。
 
 ![解密读取微信 4.x 加密数据库](docs/demo_db_files.gif)
@@ -33,6 +33,29 @@
 ---
 
 ## 版本记录
+
+### v1.2.2.2（2026-09-15，同步上游 1.2.2.2）
+
+同步上游 1.2.2 / 1.2.2.1 / 1.2.2.2（微信 4.1.13.65+ 兼容、跨分片消息读取、
+密钥缓存加固、UIA 自愈），并保留 Weflow fork 全部加固补丁：
+
+- **跨分片消息读取**（上游 1.2.2）：`_find_msg_tables` 返回会话全部 message_*.db
+  分片合并读取，语音/长会话不再丢消息；`_msg_conn` 保留为兼容接口；
+- **新 UI 兼容**（上游 1.2.2.1）：AutomationId 点分路径容忍匹配、窗口标题
+  包含匹配（「微信(N)」）、锚点候选与结构回退、`WeChatUIA.describe_layout()` 自检；
+- **密钥处理加固**（上游 1.2.2.2）：密钥缓存空结果不落盘、durable 副本
+  （`%LOCALAPPDATA%\wechatauto_keys\`）、按页 1 HMAC 选账号、`diagnose_keys`
+  增强诊断；
+- **Weflow 加固保留**：`_scan_aes_key(deadline)` 有界扫描 + 冷却；
+  `has/try_acquire/refresh_image_key` 后台密钥服务接口；
+  `decrypt_image/download_image(allow_key_scan=False)` 请求路径禁扫描；
+  `_save_image_bytes` / `download_image_thumbnail` 缩略图兜底（免密钥）；
+  `list_contacts` 联系人分页；`click_send` 单次歧义尝试（防重复发送）；
+  `_find_render_window` 可见性+重叠度过滤（防离屏 Qt 表面锁死坐标）；
+  `_friendly_content` 纯控制字符回退占位符；
+- **依赖修正**：`silk-python` 补入依赖表（Core 语音转写 `import pysilk` 依赖它，
+  此前仅存在于开发机 venv，全新 `uv sync` 会缺失）；同步上游新增
+  `imageio-ffmpeg` / `pyautogui` / `opencv-python`。
 
 ### v1.2.0（2026-08-31）
 

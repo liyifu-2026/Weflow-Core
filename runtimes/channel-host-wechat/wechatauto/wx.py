@@ -43,6 +43,30 @@ if TYPE_CHECKING:
     from wechatauto.msgs.base import Message
 
 
+def _find_descendant(control, predicate, max_depth: int = 12):
+    """在 UIA 控件子树中递归查找第一个满足 ``predicate`` 的后代。
+
+    用树遍历（``GetChildren``）替代 ``uiautomation`` 的名称模式匹配，
+    避免兼容层对 Name 的模糊匹配在“朋友圈”等中文按钮上失配。
+    """
+    try:
+        if predicate(control):
+            return control
+    except Exception:
+        return None
+    if max_depth <= 0:
+        return None
+    try:
+        children = control.GetChildren()
+    except Exception:
+        return None
+    for child in children:
+        found = _find_descendant(child, predicate, max_depth - 1)
+        if found is not None:
+            return found
+    return None
+
+
 # ---------------------------------------------------------------------------
 # 兼容占位：UIA 时代的监听器抽象基类（保留导出，不再使用）
 # ---------------------------------------------------------------------------
@@ -112,6 +136,14 @@ class _DBMessageParent:
     def __init__(self, chat):
         self.root = chat
         self.msgbox = None
+
+
+class _AllMessageChat:
+    """AddListenAll 使用的轻量 Chat 占位（仅含 .who，不触发 GUI 初始化）。"""
+
+    def __init__(self, username: str):
+        self.who = username
+        self._wxid = username
 
 
 def _extract_group_sender(content) -> str:
@@ -318,6 +350,34 @@ class Chat:
             return WxResponse.failure('撤回失败（消息已过期或控件不可识别）')
         return WxResponse.success(f'已撤回对 {target} 发送的最近一条消息')
 
+    @uilock
+    def ForwardVoiceMessage(
+            self,
+            who: str = None,
+            target: str = None,
+            save_dir: str = None,
+        ) -> WxResponse:
+        """转发语音消息（从本地媒体库提取 SILK 文件发送给目标）。
+
+        微信不支持右键直接转发语音，故实现为「找到本地语音文件 → 以文件
+        消息发送」。默认转发本会话最近一条语音到 target（不指定则发给
+        本会话对象自身）。
+
+        Args:
+            who: 语音所在会话，不指定则用当前会话
+            target: 转发目标联系人，不指定则转发给 who 本身
+            save_dir: 语音文件临时保存目录
+
+        Returns:
+            WxResponse
+        """
+        chat = Chat(who or self.who, self._gui, self._db) if who else self
+        msgs = chat.GetAllMessage()
+        for m in msgs:
+            if getattr(m, 'type', None) == 'voice':
+                return m.forward_to(target or chat.who, save_dir=save_dir)
+        return WxResponse.failure(f'会话「{chat.who}」最近 50 条中没有语音消息')
+
     # -- 信息 -------------------------------------------------------------
 
     def ChatInfo(self) -> Dict[str, str]:
@@ -388,8 +448,13 @@ class Chat:
         self_wxid = self._db.get_self_info()['username']
         return [_db_row_to_message(r, self, self_wxid) for r in rows]
 
-    def GetNewMessage(self) -> List['Message']:
-        """获取新消息（首次调用仅建立基线，返回空列表）。"""
+    def GetNewMessage(self, max_backlog: int = 5000) -> List['Message']:
+        """获取新消息（首次调用仅建立基线，返回空列表）。
+
+        积压超过单批上限（200）时连续分批拉取直到追平；水位只推进到
+        **实际取回**的最后一条，不会跳过中间消息。max_backlog 为保护上限，
+        若因上限截断，下次调用会从断点继续拉取。
+        """
         latest = self._db.get_messages(self._wxid, limit=1)
         current = latest[0]['sort_seq'] if latest else 0
         if self._last_seq is None:
@@ -397,8 +462,23 @@ class Chat:
             return []
         if current <= self._last_seq:
             return []
-        rows = self._db.get_new_messages(self._wxid, since_seq=self._last_seq)
-        self._last_seq = current
+        rows: List[dict] = []
+        since = self._last_seq
+        batch_sz = 200
+        while len(rows) < max_backlog:
+            batch = self._db.get_new_messages(self._wxid, since_seq=since, limit=batch_sz)
+            if not batch:
+                break
+            rows.extend(batch)
+            since = batch[-1]['sort_seq']
+            if len(batch) < batch_sz:
+                break
+        if not rows:
+            return []
+        if max_backlog and len(rows) > max_backlog:
+            rows = rows[:max_backlog]
+        # 水位只推进到实际取回的最后一条（而非数据库最新位置）
+        self._last_seq = rows[-1]['sort_seq']
         self_wxid = self._db.get_self_info()['username']
         return [_db_row_to_message(r, self, self_wxid) for r in rows]
 
@@ -461,12 +541,177 @@ class WeChat(Chat, Listener):
         self._listener_is_listening = False
         self._listener_stop_event = threading.Event()
         self._current_chat: Optional['Chat'] = None
+        self._listen_all_active = False
+        self._listen_all_callback: Optional[Callable] = None
+        self._moment_api: Optional[object] = None
+        self._moment: Optional[object] = None
 
         if start_listener:
             self._listener_start()
         if debug:
             wxlog.set_debug(True)
             wxlog.debug('Debug mode is on')
+
+    # -- 朋友圈（UIA 控件路线）--------------------------------------------
+
+    @property
+    def _api(self):
+        """朋友圈 UIA 根控件（懒构建，需热激活 UIA 树后才有值）。"""
+        return self._ensure_moment_api()
+
+    def _ensure_moment_api(self):
+        """确保 UIA 树被热激活并返回主窗口封装，失败返回 None。"""
+        from wechatauto.logger import wxlog as _wxlog
+        if self._moment_api is not None:
+            return self._moment_api
+        try:
+            uia_eng = self._gui._get_uia()
+            if uia_eng is None:
+                # 首次拿不到 → 强制重新热激活 accessibility gate（微信重启
+                # /重登后 gate byte 会失效），再取一次，避免“昨天能用今天不能”。
+                _wxlog.info('UIA 引擎初始不可用，强制重新热激活后重试')
+                uia_eng = self._gui._get_uia(refresh=True)
+            if uia_eng is None:
+                _wxlog.info('UIA 树不可用，无法进入朋友圈（无 UI 节点）')
+                return None
+        except Exception as e:
+            _wxlog.debug('初始化 UIA 引擎失败：%s', e)
+            return None
+        try:
+            from wechatauto.ui.main import WeChatMainWnd
+            self._moment_api = WeChatMainWnd()
+        except Exception as e:
+            _wxlog.debug('获取微信主窗口 UIA 封装失败：%s', e)
+            self._moment_api = None
+        return self._moment_api
+
+    def SwitchToMoments(self) -> bool:
+        """切换到朋友圈页面（UIA 控件点击导航栏“朋友圈”按钮）。
+
+        需要微信主窗口已登录且 UIA 树被热激活。优先用新版合并布局入口
+        （含已在朋友圈页的快速判定）；失败时退化为主窗口控件树的递归扫描
+        （按 ClassName ``mmui::MainTabBar`` 定位左侧导航栏，再匹配 Name 含
+        “朋友圈”的按钮），最后退回 NavigationBox 预订按钮。成功返回 True，
+        树不可用或找不到按钮时返回 False。
+
+        注意：本方法不依赖 :attr:`_api`（其背后的 ``WeChatMainWnd()`` 构造
+        会在某些环境下触发全桌面 UIA 枚举导致长时间阻塞），内部一律从
+        ``ControlFromHandle(main_hwnd)`` 直接锚定主窗口。
+        """
+        # 路线 1：新版合并布局（含已在朋友圈页的快速判定，无需导航）
+        if self._switch_to_moments_new_style():
+            return True
+
+        # 路线 2：直接递归扫描主窗口控件树，命中“朋友圈”导航按钮（旧版）
+        try:
+            import uiautomation as _uia
+            mw = getattr(self, '_gui', None)
+            hwnd = getattr(mw, 'main_hwnd', None) if mw is not None else None
+            if hwnd:
+                root = _uia.ControlFromHandle(hwnd)
+                tabbar = _find_descendant(root, lambda c: getattr(c, 'ClassName', '') == 'mmui::MainTabBar')
+                if tabbar is not None:
+                    btn = _find_descendant(
+                        tabbar,
+                        lambda c: getattr(c, 'ControlTypeName', '') == 'ButtonControl'
+                                  and (getattr(c, 'Name', '') or '').strip() == '朋友圈',
+                    )
+                    if btn is not None:
+                        btn.Click()
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def _switch_to_moments_new_style(self) -> bool:
+        """新版微信（4.x 合并布局）切换到朋友圈。
+
+        新版左侧导航只有 微信/通讯录/收藏/发现/更多 五个 tab，没有“朋友圈”
+        按钮；需先点“发现”tab，再点发现页左侧的“朋友圈”入口
+        （``ExtensionDiscoverContentCell`` / Name ``朋友圈`` 的按钮）。
+        双入口都先回到标注状态再判断时间线是否出现。
+        """
+        import time as _t
+        try:
+            import uiautomation as _uia
+            mw = getattr(self, '_gui', None)
+            hwnd = getattr(mw, 'main_hwnd', None) if mw is not None else None
+            if not hwnd:
+                return False
+            root = _uia.ControlFromHandle(hwnd)
+        except Exception:
+            return False
+
+        def _has_timeline() -> bool:
+            try:
+                tl = _find_descendant(root, lambda c: getattr(c, 'ClassName', '') == 'mmui::TimeLineListView', max_depth=30)
+                if tl is not None:
+                    return True
+                sc = _find_descendant(root, lambda c: getattr(c, 'ClassName', '') == 'mmui::SNSContentView', max_depth=30)
+                return sc is not None
+            except Exception:
+                return False
+
+        if _has_timeline():
+            return True
+
+        try:
+            # 左侧导航：先在 MainTabBar 容器内找 XTabBarItem，避免全局遍历
+            # 命中 Name='发现' 的其它空 rect 控件。
+            tabbar = _find_descendant(root, lambda c: getattr(c, 'ClassName', '') == 'mmui::MainTabBar', max_depth=15)
+            disc = None
+            if tabbar is not None:
+                disc = _find_descendant(
+                    tabbar,
+                    lambda c: (getattr(c, 'ClassName', '') == 'mmui::XTabBarItem'
+                               or getattr(c, 'ControlTypeName', '') in ('ButtonControl', 'TabItemControl'))
+                              and (getattr(c, 'Name', '') or '').strip() == '发现',
+                    max_depth=6,
+                )
+            if disc is None:
+                disc = _find_descendant(root, lambda c: (getattr(c, 'Name', '') or '').strip() == '发现', max_depth=15)
+            if disc is not None:
+                try:
+                    disc.Click()
+                    _t.sleep(0.8)
+                except Exception:
+                    # Click 可能因控件临时失效失败，退化为坐标点击
+                    try:
+                        import pyautogui as _pg
+                        r = disc.BoundingRectangle
+                        if r.right > r.left and r.bottom > r.top:
+                            x = int(r.left + (r.right - r.left) // 2)
+                            y = int(r.top + (r.bottom - r.top) // 2)
+                            _pg.click(x, y)
+                            _t.sleep(0.8)
+                        else:
+                            return False
+                    except Exception:
+                        return False
+        except Exception:
+            pass
+
+        if _has_timeline():
+            return True
+
+        try:
+            btn = _find_descendant(root, lambda c: getattr(c, 'ControlTypeName', '') in ('ButtonControl', 'TabItemControl', 'ListItemControl')
+                                   and (getattr(c, 'Name', '') or '').strip() == '朋友圈')
+            if btn is not None:
+                btn.Click()
+                _t.sleep(1.0)
+                return _has_timeline()
+        except Exception:
+            pass
+        return False
+
+    @property
+    def Moment(self):
+        """朋友圈 UIA 控件接口（点赞/评论/读取）。UIA 树不可用时为 None。"""
+        if self._moment is None:
+            from wechatauto.moment import Moment
+            self._moment = Moment(self)
+        return self._moment
 
     # -- 监听（基于 db.Listener）------------------------------------------
 
@@ -538,6 +783,64 @@ class WeChat(Chat, Listener):
             self._listener.add_listener(chat._wxid, wrapper)
         return chat
 
+    def AddListenAll(
+            self,
+            callback: Callable[['Message', 'Chat'], None],
+            discover: bool = True,
+        ) -> WxResponse:
+        """监听所有会话的新消息（包括好友、群聊、文件传输助手等）。
+
+        Args:
+            callback: 回调函数，参数为 (Message 对象, Chat-like 对象)。
+                Chat-like 对象的 .who 属性为会话原始 username。
+            discover: 为 True 时自动发现新出现的会话（如新群聊）并注册
+                回调，无需重复调用。默认 True。
+
+        Returns:
+            WxResponse
+
+        示例::
+
+            wx = WeChat()
+            def on_all(msg, chat):
+                print(f'[{chat.who}] {msg.content}')
+            wx.AddListenAll(on_all)
+            wx.StartListening()
+        """
+        if not self._listener_is_listening:
+            wxlog.debug('检测到未开启监听器，开启监听器')
+            self._listener_start()
+        if getattr(self, '_listen_all_active', False):
+            return WxResponse.failure('已开启全局监听')
+        self_wxid = self._db.get_self_info()['username']
+
+        def _wrap(row: dict, listener) -> None:
+            try:
+                username = row.get('username', '')
+                fake_chat = _AllMessageChat(username)
+                msg = _db_row_to_message(row, fake_chat, self_wxid)
+                callback(msg, fake_chat)
+            except Exception:
+                import traceback
+                wxlog.debug(f'全局监听回调发生错误：{traceback.format_exc()}')
+
+        self._listen_all_callback = callback
+        self._listen_all_active = True
+        if self._listener is not None:
+            self._listener.add_all(_wrap, discover=discover)
+        return WxResponse.success('已开启全局监听')
+
+    def RemoveListenAll(self) -> WxResponse:
+        """停止全局监听。"""
+        if not getattr(self, '_listen_all_active', False):
+            return WxResponse.failure('未开启全局监听')
+        self._listen_all_active = False
+        self._listen_all_callback = None
+        if self._listener is not None:
+            self._listener._discover_new = False
+            self._listener._all_callback = None
+        return WxResponse.success('已停止全局监听')
+
     def StartListening(self) -> None:
         """启动监听。"""
         self._listener_start()
@@ -552,6 +855,8 @@ class WeChat(Chat, Listener):
         if remove:
             self.listen.clear()
             self._listen_wrappers.clear()
+            self._listen_all_active = False
+            self._listen_all_callback = None
 
     @uilock
     def RemoveListenChat(

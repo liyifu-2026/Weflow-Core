@@ -18,14 +18,62 @@ import queue
 import tempfile
 import threading
 import time
+from typing import Any
 
 from PIL import Image as _PILImage
 
-from comtypes import CoInitializeEx as _CoInitializeEx
+# uiautomation 和 comtypes 初始化（COM + UIA）可能在部分系统上阻塞
+# （如微信或其他 Qt 应用占用 COM），改为延迟导入：仅在首次访问本包属性时
+# 才加载，避免 ``import wechatauto`` 时卡死。
+_uia_loaded = False
+_UiaControl = None
+_control_from_handle = None
+_CoInitializeEx = None
 
-from uiautomation import *  # noqa: F401,F403
-from uiautomation import Control as _UiaControl
-from uiautomation import ControlFromHandle as _control_from_handle
+
+def _ensure_uia():
+    """延迟加载 uiautomation 并完成 monkey-patch，只执行一次。"""
+    global _uia_loaded, _UiaControl, _control_from_handle, _CoInitializeEx
+    if _uia_loaded:
+        return
+    _uia_loaded = True
+
+    from comtypes import CoInitializeEx as _ci
+    from uiautomation import Control as _uc, ControlFromHandle as _cfh
+
+    _CoInitializeEx = _ci
+    _UiaControl = _uc
+    _control_from_handle = _cfh
+
+    _uc.runtimeid = property(_get_runtimeid)
+    _uc.ScreenShot = _screen_shot
+
+    # 把 __all__ 中的名称绑定到模块全局，让 from uiautomation import * 的
+    # 等效访问能直接命中，不再触发 __getattr__ 回退查找
+    import uiautomation as _mod
+    for _n in __all__:
+        if _n not in globals():
+            _v = getattr(_mod, _n, None)
+            if _v is not None:
+                globals()[_n] = _v
+
+
+def __getattr__(name: str) -> Any:
+    """延迟导入：首次访问时加载 uiautomation。"""
+    _ensure_uia()
+    try:
+        return globals()[name]
+    except KeyError:
+        # 从 uiautomation 星号导入的名称，首次访问时从实际模块取回
+        import uiautomation as _mod
+        val = getattr(_mod, name, _SENTINEL)
+        if val is _SENTINEL:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        globals()[name] = val
+        return val
+
+
+_SENTINEL = object()
 
 __all__ = [
     'ControlFromHandle',
@@ -56,6 +104,7 @@ def GetUiClassNameWithTimeout(hwnd, timeout: float = 3.0) -> 'str | None':
         str: 窗口的 UIA 类名；超时/失败时返回 None
     """
     result_queue = queue.Queue()
+    _ensure_uia()
 
     def _probe():
         try:
@@ -86,9 +135,6 @@ def GetUiClassNameWithTimeout(hwnd, timeout: float = 3.0) -> 'str | None':
 def _get_runtimeid(self) -> str:
     """返回控件 RuntimeId 的字符串形式，用于唯一标识控件。"""
     return ''.join(str(i) for i in self.GetRuntimeId())
-
-
-_UiaControl.runtimeid = property(_get_runtimeid)
 
 # ----------------------------------------------------------------------------
 # Control 扩展：ScreenShot
@@ -138,9 +184,6 @@ def _screen_shot(self, savePath: str = None, crop: tuple = (0, 0, 0, 0),
             pass
         return img
     return savePath
-
-
-_UiaControl.ScreenShot = _screen_shot
 
 # ----------------------------------------------------------------------------
 # 模块级工具函数

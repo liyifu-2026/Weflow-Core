@@ -10,8 +10,10 @@ from .wx import WeChat, Chat, Listener
 from .param import WxParam, WxResponse, PROJECT_NAME
 from .logger import wxlog
 from .moment import Moment, MomentDB
-from .db import WeChatDB, auto_detect_db_dir, list_accounts
+from .moment_observer import MomentObserver
+from .db import WeChatDB, GroupMemberWatcher, auto_detect_db_dir, list_accounts
 from .media import MediaDownloader
+from .recall import RecallGuard
 from .guia import (
     WeChatGUI,
     quick_send,
@@ -49,16 +51,18 @@ from .msgs import (
     parse_msg,
 )
 
-__version__ = "1.2.0"
+__version__ = "1.2.2.2"
 
 __all__ = [
     "WeChat",
     "Chat",
     "Listener",
     "WeChatDB",
+    "GroupMemberWatcher",
     "auto_detect_db_dir",
     "list_accounts",
     "MediaDownloader",
+    "RecallGuard",
     "WeChatGUI",
     "quick_send",
     "quick_send_file",
@@ -71,6 +75,7 @@ __all__ = [
     "wxlog",
     "Moment",
     "MomentDB",
+    "MomentObserver",
     "LockManager",
     "uilock",
     "WechatautoError",

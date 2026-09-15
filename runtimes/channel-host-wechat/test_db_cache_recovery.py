@@ -1,8 +1,14 @@
-"""v1.1.3 回归测试：WAL 合并后坏缓存死循环修复。
+# -*- coding: utf-8 -*-
+"""v1.1.3 回归测试：WAL 合并后坏缓存死循环修复（已适配上游 1.2.2 跨分片机制）。
 
 背景：旧 `_check_merged` 只查 `sqlite_master`（schema 树），数据页损坏仍能通过
 校验，坏缓存被 stamp 标为「最新」后被轮询复用，反复抛
 ``database disk image is malformed`` 形成死循环。
+
+上游 1.2.2 语义差异（本测试已对齐）：
+- ``_invalidate_cache()`` 为实例方法、清空 workdir 全部 .db/.stamp（无参）；
+- ``_run_msg_query(user, build)`` 的 build 收到 ``[(conn, table), ...]`` 全分片；
+- 找不到会话返回 ``None``（调用方转空列表）。
 """
 
 import os
@@ -38,16 +44,8 @@ def _corrupt_data_pages(path: str) -> None:
             f.write(b"\x00" * page_sz)
 
 
-class _FakeRow:
-    def __init__(self, mapping):
-        self._m = mapping
-
-    def __getitem__(self, key):
-        return self._m[key]
-
-
 class _FlakyMsgConnDb(WeChatDB):
-    """用可编程的 _msg_conn 替身驱动 _run_msg_query 的重试语义。"""
+    """用可编程的 _msg_conns 替身驱动 _run_msg_query 的重试语义。"""
 
     def __init__(self, conns_per_call, invalidate_log):
         # 不调用父类 __init__：无需真实微信数据目录
@@ -55,9 +53,9 @@ class _FlakyMsgConnDb(WeChatDB):
         self.invalidate_log = invalidate_log
         self.workdir = "<workdir>"
 
-    def _msg_conn(self, user):
+    def _msg_conns(self, user, _retry=True):
         if not self._conns_per_call:
-            return None
+            return []
         item = self._conns_per_call.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -66,8 +64,8 @@ class _FlakyMsgConnDb(WeChatDB):
     def _message_dbs(self):
         return [os.path.join("message", "message_1.db")]
 
-    def _invalidate_cache(self, dst):
-        self.invalidate_log.append(dst)
+    def _invalidate_cache(self):
+        self.invalidate_log.append("invalidate")
 
 
 class CheckMergedTest(unittest.TestCase):
@@ -85,15 +83,39 @@ class CheckMergedTest(unittest.TestCase):
         self.assertFalse(WeChatDB._check_merged(self.dst))
 
     def test_invalidated_cache_removes_db_and_stamp(self):
+        # 上游语义：清空 workdir 内全部 .db/.stamp，非缓存文件保留
         stamp = self.dst + ".stamp"
         with open(stamp, "w") as f:
             f.write("2,0,0,0,0,0")
-        WeChatDB._invalidate_cache(self.dst)
+        keep = os.path.join(self.tmp.name, "keep.txt")
+        with open(keep, "w") as f:
+            f.write("k")
+
+        db = object.__new__(WeChatDB)
+        db.workdir = self.tmp.name
+        db._invalidate_cache()
+
         self.assertFalse(os.path.exists(self.dst))
         self.assertFalse(os.path.exists(stamp))
+        self.assertTrue(os.path.exists(keep))
 
     def test_invalidate_cache_tolerates_missing_files(self):
-        WeChatDB._invalidate_cache(os.path.join(self.tmp.name, "absent.db"))
+        db = object.__new__(WeChatDB)
+        db.workdir = os.path.join(self.tmp.name, "absent-dir")
+        db._invalidate_cache()  # 不得抛异常
+
+
+class _MalformedConn:
+    """查询即抛 malformed 的连接桩（模拟数据页损坏的缓存）。"""
+
+    def __init__(self):
+        self.closed = False
+
+    def execute(self, *args, **kwargs):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    def close(self):
+        self.closed = True
 
 
 class RunMsgQueryRecoveryTest(unittest.TestCase):
@@ -112,63 +134,64 @@ class RunMsgQueryRecoveryTest(unittest.TestCase):
         conn.commit()
         return conn, "Msg_x"
 
+    @staticmethod
+    def _fetch_first(tables):
+        conn, table = tables[0]
+        return conn.execute("SELECT * FROM %s" % table).fetchall()
+
     def test_malformed_cache_is_invalidated_and_retried(self):
         good = self._healthy_conn()
         invalidate_log = []
         db = _FlakyMsgConnDb(
             [
-                sqlite3.DatabaseError("database disk image is malformed"),
-                good,
+                [(_MalformedConn(), "Msg_x")],  # 第一次：缓存损坏
+                [good],                          # 清缓存重建后命中
             ],
             invalidate_log,
         )
-        rows = db._run_msg_query(
-            "wxid_a",
-            lambda conn, table: conn.execute(
-                "SELECT * FROM %s" % table
-            ).fetchall(),
-        )
+        rows = db._run_msg_query("wxid_a", self._fetch_first)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["local_id"], 7)
-        self.assertEqual(rows[0]["content"], "hi")
-        self.assertEqual(
-            invalidate_log,
-            ["<workdir>\\message__message_1.db"],
-        )
+        self.assertEqual(rows[0]["message_content"], "hi")
+        self.assertEqual(len(invalidate_log), 1)
         good[0].close()
 
     def test_non_malformed_database_error_raises_immediately(self):
         invalidate_log = []
         db = _FlakyMsgConnDb(
-            [sqlite3.DatabaseError("no such table: Msg_x")],
+            [[(sqlite3.connect(":memory:"), "Msg_x")]],
             invalidate_log,
         )
+
+        def build(_tables):
+            raise sqlite3.DatabaseError("no such table: Msg_x")
+
         with self.assertRaises(sqlite3.DatabaseError):
-            db._run_msg_query(
-                "wxid_a", lambda conn, table: conn.execute("SELECT 1").fetchall()
-            )
+            db._run_msg_query("wxid_a", build)
         self.assertEqual(invalidate_log, [])
 
     def test_malformed_error_second_time_raises(self):
         invalidate_log = []
         db = _FlakyMsgConnDb(
             [
-                sqlite3.DatabaseError("database disk image is malformed"),
-                sqlite3.DatabaseError("database disk image is malformed"),
+                [(sqlite3.connect(":memory:"), "Msg_x")],
+                [(sqlite3.connect(":memory:"), "Msg_x")],
             ],
             invalidate_log,
         )
+
+        def build(_tables):
+            raise sqlite3.DatabaseError("database disk image is malformed")
+
         with self.assertRaises(sqlite3.DatabaseError):
-            db._run_msg_query(
-                "wxid_a", lambda conn, table: conn.execute("SELECT 1").fetchall()
-            )
+            db._run_msg_query("wxid_a", build)
         self.assertEqual(len(invalidate_log), 1)
 
-    def test_no_msg_table_returns_empty(self):
+    def test_no_msg_table_returns_none(self):
+        # 上游语义：找不到会话返回 None（调用方 get_messages 转空列表）
         db = _FlakyMsgConnDb([], [])
-        self.assertEqual(
-            db._run_msg_query("wxid_a", lambda conn, table: conn.execute("SELECT 1")),
-            [],
+        self.assertIsNone(
+            db._run_msg_query("wxid_a", lambda tables: tables)
         )
 
 

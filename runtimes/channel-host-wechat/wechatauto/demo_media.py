@@ -88,7 +88,7 @@ def media_failure_reason(md, who: str, local_id: int) -> str:
         except Exception as e:
             return f"解密失败：{str(e)[:40]}"
         if data[:4] == b"wxgf":
-            return "微信动画表情容器（wxgf），按设计不落盘"
+            return "微信动画表情容器（wxgf）"
         return "未知图片格式"
     if t in (34, 43, 49):
         return "本地缓存未落地或文件已清理"
@@ -99,9 +99,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="wechatauto 演示：读取/下载微信会话中的媒体文件",
         add_help=False)
-    parser.add_argument("target", nargs="?", default="文件传输助手",
+    parser.add_argument("target", nargs="?", default="26级金高新生群1群",
                         help="会话名（昵称/备注/username），默认文件传输助手")
-    parser.add_argument("--limit", type=int, default=200, help="列出最近 N 条（默认 200）")
+    parser.add_argument("--limit", type=int, default=1000, help="列出最近 N 条（默认 200）")
     parser.add_argument("--photos", type=int, default=10, help="默认模式下载照片张数（默认 3）")
     parser.add_argument("--ids", default=None,
                         help="仅下载指定 local_id，逗号分隔，如 105,107")

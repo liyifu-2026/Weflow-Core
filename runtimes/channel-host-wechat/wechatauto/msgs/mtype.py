@@ -3,6 +3,7 @@ from .base import (
     HumanMessage,
 )
 from wechatauto import uia
+from wechatauto.utils import uilock
 from wechatauto.param import (
     WxParam,
     WxResponse,
@@ -61,6 +62,46 @@ class VoiceMessage(BaseMessage):
             additonal_attr: Dict[str, Any] = {}
         ):
         super().__init__(control, parent, additonal_attr)
+
+    @uilock
+    def forward_to(self, who: str, save_dir: str = None) -> WxResponse:
+        """转发语音：从本地媒体库提取 SILK 音频文件并发送给目标联系人。
+
+        微信不支持直接右键转发语音消息（无转发入口），因此本方法改为
+        「找到本地语音文件 → 作为文件消息发送」：
+
+        1. 通过 ``MediaDownloader.download_voice`` 从 media_0.db 提取
+           ``VoiceInfo.voice_data``（SILK 二进制）落盘为 ``.silk``；
+        2. 调用 ``WeChatGUI.send_file`` 以文件消息发送给 ``who``。
+
+        Args:
+            who: 转发目标（联系人显示名/wxid）
+            save_dir: 语音文件临时保存目录，默认系统临时目录
+
+        Returns:
+            WxResponse
+        """
+        chat = getattr(self.parent, 'root', None)
+        if chat is None:
+            return WxResponse.failure('消息缺少会话上下文，无法转发')
+        gui = getattr(chat, '_gui', None)
+        db = getattr(chat, '_db', None)
+        if gui is None or db is None:
+            return WxResponse.failure('消息缺少 GUI/DB 上下文，无法转发')
+        local_id = getattr(self, 'local_id', None)
+        if local_id is None:
+            return WxResponse.failure('消息缺少 local_id，无法定位语音文件')
+        # media_0.db 的 VoiceInfo 按「聊天对象」分组（chat_name_id），
+        # 因此 user 传会话 wxid（chat._wxid）而非 sender_id
+        user = getattr(chat, '_wxid', '') or getattr(self, 'wxid', '')
+        if not user:
+            return WxResponse.failure('无法确定语音所属会话')
+        from wechatauto.media import MediaDownloader
+        media = MediaDownloader(db, save_dir=save_dir)
+        path = media.download_voice(str(user), int(local_id), save_dir=save_dir)
+        if not path:
+            return WxResponse.failure(f'本地未找到该语音文件（local_id={local_id}）')
+        return gui.send_file(path, who)
 
 
 class ImageMessage(BaseMessage):

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ctypes
 import glob
+import hashlib
 import json
 import os
 import re
@@ -69,20 +70,48 @@ class MediaDownloader:
 
     def __init__(self, db, save_dir: Optional[str] = None,
                  image_key: Optional[str] = None,
+                 cfg_dword: Optional[int] = None,
                  keys_file: Optional[str] = None,
                  scan_budget_seconds: float = 8.0,
                  scan_cooldown_seconds: float = 30.0):
         self.db = db
         self.save_dir = save_dir or DEFAULT_SAVE_PATH
         self._image_key = image_key  # 显式注入的图片 AES 密钥
+        self._cfg_dword = cfg_dword  # cfg+0x40, 派生图片密钥(最佳方案)
         self._keys_file = keys_file  # 覆盖密钥持久化路径（secrets 管理）
+        # 后台密钥服务（Channel Host）专用的有界扫描状态：避免后台线程对
+        # 多 GB 的微信进程反复全量扫描，未命中进入冷却期。
         self._scan_budget = max(1.0, float(scan_budget_seconds))
         self._scan_cooldown = max(0.0, float(scan_cooldown_seconds))
         self._key_lock = threading.RLock()
+        self._last_scan_miss: Optional[float] = None
         self._xor_key: Optional[int] = None
         self._img_key: Optional[Tuple[str, int]] = None
         self._key_probe: Optional[bytes] = None
-        self._last_scan_miss: Optional[float] = None
+
+    @staticmethod
+    def derive_image_keys(cfg_dword: int, wxid: str) -> Tuple[str, int]:
+        """cfgDword 派生图片密钥(微信 4.x 最佳方案, 实测 3000/3000 验证)。
+
+        imageXorKey = cfgDword & 0xFF
+        imageAesKey = MD5(str(cfgDword) + wxid)[:16]   # 前 16 位即真 AES-128 密钥
+        """
+        xor_key = cfg_dword & 0xFF
+        aes_key = hashlib.md5(
+            ("%d" % cfg_dword + wxid).encode("utf-8")).hexdigest()[:16]
+        return aes_key, xor_key
+
+    def _derive_cfg_key(self) -> Optional[Tuple[str, int]]:
+        """cfgDword 派生并验证; 优先显式注入, 否则用 db.cfg_dword(自动提取)。"""
+        cfg_dword = self._cfg_dword
+        if cfg_dword is None:
+            cfg_dword = getattr(self.db, "cfg_dword", None)
+        if not cfg_dword:
+            return None
+        aes_key, xor_key = self.derive_image_keys(cfg_dword, self.db.wxid)
+        if self._validate_key(aes_key):
+            return aes_key, xor_key
+        return None
 
     # ------------------------------------------------------------------
     # 图片密钥（内存扫描 + 缩略图反推）
@@ -141,11 +170,65 @@ class MediaDownloader:
             saved = {}
         saved[self.db.account] = aes_key
         try:
-            os.makedirs(os.path.dirname(self._key_store()), exist_ok=True)
+            _store_dir = os.path.dirname(self._key_store())
+            if _store_dir:
+                os.makedirs(_store_dir, exist_ok=True)
             with open(self._key_store(), "w", encoding="utf-8") as f:
                 json.dump(saved, f, indent=2)
         except OSError:
             pass
+
+    def _collect_templates(self, limit: int = 32, keep: int = 16) -> List[str]:
+        """递归收集 *_t.dat 缩略图模板: 按修改时间降序取前 keep 个"""
+        base = os.path.join(self.db.account_dir, "msg", "attach")
+        hits = glob.glob(os.path.join(base, "*", "*", "Img", "*_t.dat"))
+        hits.sort(key=os.path.getmtime, reverse=True)
+        return hits[:keep]
+
+    def _get_xor_key(self, templates: List[str]) -> Optional[int]:
+        """文件尾统计推 XOR 密钥: 缩略图明文为 JPEG, 尾部固定 FF D9。
+
+        读每个模板最后 2 字节 (x, y), 统计出现最多的组合;
+        xorKey = x ^ 0xFF 且校验 y ^ 0xD9 == xorKey 才返回。
+        """
+        tails: Dict[Tuple[int, int], int] = {}
+        for p in templates:
+            try:
+                with open(p, "rb") as f:
+                    f.seek(-2, 2)
+                    tail = f.read(2)
+            except OSError:
+                continue
+            if len(tail) == 2:
+                tails[(tail[0], tail[1])] = tails.get((tail[0], tail[1]), 0) + 1
+        for (x, y), _ in sorted(tails.items(), key=lambda kv: -kv[1]):
+            key = x ^ 0xFF
+            if y ^ 0xD9 == key:
+                return key
+        return None
+
+    def _derive_xor_key(self, dat_path: str) -> int:
+        """从同图缩略图 <md5>_t.dat 尾部 FF D9 反推单字节 XOR 密钥"""
+        for cand in (
+            dat_path[:-4] + "_t.dat",
+            dat_path[:-4] + "_h.dat",
+            dat_path,
+        ):
+            if not os.path.exists(cand):
+                continue
+            try:
+                with open(cand, "rb") as f:
+                    f.seek(-2, 2)
+                    tail = f.read(2)
+            except OSError:
+                continue
+
+            if len(tail) == 2:
+                key = tail[0] ^ 0xFF
+                if tail[1] ^ 0xD9 == key:
+                    return key
+
+        return 0x88
 
     def _scan_aes_key(self, deadline: Optional[float] = None) -> Optional[str]:
         """从 Weixin.exe 进程内存扫描 16 字符 ASCII 密钥，用密文反测（有界单遍）。
@@ -233,73 +316,6 @@ class MediaDownloader:
 
         return _scan_once()
 
-    def _derive_xor_key(self, dat_path: str) -> int:
-        """从同图缩略图 <md5>_t.dat 尾部 FF D9 反推单字节 XOR 密钥"""
-        for cand in (dat_path[:-4] + "_t.dat", dat_path[:-4] + "_h.dat", dat_path):
-            if not os.path.exists(cand):
-                continue
-            try:
-                with open(cand, "rb") as f:
-                    f.seek(-2, 2)
-                    tail = f.read(2)
-            except OSError:
-                continue
-            if len(tail) == 2:
-                key = tail[0] ^ 0xFF
-                if tail[1] ^ 0xD9 == key:
-                    return key
-        return 0x88
-
-    def _current_aes_key(self) -> Optional[str]:
-        """无副作用的快速解析：显式注入 → 持久化文件。不扫描进程内存。"""
-        if self._image_key and self._validate_key(self._image_key):
-            return self._image_key
-        return self._load_persisted_key()
-
-    def has_image_key(self) -> bool:
-        """是否存在可用 AES 密钥（不触发内存扫描）。"""
-        with self._key_lock:
-            return self._current_aes_key() is not None
-
-    def try_acquire_image_key(self, force: bool = False) -> bool:
-        """有界获取图片 AES 密钥；命中后持久化。供后台密钥服务周期调用。
-
-        未命中进入 ``scan_cooldown_seconds`` 冷却期，期间直接返回 False，
-        避免对多 GB 内存的微信进程反复全量扫描。``force=True`` 绕过冷却。
-        """
-        with self._key_lock:
-            if self._current_aes_key() is not None:
-                self._last_scan_miss = None
-                return True
-            if (
-                not force
-                and self._last_scan_miss is not None
-                and time.monotonic() - self._last_scan_miss
-                < self._scan_cooldown
-            ):
-                return False
-            key = self._scan_aes_key(
-                deadline=time.monotonic() + self._scan_budget
-            )
-            if key:
-                self._persist_key(key)
-                self._last_scan_miss = None
-                return True
-            self._last_scan_miss = time.monotonic()
-            return False
-
-    def refresh_image_key(self) -> bool:
-        """显式刷新：清运行缓存/探针缓存/冷却标记后强制重扫。
-
-        账号切换后调用：探针随新账号的 .dat 重新取样，旧账号密钥校验
-        自然失效，新密钥按账号持久化。
-        """
-        with self._key_lock:
-            self._img_key = None
-            self._key_probe = None
-            self._last_scan_miss = None
-            return self.try_acquire_image_key(force=True)
-
     def detect_image_key(self, refresh: bool = False,
                          wait_seconds: float = 120.0
                          ) -> Optional[Tuple[str, int]]:
@@ -342,10 +358,56 @@ class MediaDownloader:
             self._img_key = (aes_key, xor_key)
             return self._img_key
 
-    def _dbg_last_dat(self) -> str:
-        base = os.path.join(self.db.account_dir, "msg", "attach")
-        hits = glob.glob(os.path.join(base, "*", "*", "Img", "*.dat"))
-        return sorted(hits, key=os.path.getmtime)[-1] if hits else ""
+    def _current_aes_key(self) -> Optional[str]:
+        """无副作用的快速解析：显式注入 → 持久化文件。不扫描进程内存。"""
+        if self._image_key and self._validate_key(self._image_key):
+            return self._image_key
+        return self._load_persisted_key()
+
+    def has_image_key(self) -> bool:
+        """是否存在可用 AES 密钥（不触发内存扫描）。"""
+        with self._key_lock:
+            return self._current_aes_key() is not None
+
+    def try_acquire_image_key(self, force: bool = False) -> bool:
+        """有界获取图片 AES 密钥；命中后持久化。供后台密钥服务周期调用。
+
+        扫描为单趟快扫（不做 monitor 长等待）；未命中进入 ``_scan_cooldown``
+        冷却期，期间直接返回 False，避免对多 GB 的微信进程反复全量扫描。
+        ``force=True`` 绕过冷却。
+        """
+        with self._key_lock:
+            if self._current_aes_key() is not None:
+                self._last_scan_miss = None
+                return True
+            if (
+                not force
+                and self._last_scan_miss is not None
+                and time.monotonic() - self._last_scan_miss
+                < self._scan_cooldown
+            ):
+                return False
+            key = self._scan_aes_key(
+                deadline=time.monotonic() + self._scan_budget
+            )
+            if key:
+                self._persist_key(key)
+                self._last_scan_miss = None
+                return True
+            self._last_scan_miss = time.monotonic()
+            return False
+
+    def refresh_image_key(self) -> bool:
+        """显式刷新：清运行缓存/探针缓存/冷却标记后强制重扫。
+
+        账号切换后调用：探针随新账号的 .dat 重新取样，旧账号密钥校验
+        自然失效，新密钥按账号持久化。
+        """
+        with self._key_lock:
+            self._img_key = None
+            self._key_probe = None
+            self._last_scan_miss = None
+            return self.try_acquire_image_key(force=True)
 
     # ------------------------------------------------------------------
     # 图片解密
@@ -448,16 +510,18 @@ class MediaDownloader:
     def _month_of(self, create_time: int) -> str:
         return time.strftime("%Y-%m", time.localtime(create_time))
 
-    def _find_dat(self, user: str, md5: str, create_time: int) -> Optional[str]:
+    def _find_dat(self, user: str, md5: str, create_time: int,
+                  thumbnail: bool = False) -> Optional[str]:
         base = os.path.join(self.db.account_dir, "msg", "attach", self._chat_md5(user))
+        target = md5 + ("_t.dat" if thumbnail else ".dat")
         for root, _, files in os.walk(base):
             for f in files:
-                if f == md5 + ".dat":
+                if f == target:
                     return os.path.join(root, f)
         return None
 
     def _find_h_dat(self, user: str, md5: str) -> Optional[str]:
-        """查找原图 _h.dat 文件（点击「图片原始大小」后微信下载的高分辨率版本）。"""
+        """查找原图 _h.dat 文件（点击'图片原始大小'后微信下载的高分辨率版本）。"""
         base = os.path.join(self.db.account_dir, "msg", "attach", self._chat_md5(user))
         target = md5 + "_h.dat"
         for root, _, files in os.walk(base):
@@ -467,88 +531,11 @@ class MediaDownloader:
         return None
 
     # ------------------------------------------------------------------
-    # 各类媒体下载
+    # 缩略图下载（Channel Host 图片兜底路径）
     # ------------------------------------------------------------------
-    def _out(self, save_dir: Optional[str], name: str) -> str:
-        d = save_dir or self.save_dir
-        os.makedirs(d, exist_ok=True)
-        return os.path.join(d, name)
-
-    # ------------------------------------------------------------------
-    # WXAM (wxgf) 解码：微信 4.x 普通图片的新存储格式，内部为 HEVC 裸流
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _extract_hevc(data: bytes) -> Optional[bytes]:
-        """从 wxgf 容器提取 HEVC Annex-B 裸流（自首个 NALU 起始码起）。"""
-        start = data.find(b"\x00\x00\x00\x01")
-        return data[start:] if start >= 0 else None
-
-    @staticmethod
-    def _ffmpeg_exe() -> Optional[str]:
-        import shutil
-        exe = shutil.which("ffmpeg")
-        if exe:
-            return exe
-        try:
-            import imageio_ffmpeg
-            return imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            return None
-
-    def _wxgf_to_jpg(self, data: bytes) -> Optional[bytes]:
-        """用 ffmpeg 把 wxgf 内的 HEVC 裸流转码为 jpg。失败返回 None。"""
-        exe = self._ffmpeg_exe()
-        if exe is None:
-            return None
-        hevc = self._extract_hevc(data)
-        if not hevc:
-            return None
-        import subprocess
-        with tempfile.TemporaryDirectory() as td:
-            src = os.path.join(td, "in.hevc")
-            dst = os.path.join(td, "out.jpg")
-            with open(src, "wb") as f:
-                f.write(hevc)
-            try:
-                r = subprocess.run(
-                    [exe, "-y", "-v", "error", "-i", src, "-frames:v", "1", dst],
-                    capture_output=True, timeout=30,
-                )
-            except Exception:
-                return None
-            if r.returncode == 0:
-                try:
-                    with open(dst, "rb") as f:
-                        out = f.read()
-                    return out if out[:3] == b"\xff\xd8\xff" else None
-                except OSError:
-                    return None
-        return None
-
-    def _img_md5(self, row: dict) -> Optional[str]:
-        pi = row.get("packed_info")
-        content = row.get("content")
-        for blob in (pi, content):
-            if isinstance(blob, bytes):
-                m = re.search(rb"([0-9a-fA-F]{32})", blob)
-                if m:
-                    return m.group(1).decode().lower()
-        return None
-
-    def download_image(self, user: str, local_id: int, save_dir: Optional[str] = None,
-                       aes_key: Optional[str] = None, xor_key: Optional[int] = None,
-                       allow_key_scan: bool = True) -> Optional[str]:
-        """下载图片消息并解密为 jpg/png/gif，返回落盘路径"""
-        row = self.db.get_message_row(user, local_id)
-        if not row or row["local_type"] != 3:
-            return None
-        md5 = self._img_md5(row)
-        if not md5:
-            return None
-        dat_path = self._find_dat(user, md5, row["create_time"])
-        if not dat_path:
-            return None
-        data = self.decrypt_image(dat_path, aes_key, xor_key, allow_key_scan)
+    def _save_image_bytes(self, data: bytes, user: str, local_id: int,
+                          save_dir: Optional[str]) -> Optional[str]:
+        """按魔数定扩展名落盘；wxgf 容器尝试 ffmpeg 转 jpg。"""
         if data[:3] == b"\xff\xd8\xff":
             ext = "jpg"
         elif data[:4] == b"\x89PNG":
@@ -556,8 +543,13 @@ class MediaDownloader:
         elif data[:3] == b"GIF":
             ext = "gif"
         elif data[:4] == b"wxgf":
-            # 微信动画表情容器：不是可查看的图片，不落盘为伪 .gif
-            return None
+            jpg = self._wxgf_to_jpg(data)
+            if jpg is not None:
+                out = self._out(save_dir, "%s_%s.jpg" % (user, local_id))
+                with open(out, "wb") as f:
+                    f.write(jpg)
+                return out
+            return None  # wxgf 容器且无法转码：不落盘为伪图片
         else:
             ext = "img"
         out = self._out(save_dir, "%s_%s.%s" % (user, local_id, ext))
@@ -565,9 +557,6 @@ class MediaDownloader:
             f.write(data)
         return out
 
-    # ------------------------------------------------------------------
-    # 缩略图回退（免 AES 密钥）
-    # ------------------------------------------------------------------
     def _find_thumbnail_dat(self, md5: str) -> Optional[str]:
         base = os.path.join(self.db.account_dir, "msg", "attach")
         hits = glob.glob(os.path.join(base, "**", md5 + "_t.dat"),
@@ -577,7 +566,8 @@ class MediaDownloader:
     def _decrypt_thumbnail_bytes(self, dat_path: str) -> Optional[bytes]:
         """缩略图解密：整文件 XOR（尾部 FFD9 反推）优先，失败回退常规解密。
 
-        缩略图不依赖 AES 密钥；本方法绝不触发进程内存扫描。
+        缩略图不依赖 AES 密钥；本方法绝不触发进程内存扫描（只使用当前
+        已可用的密钥）。
         """
         try:
             with open(dat_path, "rb") as f:
@@ -593,8 +583,11 @@ class MediaDownloader:
                 out = bytes(b ^ key for b in data)
                 if _jpeg_like(out):
                     return out
+        aes_key = self._current_aes_key()
+        if not aes_key:
+            return None
         try:
-            out = self.decrypt_image(dat_path, allow_key_scan=False)
+            out = self.decrypt_image(dat_path, aes_key=aes_key)
         except (ValueError, OSError, RuntimeError):
             return None
         return out if _jpeg_like(out) else None
@@ -633,8 +626,222 @@ class MediaDownloader:
         return out
 
     # ------------------------------------------------------------------
-    # 原图下载（UI 自动化触发微信下载原图）
+    # 各类媒体下载
     # ------------------------------------------------------------------
+    def _out(self, save_dir: Optional[str], name: str) -> str:
+        d = save_dir or self.save_dir
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, name)
+
+    # ------------------------------------------------------------------
+    # WXAM (wxgf) 解码：微信 4.x 普通图片的新存储格式，内部为 HEVC 裸流
+    # ------------------------------------------------------------------
+    def _extract_hevc(self, data: bytes) -> Optional[bytes]:
+        """从 wxgf 容器提取 HEVC Annex-B 裸流（自首个 NALU 起始码起）。"""
+        start = data.find(b"\x00\x00\x00\x01")
+        return data[start:] if start >= 0 else None
+
+    @staticmethod
+    def _ffmpeg_exe() -> Optional[str]:
+        import shutil
+        exe = shutil.which("ffmpeg")
+        if exe:
+            return exe
+        try:
+            import imageio_ffmpeg
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            return None
+
+    def _wxgf_to_jpg(self, data: bytes) -> Optional[bytes]:
+        """用 ffmpeg 把 wxgf 内的 HEVC 裸流转码为 jpg。失败返回 None。"""
+        exe = self._ffmpeg_exe()
+        if exe is None:
+            return None
+        hevc = self._extract_hevc(data)
+        if not hevc:
+            return None
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            src = os.path.join(td, "in.hevc")
+            dst = os.path.join(td, "out.jpg")
+            with open(src, "wb") as f:
+                f.write(hevc)
+            try:
+                r = subprocess.run(
+                    [exe, "-y", "-v", "error", "-i", src, "-frames:v", "1", dst],
+                    capture_output=True, timeout=30,
+                )
+            except Exception:
+                return None
+            if r.returncode == 0:
+                try:
+                    with open(dst, "rb") as f:
+                        out = f.read()
+                    return out if out[:3] == b"\xff\xd8\xff" else None
+                except OSError:
+                    return None
+        return None
+
+    def _img_md5(self, row: dict) -> Optional[str]:
+        pi = row.get("packed_info")
+        content = row.get("content")
+        for blob in (pi, content):
+            if isinstance(blob, bytes):
+                m = re.search(rb"([0-9a-fA-F]{32})", blob)
+                if m:
+                    return m.group(1).decode().lower()
+        return None
+
+    def download_image(self, user: str, local_id: int, save_dir: Optional[str] = None,
+                       aes_key: Optional[str] = None, xor_key: Optional[int] = None,
+                       allow_key_scan: bool = True) -> Optional[str]:
+        """下载图片消息并解密为 jpg/png/gif，返回落盘路径
+
+        ``allow_key_scan=False``：缺 AES 密钥时立即抛 RuntimeError，不做
+        进程内存扫描（Channel Host 请求路径语义）。"""
+        row = self.db.get_message_row(user, local_id, local_type=3)
+        if not row or row["local_type"] != 3:
+            return None
+        md5 = self._img_md5(row)
+        if not md5:
+            return None
+        dat_path = self._find_dat(user, md5, row["create_time"])
+        thumb = False
+        if not dat_path:
+            # 群聊图片默认只有缩略图（原图未在微信中点开查看时不下发），回退缩略图
+            dat_path = self._find_dat(user, md5, row["create_time"], thumbnail=True)
+            if not dat_path:
+                return None
+            thumb = True
+        data = self.decrypt_image(dat_path, aes_key, xor_key,
+                                  allow_key_scan=allow_key_scan)
+        suffix = "_thumb" if thumb else ""
+        if data[:3] == b"\xff\xd8\xff":
+            ext = "jpg"
+        elif data[:4] == b"\x89PNG":
+            ext = "png"
+        elif data[:3] == b"GIF":
+            ext = "gif"
+        elif data[:4] == b"wxgf":
+            # WXAM 格式：微信 4.x 普通图片也用 HEVC 编码存储（含动画表情）。
+            # 优先用 ffmpeg 转码为 jpg；不可用时把原始解密数据落盘为 .wxgf 兜底。
+            jpg = self._wxgf_to_jpg(data)
+            if jpg is not None:
+                out = self._out(save_dir, "%s_%s%s.%s" % (user, local_id, suffix, "jpg"))
+                with open(out, "wb") as f:
+                    f.write(jpg)
+                return out
+            out = self._out(save_dir, "%s_%s%s.wxgf" % (user, local_id, suffix))
+            with open(out, "wb") as f:
+                f.write(data)
+            return out
+        else:
+            ext = "img"
+        out = self._out(save_dir, "%s_%s%s.%s" % (user, local_id, suffix, ext))
+        with open(out, "wb") as f:
+            f.write(data)
+        return out
+
+    def download_voice(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
+        """语音：media_*.db VoiceInfo.voice_data（SILK 二进制），落盘 .silk
+
+        微信按账号/时间把语音分片存到多个 media_*.db，逐个搜索直到找到。
+        """
+        row = self.db.get_message_row(user, local_id, local_type=34)
+        if not row or row["local_type"] != 34 or not row["server_id"]:
+            return None
+        for rel, path, _ in self.db._db_files:
+            if not os.path.basename(path).startswith("media_"):
+                continue
+            conn = self.db._open(rel)
+            try:
+                cid = conn.execute(
+                    "SELECT rowid FROM Name2Id WHERE user_name=?", (user,)
+                ).fetchone()
+                chat_id = cid[0] if cid else None
+                if chat_id is None:
+                    continue
+                v = conn.execute(
+                    "SELECT voice_data FROM VoiceInfo WHERE chat_name_id=? AND svr_id=? "
+                    "ORDER BY create_time DESC LIMIT 1",
+                    (chat_id, row["server_id"]),
+                ).fetchone()
+            finally:
+                conn.close()
+            if v and v["voice_data"]:
+                out = self._out(save_dir, "%s_%s.silk" % (user, local_id))
+                with open(out, "wb") as f:
+                    f.write(v["voice_data"])
+                return out
+        return None
+
+    def download_video(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
+        """视频：按 packed_info 中的 id 在 msg/video 下查找 <id>.mp4"""
+        row = self.db.get_message_row(user, local_id, local_type=43)
+        if not row or row["local_type"] != 43:
+            return None
+        pi = row.get("packed_info")
+        if not isinstance(pi, bytes):
+            return None
+        m = re.search(rb"([0-9a-fA-F]{32})", pi)
+        vid = m.group(1).decode().lower() if m else None
+        base = os.path.join(self.db.account_dir, "msg", "video")
+        for root, _, files in os.walk(base):
+            for f in files:
+                if vid and f == vid + ".mp4":
+                    out = self._out(save_dir, "%s_%s.mp4" % (user, local_id))
+                    with open(out, "wb") as w:
+                        with open(os.path.join(root, f), "rb") as r:
+                            w.write(r.read())
+                    return out
+        return None
+
+    def _file_name(self, row: dict) -> Optional[str]:
+        if not row["server_id"]:
+            return None
+        for rel, path, _ in self.db._db_files:
+            if os.path.basename(path) != "message_resource.db":
+                continue
+            conn = self.db._open(rel)
+            try:
+                r = conn.execute(
+                    "SELECT d.packed_info FROM MessageResourceDetail d "
+                    "LEFT JOIN MessageResourceInfo i ON d.message_id=i.message_id "
+                    "WHERE i.message_svr_id=? LIMIT 1",
+                    (row["server_id"],),
+                ).fetchone()
+            finally:
+                conn.close()
+            if r and r["packed_info"]:
+                name = r["packed_info"].decode("utf-8", "replace").strip()
+                name = re.sub(r"[\r\n\x00]+", "", name)
+                if "/" in name or "\\" in name:
+                    name = name.split("/")[-1].split("\\")[-1]
+                return name or None
+            break
+        return None
+
+    def download_file(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
+        """文件：msg/file/<YYYY-MM>/<原文件名>，原文件名来自 message_resource"""
+        row = self.db.get_message_row(user, local_id, local_type=49)
+        if not row or row["local_type"] != 49:
+            return None
+        name = self._file_name(row)
+        if not name:
+            return None
+        base = os.path.join(self.db.account_dir, "msg", "file")
+        for root, _, files in os.walk(base):
+            for f in files:
+                if f == name:
+                    out = self._out(save_dir, "%s_%s_%s" % (user, local_id, name))
+                    with open(out, "wb") as w:
+                        with open(os.path.join(root, f), "rb") as r:
+                            w.write(r.read())
+                    return out
+        return None
+
     @staticmethod
     def _find_preview_button(ctrl, name, max_depth=8):
         """在 PreviewWindow 中递归查找指定名称的按钮。"""
@@ -650,30 +857,6 @@ class MediaDownloader:
             except Exception:
                 pass
         return None
-
-    def _save_image_bytes(self, data: bytes, user: str, local_id: int,
-                          save_dir: Optional[str]) -> Optional[str]:
-        """按魔数定扩展名落盘；wxgf 容器尝试 ffmpeg 转 jpg。"""
-        if data[:3] == b"\xff\xd8\xff":
-            ext = "jpg"
-        elif data[:4] == b"\x89PNG":
-            ext = "png"
-        elif data[:3] == b"GIF":
-            ext = "gif"
-        elif data[:4] == b"wxgf":
-            jpg = self._wxgf_to_jpg(data)
-            if jpg is not None:
-                out = self._out(save_dir, "%s_%s.jpg" % (user, local_id))
-                with open(out, "wb") as f:
-                    f.write(jpg)
-                return out
-            return None  # wxgf 容器且无法转码：不落盘为伪图片
-        else:
-            ext = "img"
-        out = self._out(save_dir, "%s_%s.%s" % (user, local_id, ext))
-        with open(out, "wb") as f:
-            f.write(data)
-        return out
 
     def download_image_original(self, user: str, local_id: int, save_dir: Optional[str] = None,
                                 aes_key: Optional[str] = None, xor_key: Optional[int] = None,
@@ -825,169 +1008,20 @@ class MediaDownloader:
         data = self.decrypt_image(h_dat, aes_key, xor_key)
         return self._save_image_bytes(data, user, local_id, save_dir)
 
-    def download_voice(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
-        """语音：media_0.db VoiceInfo.voice_data（SILK 二进制），落盘 .silk"""
-        row = self.db.get_message_row(user, local_id)
-        if not row or row["local_type"] != 34 or not row["server_id"]:
-            return None
-        for rel, path, _ in self.db._db_files:
-            if os.path.basename(path) != "media_0.db":
-                continue
-            conn = self.db._open(rel)
-            try:
-                cid = conn.execute(
-                    "SELECT rowid FROM Name2Id WHERE user_name=?", (user,)
-                ).fetchone()
-                chat_id = cid[0] if cid else None
-                if chat_id is None:
-                    return None
-                v = conn.execute(
-                    "SELECT voice_data FROM VoiceInfo WHERE chat_name_id=? AND svr_id=? "
-                    "ORDER BY create_time DESC LIMIT 1",
-                    (chat_id, row["server_id"]),
-                ).fetchone()
-            finally:
-                conn.close()
-            if v and v["voice_data"]:
-                out = self._out(save_dir, "%s_%s.silk" % (user, local_id))
-                with open(out, "wb") as f:
-                    f.write(v["voice_data"])
-                return out
-            break
-        return None
-
-    def download_video(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
-        """视频：按 packed_info 中的 id 在 msg/video 下查找 <id>.mp4"""
-        row = self.db.get_message_row(user, local_id)
-        if not row or row["local_type"] != 43:
-            return None
-        pi = row.get("packed_info")
-        if not isinstance(pi, bytes):
-            return None
-        m = re.search(rb"([0-9a-fA-F]{32})", pi)
-        vid = m.group(1).decode().lower() if m else None
-        base = os.path.join(self.db.account_dir, "msg", "video")
-        for root, _, files in os.walk(base):
-            for f in files:
-                if vid and f == vid + ".mp4":
-                    out = self._out(save_dir, "%s_%s.mp4" % (user, local_id))
-                    with open(out, "wb") as w:
-                        with open(os.path.join(root, f), "rb") as r:
-                            w.write(r.read())
-                    return out
-        return None
-
-    def _file_name(self, row: dict) -> Optional[str]:
-        if not row["server_id"]:
-            return None
-        for rel, path, _ in self.db._db_files:
-            if os.path.basename(path) != "message_resource.db":
-                continue
-            conn = self.db._open(rel)
-            try:
-                r = conn.execute(
-                    "SELECT d.packed_info FROM MessageResourceDetail d "
-                    "LEFT JOIN MessageResourceInfo i ON d.message_id=i.message_id "
-                    "WHERE i.message_svr_id=? LIMIT 1",
-                    (row["server_id"],),
-                ).fetchone()
-            finally:
-                conn.close()
-            if r and r["packed_info"]:
-                names = _extract_packed_info_strings(r["packed_info"])
-                for raw_name in reversed(names):
-                    name = raw_name.strip().replace("\\", "/")
-                    if "/" in name:
-                        name = name.rsplit("/", 1)[-1]
-                    if name:
-                        return name
-                return None
-            break
-        return None
-
-    def download_file(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
-        """文件：msg/file/<YYYY-MM>/<原文件名>，原文件名来自 message_resource"""
-        row = self.db.get_message_row(user, local_id)
-        if not row:
-            return None
-        type_name = self.db._msg_type_name(row["local_type"]) if hasattr(
-            self.db, "_msg_type_name"
-        ) else None
-        if row["local_type"] != 49 and type_name != "文件/链接/卡片":
-            return None
-        name = self._file_name(row)
-        if not name:
-            return None
-        base = os.path.join(self.db.account_dir, "msg", "file")
-        for root, _, files in os.walk(base):
-            for f in files:
-                if f == name:
-                    out = self._out(save_dir, "%s_%s_%s" % (user, local_id, name))
-                    with open(out, "wb") as w:
-                        with open(os.path.join(root, f), "rb") as r:
-                            w.write(r.read())
-                    return out
-        return None
-
     def download_media(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
-        """按消息类型自动分发：3 图片 / 34 语音 / 43 视频 / 49 文件"""
-        row = self.db.get_message_row(user, local_id)
-        if not row:
-            return None
-        t = row["local_type"]
-        if t == 3:
-            return self.download_image(user, local_id, save_dir)
-        if t == 34:
-            return self.download_voice(user, local_id, save_dir)
-        if t == 43:
-            return self.download_video(user, local_id, save_dir)
-        if t == 49:
-            return self.download_file(user, local_id, save_dir)
+        """按消息类型自动分发：3 图片 / 34 语音 / 43 视频 / 49 文件。
+
+        跨分片下 local_id 可能对应多类型，逐个尝试下载直到成功。
+        """
+        rows = self.db.get_message_rows_for_media(user, local_id)
+        for row in rows:
+            t = row["local_type"]
+            if t == 3:
+                return self.download_image(user, local_id, save_dir)
+            if t == 34:
+                return self.download_voice(user, local_id, save_dir)
+            if t == 43:
+                return self.download_video(user, local_id, save_dir)
+            if t == 49:
+                return self.download_file(user, local_id, save_dir)
         return None
-
-
-def _read_varint(data: bytes, index: int):
-    value = 0
-    shift = 0
-    while index < len(data):
-        byte = data[index]
-        index += 1
-        value |= (byte & 0x7F) << shift
-        if not (byte & 0x80):
-            break
-        shift += 7
-    return value, index
-
-
-def _extract_packed_info_strings(packed_info: bytes) -> list[str]:
-    """从微信 MessageResourceDetail.packed_info 中提取 UTF-8 文件名字符串。
-
-    该字段是若干嵌套 length-delimited 的类似 Protobuf 消息；文件名通常位于
-    字段号 2（0x12）。解析失败时返回空列表，由调用方保持旧的安全降级。
-    """
-    strings: list[str] = []
-    index = 0
-    while index < len(packed_info):
-        tag = packed_info[index]
-        index += 1
-        wire = tag & 0x07
-        if wire == 2:
-            length, index = _read_varint(packed_info, index)
-            payload = packed_info[index : index + length]
-            index += length
-            if tag == 0x0A:
-                strings.extend(_extract_packed_info_strings(payload))
-            elif tag == 0x12:
-                try:
-                    strings.append(payload.decode("utf-8"))
-                except UnicodeDecodeError:
-                    continue
-        elif wire == 0:
-            _value, index = _read_varint(packed_info, index)
-        elif wire == 1:
-            index += 8
-        elif wire == 5:
-            index += 4
-        else:
-            index += 1
-    return strings

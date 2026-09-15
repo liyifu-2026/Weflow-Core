@@ -31,7 +31,8 @@ class FakeDB:
         self._db_files = []
         self.rows = {}
 
-    def get_message_row(self, user, local_id):
+    def get_message_row(self, user, local_id, local_type=None):
+        # local_type 过滤为上游 1.2.2 新增（local_id 跨分片不唯一）
         return self.rows.get((user, local_id))
 
 

@@ -150,12 +150,6 @@ SIDEBAR_TOP = 0.05                       # 会话列表顶部起始（相对窗�
 SEARCH_BOX_RATIO = (0.18, 0.041, 0.86, 0.079)  # (x0,y0,x1,y1)，x 相对侧栏宽、y 相对窗口高
 SEND_BUTTON_RATIO = (0.78, 0.92, 0.995, 0.99)  # 「发送」按钮检索区（相对窗口）
 
-# 多特征兜底：类名只是「软条件」之一，还需 进程名/可见/大尺寸/标题 等特征
-# 联合判断，避免 Qt 升级改名（Qt51514 → Qt6xxx）后主窗口定位失效。
-PROCESS_NAME = 'weixin.exe'              # 微信进程名（小写）
-MIN_WINDOW_SIZE = 800                    # 主窗口最小边长（像素），小于此视为非主窗
-MAIN_TITLE_KEYWORDS = ('微信', 'Weixin', 'WeChat')
-
 
 def _rect_intersection_area(
     first: Tuple[int, int, int, int],
@@ -167,6 +161,13 @@ def _rect_intersection_area(
     right = min(first[2], second[2])
     bottom = min(first[3], second[3])
     return max(0, right - left) * max(0, bottom - top)
+
+
+# 多特征兜底：类名只是「软条件」之一，还需 进程名/可见/大尺寸/标题 等特征
+# 联合判断，避免 Qt 升级改名（Qt51514 → Qt6xxx）后主窗口定位失效。
+PROCESS_NAME = 'weixin.exe'              # 微信进程名（小写）
+MIN_WINDOW_SIZE = 800                    # 主窗口最小边长（像素），小于此视为非主窗
+MAIN_TITLE_KEYWORDS = ('微信', 'Weixin', 'WeChat')
 
 # 布局校准配置目录：~/.wechatauto/layout-<机器标识>.json
 LAYOUT_CONFIG_DIR = os.path.join(os.path.expanduser('~'), '.wechatauto')
@@ -235,11 +236,8 @@ class WinInput:
 
     def __init__(self):
         user32 = ctypes.windll.user32
-        # 保持 DPI-UNAWARE：整条管线（GetWindowRect / 截图 / SetCursorPos 点击）
-        # 都使用系统虚拟化后的逻辑坐标，保证截图与点击坐标一致。
-        # （若设为 DPI-aware，屏幕仅 1536x960 物理像素，而截图仍按
-        #   GetWindowRect 返回的逻辑矩形（如 3018x1818）采集，会造成
-        #   截图与 SetCursorPos 物理坐标错位。）
+        # 进程已设为 DPI-aware（PER_MONITOR_AWARE_V2），
+        # GetSystemMetrics 返回物理像素，与 UIA BoundingRectangle 一致。
         self._user32 = user32
         self.screen_w = user32.GetSystemMetrics(0)
         self.screen_h = user32.GetSystemMetrics(1)
@@ -247,7 +245,12 @@ class WinInput:
 
     # -- 鼠标 ----------------------------------------------------------
     def real_click(self, x: int, y: int, right: bool = False):
-        """SetCursorPos + mouse_event 的「真实」点击，坐标为本机像素。"""
+        """SetCursorPos + mouse_event 的「真实」点击。
+
+        进程在模块加载时已设为 DPI-aware（PER_MONITOR_AWARE_V2），
+        UIA BoundingRectangle 返回物理像素坐标，SetCursorPos 也使用
+        物理像素，两者在同一坐标系，无需额外缩放。
+        """
         u = self._user32
         u.SetCursorPos(int(x), int(y))
         time.sleep(0.15)
@@ -257,13 +260,22 @@ class WinInput:
         u.mouse_event(up, 0, 0, 0, 0)
         time.sleep(0.3)
 
-    def send_input_click(self, x: int, y: int):
-        """SendInput 绝对坐标点击（按真实屏幕尺寸缩放）。"""
+    def send_input_click(self, x: int, y: int, right: bool = False):
+        """SendInput 绝对坐标点击（按真实屏幕尺寸缩放）。
+
+        先 SetCursorPos 移动可见光标（方便观察/确保悬停状态），
+        再用 SendInput 注入点击。右键走 SendInput：微信 4.x 渲染
+        子窗口对 mouse_event 模拟的右键不响应（原图打开预览那次
+        同因改用 SendInput），SendInput 可直接命中弹出右键菜单。
+        """
         u = self._user32
+        u.SetCursorPos(int(x), int(y))
+        time.sleep(0.15)
         n = int(x * 65535 // self.screen_w)
         m = int(y * 65535 // self.screen_h)
-        for flags in (MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTDOWN,
-                      MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_LEFTUP):
+        down = MOUSEEVENTF_ABSOLUTE | (MOUSEEVENTF_RIGHTDOWN if right else MOUSEEVENTF_LEFTDOWN)
+        up = MOUSEEVENTF_ABSOLUTE | (MOUSEEVENTF_RIGHTUP if right else MOUSEEVENTF_LEFTUP)
+        for flags in (down, up):
             inp = MOUSE_INPUT()
             inp.type = 0
             inp.u.mi.dx = n
@@ -355,37 +367,6 @@ class ScreenOCR:
             dec = await BitmapDecoder.create_async(s)
             bmp = await dec.get_software_bitmap_async()
             eng = OcrEngine.try_create_from_user_profile_languages()
-            # 本机用户首选语言为 en-US 时，user_profile 引擎为英文，无法识别中文“拍一拍”。
-            # replica 在中文环境下正常，但本机可用语言含 zh-Hans-CN，需显式回退到中文引擎。
-            try:
-                tag = ""
-                if eng is not None and hasattr(eng, "recognizer_language"):
-                    rl = eng.recognizer_language
-                    tag = getattr(rl, "language_tag", "") or getattr(rl, "languageTag", "") or str(rl)
-                if not tag.lower().startswith("zh"):
-                    from winsdk.windows.globalization import Language
-                    # 优先已安装的中文识别器
-                    try:
-                        for cand_lang in OcrEngine.available_recognizer_languages:
-                            cand_tag = getattr(cand_lang, "language_tag", "") or getattr(cand_lang, "languageTag", "") or ""
-                            if cand_tag.lower().startswith("zh"):
-                                cand_eng = OcrEngine.try_create_from_language(cand_lang)
-                                if cand_eng is not None:
-                                    eng = cand_eng
-                                    break
-                    except Exception:
-                        pass
-                    if eng is None or not str(getattr(getattr(eng, "recognizer_language", ""), "language_tag", "")).lower().startswith("zh"):
-                        for lang_tag in ("zh-Hans-CN", "zh-Hans", "zh-CN"):
-                            try:
-                                cand = OcrEngine.try_create_from_language(Language(lang_tag))
-                                if cand is not None:
-                                    eng = cand
-                                    break
-                            except Exception:
-                                continue
-            except Exception:
-                pass
             if eng is None:
                 return []
             res = await eng.recognize_async(bmp)
@@ -440,6 +421,7 @@ class WeChatGUI:
         self._last_input_box = None  # 最近一次成功发送的输入框位置，连续发送复用
         self._uia = None  # UIA 引擎（惰性创建，仅当可用时启用）
         self._uia_tried = False
+        self._uia_check_ts = 0.0  # 上次 UIA 自愈检查时间（节流用）
         # 布局校准：显式 calibrate=True 强制重校准；否则加载本机已校准配置，
         # 没有配置则自动校准一次（OCR 可用时），实现「跑一次永久兼容」。
         if not calibrate:
@@ -683,20 +665,35 @@ class WeChatGUI:
         校准采用「保守优先」策略：任一项检测失败即用模块默认比例，宁可
         不做调整也不产生错误的坐标。返回是否成功。
         """
+        def _run_with_timeout(fn, timeout=5):
+            result = [None]
+            def _target():
+                try:
+                    result[0] = fn()
+                except Exception:
+                    pass
+            t = threading.Thread(target=_target, daemon=True)
+            t.start()
+            t.join(timeout)
+            return result[0]
+
         try:
             self._update_render_rect()
             self.bring_to_front()
             time.sleep(0.8)
             self._update_render_rect()
             layout: Dict[str, object] = {'machine': _machine_id()}
-            # 1) 侧栏宽度：OCR「搜索」锚点
-            sb = self._detect_sidebar_ratio()
+            # 1) 侧栏宽度：OCR「搜索」锚点（限制 5s 超时）
+            sb = _run_with_timeout(self._detect_sidebar_ratio, timeout=5)
             layout['sidebar_ratio'] = float(sb) if sb else SIDEBAR_RATIO
-            # 2) 发送按钮：OCR「发送」（仅右下角检索区）
+            # 2) 发送按钮：OCR「发送」（仅右下角检索区，限制 5s 超时）
             try:
-                lines = self.ocr((int(self.render_w * 0.5),
-                                  int(self.render_h * 0.7),
-                                  self.render_w, self.render_h))
+                lines = _run_with_timeout(
+                    lambda: self.ocr((int(self.render_w * 0.5),
+                                      int(self.render_h * 0.7),
+                                      self.render_w, self.render_h)),
+                    timeout=5)
+                lines = lines or []
             except Exception:
                 lines = []
             send = None
@@ -917,7 +914,7 @@ class WeChatGUI:
         return len(targets)
 
     def ensure_visible(self) -> bool:
-        """自动最小化遮挡窗口并把微信置于前台，返回桌面是否可用。
+        """自动最小化遮挡窗口并把微信置于前台。
 
         发送类操作前调用，替代「手动最小化 Chrome 再置顶微信」的步骤。
         遮挡窗口最小化后微信仍保持置顶，便于连续多次发送。
@@ -925,6 +922,9 @@ class WeChatGUI:
         批量发送（三件套等）会逐条调用本方法，为避免每条都重复
         枚举窗口 / 置顶（上轮实测每次开销 20s+），15 秒内已成功
         前置过且窗口仍存活则直接复用，不再重复扫描。
+
+        可见性仅以主窗口句柄存活判定（不依赖截图白屏采样），
+        控件定位走 UIA，不依赖桌面截图。
         """
         if (getattr(self, '_last_visible_ok', False)
                 and getattr(self, '_last_visible_ts', 0) > time.time() - 15
@@ -935,7 +935,7 @@ class WeChatGUI:
         self.bring_to_front(keep_topmost=True)
         time.sleep(0.5)
         self._update_render_rect()
-        ok = self.desktop_available()
+        ok = self.is_alive()
         self._last_visible_ok = ok
         self._last_visible_ts = time.time()
         return ok
@@ -984,27 +984,6 @@ class WeChatGUI:
             if old_ex & WS_EX_TRANSPARENT:
                 u.SetWindowLongW(self.render_hwnd, GWL_EXSTYLE, old_ex)
                 time.sleep(0.05)
-
-    def desktop_available(self) -> bool:
-        """检查微信窗口是否真的可见（锁屏/会话断开时返回 False）。
-
-        Do not infer visibility from a light-theme pixel ratio. WeChat's dark
-        theme contains very little white, so the old threshold rejected a
-        perfectly visible, unlocked window before every send operation.
-        """
-        u = self._input._user32
-        if (not self.is_alive()
-                or not u.IsWindowVisible(self.main_hwnd)
-                or u.IsIconic(self.main_hwnd)):
-            return False
-        foreground = u.GetForegroundWindow()
-        if foreground and foreground != self.main_hwnd:
-            return False
-        try:
-            img = self._grab_screen(self.render_rect)
-        except Exception:
-            return False
-        return img.width > 0 and img.height > 0
 
     # ------------------------------------------------------------------
     # 截图与 OCR
@@ -1216,25 +1195,53 @@ class WeChatGUI:
         except Exception:
             return False
 
-    def _get_uia(self):
+    def _get_uia(self, refresh: bool = False):
         """惰性创建并复用 UIA 引擎；不可用时返回 None（由调用方降级 OCR）。
 
         混合驱动：UIA 树需热激活（写 Weixin.dll 的 Qt accessibility byte）。
-        首次尝试失败则本次会话内不再重试（避免每条消息都等超时）。
+        首次尝试失败会缓存，但之后按节流窗口自愈：微信重启/升级/重建窗口后
+        gate byte 会归零、子控件整片消失（表现为“昨天能用今天不能”），检测到
+        退化会重新热激活并校验，仍失败才降级 OCR——既不每条消息等超时，也
+        不再需要人工传 refresh=True。
+
+        Args:
+            refresh: True 时跳过缓存**强制重新热激活**（写 accessibility gate
+                byte）并重建引擎。
         """
-        if self._uia_tried:
+        _UIA_REASSERT_INTERVAL = 30.0   # 秒：退化后的自愈检查节流窗口
+        now = time.time()
+        if (not refresh
+                and now - getattr(self, '_uia_check_ts', 0.0) < _UIA_REASSERT_INTERVAL):
             return self._uia
-        self._uia_tried = True
-        try:
-            from wechatauto.uia_driver import WeChatUIA
-            eng = WeChatUIA()
-            if eng.ensure_window():
-                self._uia = eng
-                wxlog.info('已启用 UIA 驱动（混合路径：UIA 优先，OCR 兜底）')
-            else:
-                wxlog.info('UIA 树不可用，本次会话使用 OCR 驱动')
-        except Exception as e:
-            wxlog.debug('初始化 UIA 引擎失败：%s', e)
+        self._uia_check_ts = now
+
+        if self._uia is not None and not refresh:
+            try:
+                if self._uia.is_materialized():
+                    return self._uia
+                wxlog.info('UIA 子控件不可见（gate byte 可能已归零），重新热激活…')
+                if self._uia.ensure_materialized(timeout=4.0):
+                    return self._uia
+            except Exception as e:
+                wxlog.debug('UIA 自愈失败：%s', e)
+            wxlog.info('UIA 树仍不可用，降级 OCR 驱动')
+            self._uia = None
+            self._uia_tried = False
+
+        if refresh or not self._uia_tried or self._uia is None:
+            self._uia_tried = True
+            try:
+                from wechatauto.uia_driver import WeChatUIA
+                eng = WeChatUIA()
+                if eng.ensure_window():
+                    self._uia = eng
+                    wxlog.info('已启用 UIA 驱动（混合路径：UIA 优先，OCR 兜底）')
+                else:
+                    self._uia = None
+                    wxlog.info('UIA 树不可用，本次会话使用 OCR 驱动')
+            except Exception as e:
+                self._uia = None
+                wxlog.debug('初始化 UIA 引擎失败：%s', e)
         return self._uia
 
     def open_chat(self, name: str, exact: bool = False) -> bool:
@@ -1716,29 +1723,6 @@ class WeChatGUI:
                 continue
             if not self.click_send():
                 wxlog.debug(f'点击发送未确认清空输入框（attempt={attempt}），重试')
-                if verify:
-                    # The UI action may have succeeded while OCR still sees
-                    # stale draft pixels. Reconcile the original message
-                    # before considering any further action. In verified
-                    # mode an ambiguous result is terminal for this call;
-                    # retrying here can duplicate a real WeChat message.
-                    if self._verify_sent(text, who):
-                        return WxResponse.success(
-                            f'消息已发送并确认：{text}',
-                            data={'content': text},
-                        )
-                    wait_until = time.time() + 8
-                    while time.time() < wait_until:
-                        time.sleep(1.0)
-                        if self._verify_sent(text, who):
-                            return WxResponse.success(
-                                f'消息已发送并确认：{text}',
-                                data={'content': text},
-                            )
-                    return WxResponse.failure(
-                        '消息已操作发送，但数据库未确认',
-                        data={'content': text},
-                    )
                 continue
             if not verify:
                 return WxResponse.success(f'消息已发送：{text}', data={'content': text})
@@ -2078,6 +2062,83 @@ class WeChatGUI:
                     if ok else WxResponse.failure('回复已操作发送，但数据库未确认', data={'content': text}))
         return WxResponse.success(f'回复已发送：{text}', data={'content': text})
 
+    def _locate_last_message_pt(self, y: int) -> Optional[Tuple[int, int]]:
+        """OCR 实测最近一条消息的文本中心（横坐标实测而不是估算中心）。
+
+        参照 previous 修复（原图下载/打开原图）：控件实际位置不能按
+        消息区几何中心估算，必须用识别到的文本真实位置，否则自己消息
+        气泡偏右时点击坐标会横向偏移。
+        """
+        band = (self.right_pane_left, max(80, y - 40),
+                self.render_w, min(self.render_h, y + 40))
+        items = self.ocr(band)
+        best = None
+        best_d = 1 << 30
+        for t, x, yy, w, h in items:
+            tt = (t or '').strip()
+            if not tt:
+                continue
+            cy = yy + h // 2
+            d = abs(cy - y)
+            if d < best_d:
+                best_d = d
+                best = (x + w // 2, cy)
+        return best
+
+    def quote_msg(self, text: str, who: Optional[str] = None,
+                  target_text: Optional[str] = None, verify: bool = False) -> WxResponse:
+        """引用指定/最近一条消息（右键 → 菜单「引用」→ 输入 → 发送）。
+
+        target_text 用于 OCR 定位要引用的消息文案（可选）；省略时引用最近一条。
+        """
+        if not self.ensure_visible():
+            return WxResponse.failure('微信窗口不可见（可能锁屏/会话断开）')
+        if who:
+            self.open_chat(who)
+            time.sleep(0.8)
+        box = self.get_input_box()
+        msg_bottom = box[1] if box else int(self.render_h * 0.8)
+        if target_text:
+            items = self.ocr((self.right_pane_left, 100, self.render_w, msg_bottom))
+            pt = None
+            for t, x, yy, w, h in items:
+                if target_text in t:
+                    pt = (x + w // 2, yy + h // 2)
+                    break
+            if not pt:
+                return WxResponse.failure(f'未找到要引用的消息：{target_text}')
+        else:
+            y = self._last_message_y()
+            if y is None:
+                return WxResponse.failure('未检测到消息区域')
+            hit = self._locate_last_message_pt(y)
+            if hit is None:
+                return WxResponse.failure('未定位到最近一条消息')
+            pt = hit
+        # 右键点击目标消息，弹出操作菜单
+        # 用 SendInput（而非 mouse_event）：微信渲染窗口对 mouse_event 的
+        # 右键不响应，SendInput 可直接命中弹出菜单（原图那次的同类修复）。
+        self._input.send_input_click(self.origin_x + pt[0], self.origin_y + pt[1], right=True)
+        time.sleep(0.7)
+        menu = self.ocr((self.right_pane_left, max(80, pt[1] - 200), self.render_w, self.render_h))
+        click_pt = None
+        for t, x, yy, w, h in menu:
+            if '引用' in t:
+                click_pt = (x + w // 2, yy + h // 2)
+                break
+        if not click_pt:
+            return WxResponse.failure('未找到「引用」菜单项')
+        self.wx_click(self.origin_x + click_pt[0], self.origin_y + click_pt[1])
+        time.sleep(0.8)
+        if not self.input_text(text):
+            return WxResponse.failure('输入引用内容失败')
+        self.click_send()
+        if verify:
+            ok = self._verify_sent(text, who)
+            return (WxResponse.success(f'引用已发送并确认：{text}', data={'content': text})
+                    if ok else WxResponse.failure('引用已操作发送，但数据库未确认', data={'content': text}))
+        return WxResponse.success(f'引用已发送：{text}', data={'content': text})
+
     # ------------------------------------------------------------------
     # 艾特成员（群聊）
     # ------------------------------------------------------------------
@@ -2149,3 +2210,14 @@ def quick_reply(text: str, who: str = None, verify: bool = False) -> WxResponse:
     """一行式回复最近一条消息。"""
     wx = WeChatGUI()
     return wx.reply_msg(text, who, verify=verify)
+
+
+def quick_quote(text: str, who: str = None, target_text: str = None,
+                verify: bool = False) -> WxResponse:
+    """一行式引用消息并发送。
+
+    >>> from wechatauto.guia import quick_quote
+    >>> quick_quote('收到', '文件传输助手', target_text='要引用的原文')
+    """
+    wx = WeChatGUI()
+    return wx.quote_msg(text, who, target_text=target_text, verify=verify)
