@@ -212,7 +212,7 @@ export type ProcessDueScheduledSendsDeps = {
 
 /**
  * 到点执行 dispatcher（由 api 进程的通用 dispatcher 循环驱动）。
- * 预承诺直发：handoff → frozen 待审；白名单摘除 → cancelled；
+ * 预承诺直发：handoff → frozen 待审；自动回复关闭 → cancelled；
  * 其余按定死内容直发，不调用模型。失败不阻断状态收尾，避免重复发送。
  */
 export async function processDueScheduledSends(

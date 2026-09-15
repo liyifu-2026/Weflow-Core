@@ -71,12 +71,28 @@ async function dispatch(db: NodePgDatabase<typeof schema>): Promise<void> {
         );
       continue;
     }
+    // 按设备订阅过滤通知类型：notifyKinds 为 NULL/空 = 全部订阅（旧行兼容）
+    const targets = devices.filter(
+      (device) =>
+        !device.notifyKinds ||
+        device.notifyKinds.length === 0 ||
+        device.notifyKinds.includes(item.kind),
+    );
+    if (targets.length === 0) {
+      await db
+        .update(schema.notificationOutbox)
+        .set({ status: "sent", sentAt: new Date() })
+        .where(
+          eq(schema.notificationOutbox.notificationId, item.notificationId),
+        );
+      continue;
+    }
     try {
       const response = await fetch(expoEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(
-          devices.map((device) => ({
+          targets.map((device) => ({
             to: device.pushToken,
             sound: "default",
             title:
@@ -94,7 +110,7 @@ async function dispatch(db: NodePgDatabase<typeof schema>): Promise<void> {
       const payload = (await response.json()) as {
         data?: Array<{ status?: string; details?: { error?: string } }>;
       };
-      const invalid = devices.filter(
+      const invalid = targets.filter(
         (_, index) =>
           payload.data?.[index]?.details?.error === "DeviceNotRegistered",
       );

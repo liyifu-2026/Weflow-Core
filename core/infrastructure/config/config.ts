@@ -37,7 +37,7 @@ const environmentSchema = z.object({
   FILE_STORAGE_ROOT: z.string().min(1).default(".data/files"),
   CHANNEL_HOST_BASE_URL: z.url().optional(),
   CHANNEL_HOST_TOKEN: z.string().min(1).optional(),
-  CHANNEL_HOST_POLL_INTERVAL_MS: z.coerce.number().int().min(250).default(1000),
+  CHANNEL_HOST_POLL_INTERVAL_MS: z.coerce.number().int().min(250).default(500),
   /** 头像代理：上游拉取超时与进程内缓存 TTL */
   AVATAR_PROXY_TIMEOUT_MS: z.coerce.number().int().min(500).default(5_000),
   AVATAR_CACHE_TTL_MS: z.coerce.number().int().min(1_000).default(3_600_000),
@@ -50,7 +50,11 @@ const environmentSchema = z.object({
     .default("deepseek-v4-flash"),
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(60_000),
   MODEL_MAX_TOKENS: z.coerce.number().int().min(1_000).default(16_384),
-  MODEL_DECISION_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(180_000),
+  MODEL_DECISION_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .default(180_000),
   VISION_BASE_URL: z.url().default("https://token-plan-cn.xiaomimimo.com/v1"),
   VISION_API_KEY: z.string().min(1).optional(),
   VISION_MODEL: z.string().min(1).default("mimo-v2.5"),
@@ -341,7 +345,10 @@ export function loadConfig(): RuntimeConfig {
       encKey: parsed.KNORA_ACCOUNT_ENC_KEY,
       tenantId: parsed.KNORA_TENANT_ID,
       emailDomain: parsed.KNORA_ACCOUNT_EMAIL_DOMAIN,
-      origin: resolveWeknoraOrigin(parsed.WEKNORA_ORIGIN, parsed.WEKNORA_BASE_URL),
+      origin: resolveWeknoraOrigin(
+        parsed.WEKNORA_ORIGIN,
+        parsed.WEKNORA_BASE_URL,
+      ),
     },
   };
 }

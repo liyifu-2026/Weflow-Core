@@ -2,7 +2,7 @@
  * 合并窗口 dispatcher（Phase 1）：把到期的 turn_admission_states 登记行
  * 合并建为一个 Agent Turn。
  *
- * 窗口期(12~30s)内护栏状态可能变化（Handoff 接管、白名单摘除、Profile
+ * 窗口期(12~30s)内护栏状态可能变化（Handoff 接管、自动回复关闭、Profile
  * 下线），因此建 turn 前逐项复检准入条件，复检不通过时登记行置 done
  * （消息已入库，只是不触发 AI），绝不吞掉 global-pause 人工路径——
  * 该路径由 ingest 在 settings.agentEnabled=false 分支独立处理。
@@ -78,7 +78,7 @@ async function dispatchClaimedAdmission(
     await markDone(db, claimed.conversationId, "handoff_active");
     return;
   }
-  // 复检 2：联系人白名单（agentEnabled）→ 摘除后不建 turn
+  // 复检 2：联系人自动回复开关（agentEnabled）→ 关闭后不建 turn
   const [contact] = await db
     .select({ agentEnabled: schema.contactProfiles.agentEnabled })
     .from(schema.contactProfiles)

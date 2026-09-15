@@ -35,7 +35,10 @@ const extractionSchema = z
   .strict();
 
 /** 从 LLM 响应中提取的单条记忆结构（confidence 已归一化为 0-100 整数） */
-export type ExtractedMemory = Omit<z.infer<typeof candidateSchema>, "confidence"> & {
+export type ExtractedMemory = Omit<
+  z.infer<typeof candidateSchema>,
+  "confidence"
+> & {
   confidence: number;
 };
 
@@ -74,6 +77,9 @@ export async function extractMemories(
   const result = await model.generate({
     messages: memoryExtractionPrompt(messages),
     output: "structured",
+    // 抽取是模式化任务，无需思维链；且记忆捕获与 Agent Turn 共享会话锁，
+    // 思考期会排队阻塞同会话的下一条回复。
+    thinking: false,
   });
   return parseMemoryExtraction(result.text);
 }

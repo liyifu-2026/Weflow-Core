@@ -94,4 +94,61 @@ integration("mobile notification device revocation", () => {
       .where(eq(schema.notificationDevices.pushToken, pushToken));
     expect(devices[0]?.revokedAt).toBeInstanceOf(Date);
   });
+
+  it("registers notify kinds and empty list means subscribe-all", async () => {
+    const subscribed = await server.inject({
+      method: "PUT",
+      url: "/api/v1/mobile/notification-device",
+      headers: { cookie },
+      payload: {
+        pushToken,
+        platform: "android",
+        showPreview: false,
+        notifyKinds: ["handoff_pending"],
+      },
+    });
+    expect(subscribed.statusCode).toBe(200);
+    expect(subscribed.json()).toMatchObject({
+      device: { notifyKinds: ["handoff_pending"] },
+    });
+
+    const patched = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/mobile/notification-preferences",
+      headers: { cookie },
+      payload: { notifyKinds: ["assignee_inbound"] },
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const devices = await postgres.db
+      .select()
+      .from(schema.notificationDevices)
+      .where(eq(schema.notificationDevices.pushToken, pushToken));
+    expect(devices[0]?.notifyKinds).toEqual(["assignee_inbound"]);
+
+    // 再次注册不带 notifyKinds = 全部订阅（清回 NULL）
+    const resubscribed = await server.inject({
+      method: "PUT",
+      url: "/api/v1/mobile/notification-device",
+      headers: { cookie },
+      payload: { pushToken, platform: "android", showPreview: false },
+    });
+    expect(resubscribed.statusCode).toBe(200);
+    const cleared = await postgres.db
+      .select()
+      .from(schema.notificationDevices)
+      .where(eq(schema.notificationDevices.pushToken, pushToken));
+    expect(cleared[0]?.notifyKinds).toBeNull();
+  });
+
+  it("rejects preference patch without any field", async () => {
+    const patched = await server.inject({
+      method: "PATCH",
+      url: "/api/v1/mobile/notification-preferences",
+      headers: { cookie },
+      payload: {},
+    });
+    expect(patched.statusCode).toBe(400);
+    expect(patched.json()).toEqual({ error: "invalid_request" });
+  });
 });

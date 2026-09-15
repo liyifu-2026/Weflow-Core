@@ -23,7 +23,11 @@
 
 ## 构建路线（Windows 本地，已验证 ✅ 2026-09-05）
 
-**唯一正确姿势：在 `C:\dev\mobile` 下执行 `pnpm android`（即 `expo run:android`）。** 首次全量约 10 分钟，之后增量很快。
+**日常开发唯一正确姿势：在 `C:\dev\mobile` 下执行 `pnpm android`（即 `expo run:android`）。** 首次全量约 10 分钟，之后增量很快。
+
+**发 release APK（2026-09-09 走通）**：`cd C:\dev\mobile && CI=1 npx expo prebuild -p android`，然后 `cd android && ./gradlew assembleRelease`；产物在 `android/app/build/outputs/apk/release/app-release.apk`（debug keystore 签名 = Expo 模板确定性文件，跨 prebuild 一致，可直接覆盖安装）。prebuild 会全量清空重建 android/ 目录，旧 build 产物一并消失。
+
+**发版前必核验指纹一致**（2026-09-09 踩坑）：gradle 的 `createReleaseUpdatesResources` 任务可能被 up-to-date 跳过，把**旧指纹**烤进 APK，导致 `eas update` 发出的 OTA（按当前树计算）永远匹配不到。核验方法：`npx expo-updates runtimeversion:resolve --platform android` 的 runtimeVersion 必须等于 `cat android/app/build/generated/assets/createReleaseUpdatesResources/fingerprint`；不等就删掉该 fingerprint 文件重跑 `:app:createReleaseUpdatesResources` 再 assembleRelease。APK 内可直接验证：`unzip -p <apk> assets/fingerprint`。
 
 三个历史坑（均已根治，复发时按此对照）：
 
@@ -38,13 +42,16 @@ WSL 路线（`~/node22 + ~/Android/Sdk`）曾作为替代探索，最终未采�
 - **可 OTA**：`app/`、`src/` 的 TS/TSX 与资源改动（runtimeVersion 用 fingerprint 策略，指纹不变即可热推）。
 - **必须发新 APK**：`package.json` 依赖增删升级（**2026-09-05 已把 19 个 expo 系包对齐到官方期望版，含 RN 0.86.3**）、`app.json` plugins/权限/原生配置变化——指纹自动变化，旧安装拉不到新 OTA，这是保护不是故障。
 - **一次性前提**：当前已装设备需先安装一次含 expo-updates 的 APK（模拟器里已装），之后才享受 OTA。
+- **OTA channel（2026-09-09 修复）**：本地构建的 APK 此前 AndroidManifest 里没有 channel 头，EAS Update 按 channel 分发时根本匹配不到——`eas update --channel production` 发了也白发。现已把 `expo-channel: production` 写进 app.json `updates.requestHeaders`，prebuild 会烤进 manifest（`expo.modules.updates.UPDATES_CONFIGURATION_REQUEST_HEADERS_KEY`）。发 preview 内测频道时改这里并重新 prebuild + 构建 APK。
+- **EAS 关联**：projectId `bf04db66-a706-40eb-aa9c-b0a5dcb4ae13` 与 slug 一一绑定且不可改名——**slug 必须保持 `weflow-client1`**（2026-09-07 曾被误改为 `weflow-mobile`，所有 eas 命令被 slug 校验拦截；改回后首次 OTA 发布成功）。slug 变化会改变指纹。
+- `C:\dev\mobile` 不是 git 仓库（git 走旧 junction 路径），eas update 用 `EAS_NO_VCS=1` 前缀；非交互模式需 `--environment production`。
 
 ## 已知坑
 
 - `npx eas-cli` 未登录时 update 直接失败（EAS owner：`leaif`，projectId：`bf04db66-a706-40eb-aa9c-b0a5dcb4ae13`）。
 - Release（preview/production profile）构建强制 HTTPS Core（`app.config.ts` 校验会直接抛错）；本地明文 HTTP 只允许 dev 场景。
 - Android 发布验收被 `docs/android-release-prerequisites.md` 里的 google-services.json 新身份问题阻塞（新包名 `com.weflow.mobile` 的新 Firebase 配置未就位）；此事与 OTA 无关，但发新 APK 前必须解决。
-- **git 操作走旧仓库路径**（`Desktop\We\weflow-solutions`，经 junction）；`C:\dev\mobile` 下 git 找不到仓库根。
+- **git 操作走仓内 junction 路径**（`Desktop\We\weflow\solutions\customer-support\apps\mobile`，指向 `C:\dev\mobile`；2026-09 双仓合并后原 `weflow-solutions` 路径已废弃）；`C:\dev\mobile` 下 git 找不到仓库根。
 - pnpm 在路径/配置变化后报 `Unexpected virtual store location` → `CI=true pnpm install` 重链。
 - 改 `app.json` 版本号后必须 `npx expo prebuild -p android` 才会进 APK（版本号在 prebuild 时烤进原生工程）。
 - 模拟器挂死/误杀进程后可能回滚到旧快照，**应用会"消失"**——`adb install -r` 重装 APK 即可；构建报 `Unable to delete file ...classes.jar` → `gradlew --stop` + 杀全部 java.exe + 删对应模块 build 目录。

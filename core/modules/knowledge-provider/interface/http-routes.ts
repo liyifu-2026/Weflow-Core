@@ -18,6 +18,7 @@ import {
   providerPath,
   type KnowledgeProviderOptions,
 } from "../application/boundary.js";
+import { weknoraAuthHeaders } from "../../../infrastructure/knowledge/weknora-knowledge-client.js";
 
 export {
   inspectKnowledgeEngine,
@@ -32,15 +33,17 @@ const PREFIX = "/api/v1/console/knowledge-provider/";
 /**
  * Console 的知识控制面代理。浏览器只持有 Weflow Cookie；上游地址、Key、
  * Cookie 与内部错误不会越过 Core Gateway。
+ *
+ * resolveOptions 按请求取用当前生效配置（设置中心连接器热加载，ADR-0008）。
  */
 export function registerKnowledgeProviderRoutes(
   server: FastifyInstance,
   db: NodePgDatabase<typeof schema>,
-  options: KnowledgeProviderOptions | undefined,
+  resolveOptions: () => KnowledgeProviderOptions | undefined,
 ): void {
   server.get("/api/v1/admin/knowledge-engine", async (request, reply) => {
     if (!(await requireAdminIdentity(db, request, reply))) return;
-    return reply.send(await inspectKnowledgeEngine(options));
+    return reply.send(await inspectKnowledgeEngine(resolveOptions()));
   });
 
   server.addContentTypeParser(
@@ -79,6 +82,7 @@ export function registerKnowledgeProviderRoutes(
           ? await requireBusinessIdentity(db, request, reply)
           : await requireAdminIdentity(db, request, reply);
       if (!identity) return;
+      const options = resolveOptions();
       if (!options)
         return reply
           .code(503)
@@ -88,7 +92,9 @@ export function registerKnowledgeProviderRoutes(
       const sourceUrl = new URL(request.raw.url ?? "", "http://weflow.local");
       upstreamUrl.search = sourceUrl.search;
       const headers = new Headers();
-      headers.set("x-api-key", options.apiKey);
+      for (const [name, value] of Object.entries(weknoraAuthHeaders(options))) {
+        headers.set(name, value);
+      }
       headers.set("x-request-id", randomUUID());
       const contentType = request.headers["content-type"];
       if (contentType) headers.set("content-type", contentType);

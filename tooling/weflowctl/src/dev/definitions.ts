@@ -28,10 +28,9 @@ function resolveWeRoot(): string {
 
 export const WE_ROOT = resolveWeRoot();
 export const CORE_DIR = join(WE_ROOT, "weflow", "core");
-export const CONSOLE_DIR = join(WE_ROOT, "weflow", "apps", "console");
 export const SUPPORT_WEB_DIR = join(
   WE_ROOT,
-  "weflow-solutions",
+  "weflow",
   "solutions",
   "customer-support",
   "apps",

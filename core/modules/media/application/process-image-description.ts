@@ -51,6 +51,15 @@ export async function processImageDescription(
   const row = rows[0];
   if (!row) throw new Error(`media ${mediaId} does not have a source file`);
   if (row.media.status === "ready") return;
+  // 回声护栏：outbound/unknown 方向的媒体（自消息回声融合失败插入的
+  // 独立行）描述完成后绝不建 Turn，与 ingest 的 inbound 闸门对齐——
+  // 否则 AI 会把客服自己发的图片/文件当成客户输入自动回复。
+  const directionRows = await db
+    .select({ direction: schema.messages.direction })
+    .from(schema.messages)
+    .where(eq(schema.messages.messageId, row.media.messageId))
+    .limit(1);
+  if (directionRows[0]?.direction !== "inbound") return;
 
   const claimed = await db
     .update(schema.mediaAssets)

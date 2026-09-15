@@ -3,10 +3,8 @@ import { defineStore } from "pinia";
 
 export type ConversationWorkspace = {
   search: string;
-  filter: "attention" | "mine" | "all";
   replyDraft: string;
   scrollTop: number;
-  evidenceExpanded: boolean;
 };
 
 export const useConversationWorkspaceStore = defineStore(
@@ -17,10 +15,8 @@ export const useConversationWorkspaceStore = defineStore(
       if (!sessions[key]) {
         sessions[key] = {
           search: "",
-          filter: "attention",
           replyDraft: "",
           scrollTop: 0,
-          evidenceExpanded: true,
         };
       }
       return sessions[key];

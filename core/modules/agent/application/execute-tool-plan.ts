@@ -6,11 +6,12 @@
  * tool dispatch to that boundary.
  */
 
-import { eq } from "drizzle-orm";
+import { and, desc, eq, gt, ilike, inArray, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { KnowledgeSearch } from "../../knowledge/contracts/knowledge-search.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
+import { maskedSenderLabel } from "../../conversations/application/sender-display.js";
 import {
   ToolExecutionService,
   type ToolExecutionRecord,
@@ -127,7 +128,153 @@ async function executeCurrentTool(
     return await fetchUrlText(url);
   }
 
+  if (execution.toolName === "search_chat_history") {
+    return await searchChatHistory(db, execution);
+  }
+
   throw new Error("tool_not_implemented");
+}
+
+/**
+ * 群历史消息检索（仅群聊下发）：查本会话入站文本消息，按说话者/关键词/
+ * 时间窗过滤。speaker 支持昵称（经联系人资料解析）或 wxid 直配；
+ * 返回 messages + total_matched + truncated，喂回模型作"可信事实"。
+ */
+const HISTORY_MAX_TEXT_LENGTH = 200;
+
+async function searchChatHistory(
+  db: NodePgDatabase<typeof schema>,
+  execution: ToolExecutionRecord,
+): Promise<Record<string, unknown>> {
+  try {
+    return await searchChatHistoryInner(db, execution);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("invalid_history")) {
+      throw error;
+    }
+    throw new Error("history_query_failed");
+  }
+}
+
+async function searchChatHistoryInner(
+  db: NodePgDatabase<typeof schema>,
+  execution: ToolExecutionRecord,
+): Promise<Record<string, unknown>> {
+  const args = execution.arguments;
+  const scope = args.scope;
+  if (scope !== "speaker" && scope !== "group") {
+    throw new Error("invalid_history_scope");
+  }
+  const speaker = typeof args.speaker === "string" ? args.speaker.trim() : "";
+  if (scope === "speaker" && !speaker) {
+    throw new Error("invalid_history_scope");
+  }
+  const keyword = typeof args.keyword === "string" ? args.keyword.trim() : "";
+  const beforeHours = Number(args.before_hours ?? 72);
+  if (!Number.isFinite(beforeHours) || beforeHours < 1 || beforeHours > 720) {
+    throw new Error("invalid_history_scope");
+  }
+  const limit = Math.min(Math.max(Number(args.limit ?? 10), 1), 20);
+  const since = new Date(Date.now() - beforeHours * 3_600_000);
+
+  // speaker 解析：先按 wxid 直配；查无此人再按昵称/备注在联系人资料里找
+  let actorId: string | null = null;
+  let speakerLabel = speaker;
+  if (scope === "speaker") {
+    const byWxid = await db
+      .select({ resolved: schema.contactProfiles.channelContactId })
+      .from(schema.contactProfiles)
+      .where(eq(schema.contactProfiles.channelContactId, speaker))
+      .limit(1);
+    if (byWxid.length === 0) {
+      const byName = await db
+        .select({ resolved: schema.contactProfiles.channelContactId })
+        .from(schema.contactProfiles)
+        .where(
+          or(
+            ilike(schema.contactProfiles.channelNickname, `%${speaker}%`),
+            ilike(schema.contactProfiles.channelDisplayName, `%${speaker}%`),
+            ilike(schema.contactProfiles.channelRemark, `%${speaker}%`),
+            ilike(schema.contactProfiles.sharedAlias, `%${speaker}%`),
+          ),
+        )
+        .limit(1);
+      actorId = byName[0]?.resolved ?? null;
+    } else {
+      actorId = speaker;
+    }
+  }
+
+  const conditions = [
+    eq(schema.messages.conversationId, execution.conversationId),
+    eq(schema.messages.direction, "inbound"),
+    eq(schema.messages.contentType, "text"),
+    gt(schema.messages.occurredAt, since),
+  ];
+  if (actorId) conditions.push(eq(schema.messages.actorId, actorId));
+  if (keyword) {
+    conditions.push(ilike(schema.messages.text, `%${keyword}%`));
+  }
+
+  const totalRows = await db
+    .select({ value: sql<number>`count(*)::int` })
+    .from(schema.messages)
+    .where(and(...conditions));
+  const totalMatched = Number(totalRows[0]?.value ?? 0);
+
+  const rows = await db
+    .select({
+      actorId: schema.messages.actorId,
+      text: schema.messages.text,
+      occurredAt: schema.messages.occurredAt,
+    })
+    .from(schema.messages)
+    .where(and(...conditions))
+    .orderBy(desc(schema.messages.occurredAt))
+    .limit(limit + 1);
+  const truncated = rows.length > limit;
+
+  // 发送者昵称解析（成员/联系人资料），回给模型可读名字
+  const actorIds = [
+    ...new Set(rows.map((row) => row.actorId).filter((id): id is string => Boolean(id))),
+  ];
+  const nameMap = new Map<string, string>();
+  if (actorIds.length > 0) {
+    const nameRows = await db
+      .select({
+        channelContactId: schema.contactProfiles.channelContactId,
+        channelDisplayName: schema.contactProfiles.channelDisplayName,
+        channelNickname: schema.contactProfiles.channelNickname,
+        channelRemark: schema.contactProfiles.channelRemark,
+        sharedAlias: schema.contactProfiles.sharedAlias,
+      })
+      .from(schema.contactProfiles)
+      .where(inArray(schema.contactProfiles.channelContactId, actorIds));
+    for (const row of nameRows) {
+      const resolved =
+        row.sharedAlias?.trim() ||
+        row.channelDisplayName?.trim() ||
+        row.channelRemark?.trim() ||
+        row.channelNickname?.trim() ||
+        "";
+      if (resolved) nameMap.set(row.channelContactId, resolved);
+    }
+  }
+
+  return {
+    scope,
+    ...(scope === "speaker" ? { speaker: speakerLabel } : {}),
+    ...(keyword ? { keyword } : {}),
+    messages: rows.slice(0, limit).map((row) => ({
+      speaker: row.actorId
+        ? (nameMap.get(row.actorId) ?? maskedSenderLabel(row.actorId))
+        : "未知",
+      at: row.occurredAt.toISOString(),
+      text: row.text.slice(0, HISTORY_MAX_TEXT_LENGTH),
+    })),
+    total_matched: totalMatched,
+    truncated,
+  };
 }
 
 const MAX_URL_CONTENT_BYTES = 256 * 1024;

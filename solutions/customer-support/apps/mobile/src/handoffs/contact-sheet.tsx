@@ -631,6 +631,15 @@ function ReadOnlyConversation({
                       mediaId={message.mediaId}
                       offline={false}
                     />
+                  ) : (message.contentType === "video" ||
+                      message.mediaKind === "video") &&
+                    message.mediaId ? (
+                    <MediaFileBubble
+                      session={session}
+                      mediaId={message.mediaId}
+                      fileName={message.mediaFileName ?? "video.mp4"}
+                      align={message.direction === "outbound" ? "right" : "left"}
+                    />
                   ) : message.contentType !== "text" ? (
                     <Text style={styles.messageNonText}>[文件]</Text>
                   ) : (

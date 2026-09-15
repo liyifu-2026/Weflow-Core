@@ -117,7 +117,10 @@ integration("客服头像（identity avatar）", () => {
     });
     expect(upload.statusCode, upload.body).toBe(200);
     const avatarUrl = upload.json<{ avatarUrl: string }>().avatarUrl;
-    expect(avatarUrl).toBe(`/api/v1/users/${userId}/avatar`);
+    // URL 可带缓存版本参数（?v=<秒级 updatedAt>），只断言路径形态
+    expect(avatarUrl).toMatch(
+      new RegExp(`^/api/v1/users/${userId}/avatar(\\?v=\\d+)?$`),
+    );
 
     const me = await server.inject({
       method: "GET",

@@ -20,8 +20,8 @@ import MediaFile from "../../components/MediaFile.vue";
 import VoiceMessage from "../../components/VoiceMessage.vue";
 import AvatarImage from "../../components/AvatarImage.vue";
 import { contactDisplayName, factLabel, reasonLabel } from "../../labels";
+import { cycleStatusLabel } from "../../lib/handoff-vocab";
 import {
-  cycleStatusLabel,
   isFileMessage,
   isImageMessage,
   isVoiceMsg,
@@ -48,9 +48,26 @@ const props = defineProps<{
   agentSession: { state: string; roundsUsed: number; roundBudget: number } | null;
   sessionBadgeLabel: string | null;
   pendingWake: { wakeId: number; turnId: string; wakeAt: string; nudgeText?: string | null } | null;
-  doneWakes: Array<{ wakeId: number; turnId: string; wakeAt: string; nudgeText?: string | null }>;
+  doneWakes: Array<{ wakeId: number; turnId: string; kind: string; status: string; wakeAt: string; nudgeText?: string | null }>;
   wakeCountdown: string;
   lastReplyTurnId: string | null;
+  /** 轮次体检（A3）：四类结果计数 + 孤儿入站消息 + 每轮概要 */
+  turnHealth: {
+    counts: { replied: number; no_reply: number; failed: number; in_flight: number };
+    outcomes: Array<{
+      turnId: string;
+      status: string;
+      errorCode: string | null;
+      startedAt: string | null;
+      completedAt: string | null;
+      durationMs: number | null;
+      triggerMessageId: string | null;
+      replyBatchId: string | null;
+      outcome: string;
+    }>;
+    orphans: Array<{ messageId: string; contentType: string; text: string; occurredAt: string }>;
+    orphanCount: number;
+  } | null;
   risk: string | null;
   /** 客户资料编辑 */
   note: string;
@@ -155,6 +172,36 @@ function historyActorLabel(message: Message) {
   >
     <!-- 当前上下文 -->
     <template v-if="view === 'context'">
+      <!-- 轮次体检：四类结果一眼可辨（已回复/未回复/失败/未触发） -->
+      <section v-if="turnHealth" class="border-b border-border py-4">
+        <span class="mb-2 block text-xs font-bold text-muted-foreground">轮次体检（24h）</span>
+        <div class="flex flex-wrap gap-2 text-xs">
+          <Badge variant="secondary">✅ 已回复 {{ turnHealth.counts.replied }}</Badge>
+          <Badge variant="outline">😶 未回复 {{ turnHealth.counts.no_reply }}</Badge>
+          <Badge :variant="turnHealth.counts.failed > 0 ? 'destructive' : 'outline'">⚠️ 失败 {{ turnHealth.counts.failed }}</Badge>
+          <Badge :variant="turnHealth.orphanCount > 0 ? 'destructive' : 'outline'">✉️ 未触发 {{ turnHealth.orphanCount }}</Badge>
+        </div>
+        <div class="mt-2 space-y-1">
+          <button
+            v-for="outcome in turnHealth.outcomes.slice(0, 6)"
+            :key="outcome.turnId"
+            type="button"
+            class="block w-full truncate text-left text-xs text-muted-foreground hover:text-primary hover:underline"
+            @click="emit('open-trace', outcome.turnId)"
+          >
+            {{ messageTime(outcome.startedAt ?? "") }}
+            {{ outcome.outcome === "replied" ? "已回复" : outcome.outcome === "failed" ? `失败 ${outcome.errorCode ?? ""}` : outcome.outcome === "in_flight" ? "处理中" : `未回复 ${outcome.errorCode ?? ""}` }}
+            <span v-if="outcome.durationMs !== null">· {{ Math.round(outcome.durationMs / 100) / 10 }}s</span>
+          </button>
+        </div>
+        <p
+          v-for="orphan in turnHealth.orphans.slice(0, 3)"
+          :key="orphan.messageId"
+          class="mt-1 truncate text-xs text-destructive/80"
+        >
+          未触发回复：{{ orphan.text || `[${orphan.contentType}]` }} · {{ messageTime(orphan.occurredAt) }}
+        </p>
+      </section>
       <section class="border-b border-border py-4">
         <span class="mb-1 block text-xs font-bold text-muted-foreground">当前任务</span>
         <p class="m-0 leading-relaxed">{{ ownershipLabel }}</p>

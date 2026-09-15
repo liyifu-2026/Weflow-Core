@@ -74,7 +74,7 @@ export async function processDueSessionWakes(
         .onConflictDoNothing();
       return true;
     });
-  // 策略闸门（代码持有，模型不可绕过）：窗口期内 Handoff 接管或白名单
+  // 策略闸门（代码持有，模型不可绕过）：窗口期内 Handoff 接管或自动回复
   // 摘除后，到点的唤醒必须静默作废——绝不向已转人工/已停用的客户发消息。
   const checkGates =
     deps?.checkGates ??

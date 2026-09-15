@@ -21,6 +21,8 @@ integration("message outcome by stable id", () => {
   const agentMessageId = `agent-message:turn:${suffix}:1`;
   const manualMessageId = `manual-message:${"a".repeat(64)}`;
   const manualClientRequestId = randomUUID();
+  const unknownMessageId = `manual-message:${"b".repeat(64)}`;
+  const unknownClientRequestId = randomUUID();
 
   beforeAll(async () => {
     postgres = createPostgres(
@@ -76,6 +78,18 @@ integration("message outcome by stable id", () => {
         occurredAt: new Date(),
         traceId: `trace:${suffix}:manual`,
       },
+      {
+        ...base,
+        messageId: unknownMessageId,
+        actorType: "user",
+        actorId: "user-admin",
+        sendState: "unknown",
+        replyBatchId: null,
+        replySequence: null,
+        idempotencyKey: `manual:${unknownClientRequestId}`,
+        occurredAt: new Date(),
+        traceId: `trace:${suffix}:unknown`,
+      },
     ]);
   });
 
@@ -123,6 +137,19 @@ integration("message outcome by stable id", () => {
     if (outcome.status !== "not_found") {
       expect(outcome.message.messageId).toBe(manualMessageId);
     }
+  });
+
+  it("surfaces an unknown sendState as outcome status unknown (not accepted)", async () => {
+    const byMessageId = await getManualReplyOutcome(postgres.db, {
+      conversationId,
+      clientRequestId: unknownMessageId,
+    });
+    expect(byMessageId.status).toBe("unknown");
+    const byClientRequestId = await getManualReplyOutcome(postgres.db, {
+      conversationId,
+      clientRequestId: unknownClientRequestId,
+    });
+    expect(byClientRequestId.status).toBe("unknown");
   });
 
   it("returns not_found for an unknown id", async () => {

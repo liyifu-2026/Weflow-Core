@@ -16,7 +16,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { count, desc, eq, gte, inArray } from "drizzle-orm";
+import { count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
@@ -40,6 +40,8 @@ export type BackendPluginContext = {
   gte: typeof gte;
   inArray: typeof inArray;
   desc: typeof desc;
+  /** drizzle sql 模板标签：业务插件执行参数化原生 SQL 的唯一入口 */
+  sql: typeof sql;
   requireBusinessIdentity: typeof requireBusinessIdentity;
 };
 
@@ -79,6 +81,7 @@ export async function loadInstalledBackendPlugins(
     gte,
     inArray,
     desc,
+    sql,
     requireBusinessIdentity,
   };
   const pluginRoot = resolvePluginDirRoot();

@@ -422,4 +422,183 @@ integration("automatic memory capture", () => {
       .delete(schema.contactProfiles)
       .where(eq(schema.contactProfiles.contactId, batchContactId));
   });
+
+  it("includes voice transcriptions in capture and defers on in-flight ASR", async () => {
+    const voiceConversationId = `channel:memory-voice-${suffix}`;
+    const voiceContactId = `contact:memory-voice-${suffix}`;
+    const textMessageId = `memory-voice-text:${suffix}`;
+    const voiceMessageId = `memory-voice-msg:${suffix}`;
+    const failedVoiceMessageId = `memory-voice-failed:${suffix}`;
+    await postgres.db.insert(schema.contactProfiles).values({
+      contactId: voiceContactId,
+      channel: "channel",
+      channelContactId: `memory-voice-${suffix}`,
+    });
+    await postgres.db.insert(schema.conversations).values({
+      conversationId: voiceConversationId,
+      contactId: voiceContactId,
+      channel: "channel",
+      channelConversationId: `memory-voice-${suffix}`,
+    });
+    await postgres.db.insert(schema.messages).values([
+      {
+        messageId: textMessageId,
+        conversationId: voiceConversationId,
+        direction: "inbound",
+        actorType: "channel_contact",
+        actorId: voiceContactId,
+        contentType: "text",
+        channelType: 1,
+        text: "我常住北京。",
+        processingState: "received",
+        idempotencyKey: textMessageId,
+        occurredAt: new Date(),
+        traceId: textMessageId,
+      },
+      {
+        messageId: failedVoiceMessageId,
+        conversationId: voiceConversationId,
+        direction: "inbound",
+        actorType: "channel_contact",
+        actorId: voiceContactId,
+        contentType: "voice",
+        channelType: 1,
+        text: "",
+        processingState: "received",
+        idempotencyKey: failedVoiceMessageId,
+        occurredAt: new Date(),
+        traceId: failedVoiceMessageId,
+      },
+      {
+        messageId: voiceMessageId,
+        conversationId: voiceConversationId,
+        direction: "inbound",
+        actorType: "channel_contact",
+        actorId: voiceContactId,
+        contentType: "voice",
+        channelType: 1,
+        text: "",
+        processingState: "received",
+        idempotencyKey: voiceMessageId,
+        occurredAt: new Date(),
+        traceId: voiceMessageId,
+      },
+    ]);
+    // failed 语音：不可转写 → 跳过；ready 语音：转写文本纳入捕获
+    await postgres.db.insert(schema.mediaAssets).values([
+      {
+        mediaId: `media:memory-voice-failed:${suffix}`,
+        messageId: failedVoiceMessageId,
+        conversationId: voiceConversationId,
+        sourceConversationId: voiceConversationId,
+        kind: "voice",
+        status: "failed",
+        errorCode: "retry_exhausted",
+      },
+      {
+        mediaId: `media:memory-voice:${suffix}`,
+        messageId: voiceMessageId,
+        conversationId: voiceConversationId,
+        sourceConversationId: voiceConversationId,
+        kind: "voice",
+        status: "ready",
+        description: "我对花生过敏，这个菜不能放花生。",
+      },
+    ]);
+    let seenPrompt = "";
+    const client = new OpenAiCompatibleClient({
+      baseUrl: "https://model.invalid",
+      apiKey: "test",
+      model: "deepseek-v4-flash",
+      timeoutMs: 1_000,
+      fetch: async (_url, init) => {
+        seenPrompt = String(init?.body ?? "");
+        return Response.json({
+          choices: [{ message: { content: '{"memories":[]}' } }],
+        });
+      },
+    });
+    const due = new Date(Date.now() - 100_000);
+    await scheduleMemoryCapture(postgres.db, {
+      conversationId: voiceConversationId,
+      contactId: voiceContactId,
+      watermarkMessageId: voiceMessageId,
+      now: due,
+    });
+    await expect(
+      processMemoryCapture(postgres.db, client, "deepseek-v4-flash", {
+        conversationId: voiceConversationId,
+        revision: 1,
+      }),
+    ).resolves.toBe("completed");
+    // 转写文本进入提取上下文；failed 语音的空文本不出现
+    expect(seenPrompt).toContain(
+      "语音转写：我对花生过敏，这个菜不能放花生。",
+    );
+
+    // in-flight ASR：批次在语音前截停，游标不推进，任务保持调度
+    await postgres.db.insert(schema.messages).values({
+      messageId: `memory-voice-inflight:${suffix}`,
+      conversationId: voiceConversationId,
+      direction: "inbound",
+      actorType: "channel_contact",
+      actorId: voiceContactId,
+      contentType: "voice",
+      channelType: 1,
+      text: "",
+      processingState: "received",
+      idempotencyKey: `memory-voice-inflight:${suffix}`,
+      occurredAt: new Date(),
+      traceId: `memory-voice-inflight:${suffix}`,
+    });
+    await postgres.db.insert(schema.mediaAssets).values({
+      mediaId: `media:memory-voice-inflight:${suffix}`,
+      messageId: `memory-voice-inflight:${suffix}`,
+      conversationId: voiceConversationId,
+      sourceConversationId: voiceConversationId,
+      kind: "voice",
+      status: "processing",
+    });
+    await scheduleMemoryCapture(postgres.db, {
+      conversationId: voiceConversationId,
+      contactId: voiceContactId,
+      watermarkMessageId: `memory-voice-inflight:${suffix}`,
+      now: due,
+    });
+    await expect(
+      processMemoryCapture(postgres.db, client, "deepseek-v4-flash", {
+        conversationId: voiceConversationId,
+        revision: 2,
+      }),
+    ).resolves.toBe("completed");
+    const voiceStates = await postgres.db
+      .select()
+      .from(schema.memoryCaptureStates)
+      .where(
+        eq(schema.memoryCaptureStates.conversationId, voiceConversationId),
+      );
+    expect(voiceStates[0]).toMatchObject({
+      status: "scheduled",
+      // 游标停在在途语音之前的最后一条消息，不越过它
+      lastCapturedMessageId: textMessageId,
+    });
+
+    await postgres.db
+      .delete(schema.memoryCaptureStates)
+      .where(
+        eq(schema.memoryCaptureStates.conversationId, voiceConversationId),
+      );
+    await postgres.db
+      .delete(schema.mediaAssets)
+      .where(eq(schema.mediaAssets.conversationId, voiceConversationId));
+    await postgres.db
+      .delete(schema.messages)
+      .where(eq(schema.messages.conversationId, voiceConversationId));
+    await postgres.db
+      .delete(schema.conversations)
+      .where(eq(schema.conversations.conversationId, voiceConversationId));
+    await postgres.db
+      .delete(schema.contactProfiles)
+      .where(eq(schema.contactProfiles.contactId, voiceContactId));
+  });
 });

@@ -131,3 +131,25 @@ export async function markWakeDone(
     .set({ status: "done" })
     .where(eq(schema.sessionWakes.wakeId, wakeId));
 }
+
+/**
+ * 新入站作废：对方开口即打断等待——pending 唤醒不再到期触发
+ * （避免唤醒轮追着已处理的新消息跑）。由 ingest 链路在入站消息
+ * 落库后调用，语义对齐 cancelPendingScheduledSendsOnInbound。
+ */
+export async function cancelPendingSessionWakesOnInbound(
+  db: NodePgDatabase<typeof schema>,
+  conversationId: string,
+): Promise<number> {
+  const updated = await db
+    .update(schema.sessionWakes)
+    .set({ status: "cancelled" })
+    .where(
+      and(
+        eq(schema.sessionWakes.conversationId, conversationId),
+        eq(schema.sessionWakes.status, "scheduled"),
+      ),
+    )
+    .returning({ wakeId: schema.sessionWakes.wakeId });
+  return updated.length;
+}

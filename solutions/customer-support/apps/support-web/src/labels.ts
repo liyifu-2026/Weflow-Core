@@ -27,85 +27,6 @@ export function stateLabel(state: string | undefined | null): string {
   return STATE_LABELS[state.toLowerCase()] ?? state;
 }
 
-// ---------- knowledge infrastructure (P4 read-only views) ----------
-
-const INFRA_STATE_LABELS: Record<string, string> = {
-  active: "启用",
-  inactive: "停用",
-  ready: "就绪",
-  syncing: "同步中",
-  synced: "已同步",
-  pending: "等待中",
-  failed: "失败",
-  idle: "空闲",
-  error: "异常",
-};
-
-const INFRA_SOURCE_LABELS: Record<string, string> = {
-  env: "环境内置",
-  remote: "远程",
-  local: "本地",
-  manual: "手动",
-  builtin: "内置",
-};
-
-const INFRA_ENGINE_LABELS: Record<string, string> = {
-  postgres: "PostgreSQL",
-  pgvector: "PGVector",
-  milvus: "Milvus",
-  chroma: "Chroma",
-  qdrant: "Qdrant",
-  elasticsearch: "Elasticsearch",
-  opensearch: "OpenSearch",
-};
-
-const INFRA_PROVIDER_LABELS: Record<string, string> = {
-  local: "本地文件系统",
-  s3: "S3 兼容",
-  minio: "MinIO",
-  oss: "阿里云 OSS",
-  cos: "腾讯云 COS",
-  azure: "Azure Blob",
-  gcs: "Google Cloud Storage",
-};
-
-export function infraStateLabel(value: string | undefined | null): string {
-  if (!value) return "—";
-  return INFRA_STATE_LABELS[value.toLowerCase()] ?? value;
-}
-
-export function infraSourceLabel(value: string | undefined | null): string {
-  if (!value) return "—";
-  return INFRA_SOURCE_LABELS[value.toLowerCase()] ?? value;
-}
-
-export function infraEngineLabel(value: string | undefined | null): string {
-  if (!value) return "—";
-  return INFRA_ENGINE_LABELS[value.toLowerCase()] ?? value;
-}
-
-export function infraProviderLabel(value: string | undefined | null): string {
-  if (!value) return "—";
-  return INFRA_PROVIDER_LABELS[value.toLowerCase()] ?? value;
-}
-
-const MODEL_TYPE_LABELS: Record<string, string> = {
-  knowledgeqa: "问答",
-  embedding: "向量",
-  rerank: "重排",
-  chat: "对话",
-  asr: "语音识别",
-  tts: "语音合成",
-  image: "图像",
-  multimodal: "多模态",
-  llm: "大语言模型",
-};
-
-export function modelTypeLabel(value: string | undefined | null): string {
-  if (!value) return "—";
-  return MODEL_TYPE_LABELS[value.toLowerCase()] ?? value;
-}
-
 // ---------- knowledge source types ----------
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -327,22 +248,6 @@ export function healthLabel(value: string | undefined | null): HealthLabel {
     default:
       return { text: value || "未监测", tone: "inactive" };
   }
-}
-
-// ---------- time ----------
-
-export function humanDuration(
-  minutes: number,
-): string {
-  if (minutes < 1) return "刚刚";
-  if (minutes < 60) return `${minutes} 分钟`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) {
-    const rest = minutes % 60;
-    return rest ? `${hours} 小时 ${rest} 分` : `${hours} 小时`;
-  }
-  const days = Math.floor(hours / 24);
-  return `${days} 天前`;
 }
 
 // ---------- conversation contact display name ----------

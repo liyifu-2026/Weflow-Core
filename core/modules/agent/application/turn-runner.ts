@@ -4,11 +4,13 @@
  * - processPlannedToolTurn：工具检查点恢复路径（执行工具 → 最终回复）
  *
  * 只做编排，不做纯决策（决策在 reply-policy / turn-utils）；
- * 决策后处理（gate/handoff/no_action/校验/落库）统一在 decision-disposition。
+ * 决策后处理（gate/handoff/no_action/校验/落库）统一在 decision-disposition；
+ * 「从模型+策略拿决策」统一在 acquire-decision（曾双路径各写一份，
+ * 2026-09-07 幻觉工具回归被迫双处修复——现收敛为单一实现）。
  * 仅由 AgentTurnExecutor.execute() 在完成 CAS 领取后调用（ADR-0001）。
  */
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import {
   DEFAULT_BEHAVIOR_SETTINGS,
@@ -30,13 +32,15 @@ import {
   collectSkillHints,
   collectSkillHintsAfterKnowledge,
 } from "./reply-policy.js";
-import { parseAgentDecision } from "./agent-decision.js";
-import { decisionFieldContractText } from "./decision-contract.js";
-import { agentActionToDecision } from "./agent-action-to-decision.js";
-import { executeToolPlan } from "./execute-tool-plan.js";
 import {
-  AgentTurnTransitionNotApplied,
-} from "./agent-turn-service.js";
+  textOfContent,
+  type TextModelContent,
+  type TextModelMessage,
+} from "../../model/contracts/text-generation-request.js";
+import { decisionFieldContractText } from "./decision-contract.js";
+import { executeToolPlan } from "./execute-tool-plan.js";
+import { toNativeToolDefinitions } from "./tool-catalog.js";
+import { AgentTurnTransitionNotApplied } from "./agent-turn-service.js";
 import {
   commitAgentTurnFailure,
   commitAgentTurnSuppression,
@@ -46,10 +50,14 @@ import { buildAgentContext } from "./agent-context.js";
 import { commitDecisionDisposition } from "./decision-disposition.js";
 import {
   classifyError,
-  detectChatType,
   getAgentTurnConversationId,
 } from "./turn-utils.js";
-import { completeAgentDecision } from "./complete-agent-decision.js";
+import { chatTypeFromConversationRef } from "../../conversations/application/chat-type.js";
+import {
+  acquireDecision,
+} from "./acquire-decision.js";
+import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
+import type { imageToContentPart } from "./image-content.js";
 import type { AgentTurnExecutionInput } from "./agent-turn-executor.js";
 
 type Database = NodePgDatabase<typeof schema>;
@@ -88,10 +96,23 @@ export type TurnRunnerDependencies = {
    */
   behaviorSettings?: (() => Promise<BehaviorSettings>) | undefined;
   /**
+   * 真 ReAct 循环开关：false 时 reply/ask 一律落 outcome 终态，不续步。
+   * triage 直答档置 false（直答回复不升级回主力档）；缺省 true。
+   */
+  allowReplyContinuation?: boolean | undefined;
+  /**
    * Agent 决策调用专用超时（THINKING-PIPELINE-PLAN B3，默认 180s）。
    * 长思考需要比其他模型调用更长的窗口；未注入时回落客户端配置。
    */
   decisionTimeoutMs?: number | undefined;
+  /**
+   * Phase 4 视觉直读：文件存储句柄（本地盘媒体根目录）。注入后才允许
+   * 把「最新入站图片」作为 image_url 喂给主模型；不注入零行为变化
+   * （图片维持文本占位/描述）。
+   */
+  imageStorage?: FileStorage;
+  /** 可覆写的图片→image_url 构造器（测试注入用）；缺省用内建实现。 */
+  readImage?: typeof imageToContentPart;
 };
 
 /**
@@ -104,7 +125,7 @@ export async function processAgentTurn(
   model: string,
   job: AgentTurnExecutionInput,
   dependencies: TurnRunnerDependencies,
-): Promise<void> {
+): Promise<{ continueLoop: boolean }> {
   const turns = await db
     .select()
     .from(schema.agentTurns)
@@ -113,7 +134,9 @@ export async function processAgentTurn(
   const turn = turns[0];
   if (!turn) throw new Error(`agent turn ${job.turnId} does not exist`);
   // 已完成或已被取代的轮次直接跳过
-  if (turn.status === "completed" || turn.status === "superseded") return;
+  if (turn.status === "completed" || turn.status === "superseded") {
+    return { continueLoop: false };
+  }
 
   // 轮次已由 AgentTurnExecutor 通过 AgentTurnService 完成 CAS 领取
   await recordAgentTurnEvent(db, {
@@ -131,13 +154,14 @@ export async function processAgentTurn(
       turnId: turn.turnId,
       reason: policy.reason,
     });
-    return;
+    return { continueLoop: false };
   }
 
   const [conversation] = await db
     .select({
       revision: schema.conversations.revision,
       contactId: schema.conversations.contactId,
+      chatType: schema.conversations.chatType,
     })
     .from(schema.conversations)
     .where(eq(schema.conversations.conversationId, turn.conversationId))
@@ -154,11 +178,40 @@ export async function processAgentTurn(
         .limit(1)
     : [];
 
-  // 检测会话类型：conversationId 以 @chatroom 结尾表示群聊
-  const chatType = detectChatType(turn.conversationId);
+  // 会话类型（ADR-0010）：读 conversations.chat_type 事实（ingest 定一次）；
+  // 行缺失的极端场景按通道约定兜底推导（全 Core 仅 ingest 与此兜底认识后缀）。
+  const chatType =
+    conversation?.chatType ?? chatTypeFromConversationRef(turn.conversationId);
 
-  // 构建 Agent 上下文（消息历史、记忆、上一人工周期摘要等）
-  const context = await buildAgentContext(db, turn.conversationId, chatType);
+  // 行为参数（R2）：读取失败/未注入时回落出厂默认，绝不阻断 Turn。
+  // 提前到上下文构建前：轮窗摘要角色标签（roundSummaryLabels）随行为参数装配。
+  let behavior: BehaviorSettings | undefined;
+  try {
+    behavior = dependencies.behaviorSettings
+      ? await dependencies.behaviorSettings()
+      : undefined;
+  } catch {
+    behavior = undefined;
+  }
+
+  // 构建 Agent 上下文（消息历史、记忆、上一人工周期摘要等）；
+  // turn:wake:* 前缀 = 等待超时唤醒轮，上下文带"对方未回复"标记。
+  const context = await buildAgentContext(db, turn.conversationId, chatType, {
+    trigger: turn.turnId.startsWith("turn:wake:") ? "wake" : "message",
+    ...(behavior?.roundSummaryLabels
+      ? { roundLabels: behavior.roundSummaryLabels }
+      : {}),
+    ...(dependencies.imageStorage
+      ? {
+          image: dependencies.readImage
+            ? {
+                storage: dependencies.imageStorage,
+                readImage: dependencies.readImage,
+              }
+            : { storage: dependencies.imageStorage },
+        }
+      : {}),
+  });
   await recordAgentTurnEvent(db, {
     turnId: turn.turnId,
     conversationId: turn.conversationId,
@@ -193,17 +246,23 @@ export async function processAgentTurn(
         )) ?? null)
       : null;
 
+    // FC 协议：原生工具面从 availableTools 派生（单一事实源，目录外忽略）。
+    // 群聊/私聊对 availableTools 的增删自动反映到原生工具面。
+    const availableTools = [
+      ...(dependencies.knowledgeSearch ? ["retrieve_knowledge"] : []),
+      "query_contact_profile",
+      "fetch_url",
+      // 群历史筛选仅群聊下发（私聊 20 条窗口 + 记忆已覆盖）
+      ...(chatType === "group" ? ["search_chat_history"] : []),
+    ];
+    const nativeTools = toNativeToolDefinitions(availableTools);
     const strategySystem = strategy
       ? strategy.buildModelRequest({
           conversationId: turn.conversationId,
           contactId: conversation?.contactId ?? "",
-          messages: context.history,
+          messages: historyAsText(context.history),
           facts: {},
-          availableTools: [
-            ...(dependencies.knowledgeSearch ? ["retrieve_knowledge"] : []),
-            "query_contact_profile",
-            "fetch_url",
-          ],
+          availableTools,
           chatType,
         }).system
       : buildSystemPrompt(Boolean(dependencies.knowledgeSearch), chatType, {
@@ -213,33 +272,31 @@ export async function processAgentTurn(
     // Skill 提示：SkillRegistry 中每个注册 Skill 的 beforeKnowledge 输出
     // 作为不透明上下文注入，平台不解释其内容。
     const skillHintSection = skillHintBlock(
-      collectSkillHints(dependencies.skillRegistry, context.history),
+      collectSkillHints(
+        dependencies.skillRegistry,
+        historyAsText(context.history),
+      ),
     );
 
-    // 调用 LLM 获取决策结果
-    const modelResponse = await completeAgentDecision(
+    // 调用 LLM 获取决策结果（FC：下发原生工具面；模型可能以 tool_calls 请求工具）
+    const decisionMessages: TextModelMessage[] = [
+      {
+        role: "system",
+        content: `${strategySystem}${context.prompt}${skillHintSection}`,
+      },
+      ...context.history,
+    ];
+    const { decision } = await acquireDecision({
+      db,
       client,
-      [
-        {
-          role: "system",
-          content: `${strategySystem}${context.prompt}${skillHintSection}`,
-        },
-        ...context.history,
-      ],
       model,
-      { timeoutMs: dependencies.decisionTimeoutMs },
-    );
-    await recordModelCallEvent(db, {
       turnId: turn.turnId,
       conversationId: turn.conversationId,
-      model,
-      response: modelResponse,
+      decisionMessages,
+      nativeTools,
+      strategy,
+      decisionTimeoutMs: dependencies.decisionTimeoutMs,
     });
-    const decision = strategy
-      ? agentActionToDecision(
-          strategy.parseModelResponse({ text: modelResponse.text }),
-        )
-      : parseAgentDecision(modelResponse.text);
     await recordAgentTurnEvent(db, {
       turnId: turn.turnId,
       conversationId: turn.conversationId,
@@ -250,27 +307,10 @@ export async function processAgentTurn(
       },
     });
 
-    if (modelResponse.reasoning) {
-      await recordAgentTurnEvent(db, {
-        turnId: turn.turnId,
-        conversationId: turn.conversationId,
-        eventType: "model_reasoning",
-        payload: { reasoning: modelResponse.reasoning },
-      });
-    }
-
-    // 行为参数（R2）：读取失败/未注入时回落出厂默认，绝不阻断 Turn。
-    let behavior: BehaviorSettings | undefined;
-    try {
-      behavior = dependencies.behaviorSettings
-        ? await dependencies.behaviorSettings()
-        : undefined;
-    } catch {
-      behavior = undefined;
-    }
+    // 行为参数已在上下文构建前加载（behavior）——此处直接复用。
 
     // 决策后处理：gate → superseded → 工具计划 → no_action → 校验 → 落库
-    await commitDecisionDisposition({
+    const disposition = await commitDecisionDisposition({
       decision,
       db,
       turnId: turn.turnId,
@@ -286,9 +326,15 @@ export async function processAgentTurn(
             defaultWaitMs: behavior.defaultWaitMs,
             defaultSessionTtlMinutes: behavior.sessionTtlMinutes,
             defaultSessionRoundBudget: behavior.sessionRoundBudget,
-            ...(behavior.nudgeText ? { defaultNudgeText: behavior.nudgeText } : {}),
+            decisionStepBudget: behavior.decisionStepBudget,
+            replyStepBudget: behavior.replyStepBudget,
+            ...(behavior.nudgeText
+              ? { defaultNudgeText: behavior.nudgeText }
+              : {}),
           }
         : {}),
+      allowReplyContinuation: dependencies.allowReplyContinuation !== false,
+      chatType,
       scheduledSend: {
         enabled: contactProfileRow?.scheduledSendEnabled === true,
         maxPending: behavior?.scheduledSendMaxPending ?? 2,
@@ -297,21 +343,12 @@ export async function processAgentTurn(
         quietEndHour: behavior?.scheduledSendQuietEndHour ?? 8,
       },
     });
+    return { continueLoop: disposition.action === "continue" };
   } catch (error) {
-    if (error instanceof AgentTurnTransitionNotApplied) throw error;
-    // 异常时将轮次重置为 queued 状态，以便后续重试
-    await db
-      .update(schema.agentTurns)
-      .set({
-        status: "queued",
-        errorCode: classifyError(error),
-      })
-      .where(
-        and(
-          eq(schema.agentTurns.turnId, turn.turnId),
-          eq(schema.agentTurns.status, "running"),
-        ),
-      );
+    await recordTurnErrorAndRequeue(db, {
+      turnId: turn.turnId,
+      conversationId: turn.conversationId,
+    }, error);
     throw error;
   }
 }
@@ -326,12 +363,17 @@ export async function processPlannedToolTurn(
   model: string,
   job: AgentTurnExecutionInput,
   dependencies: TurnRunnerDependencies,
-): Promise<void> {
-  // 查询待执行的工具计划（planned 或已成功但后续模型调用失败需要重试的）
+): Promise<{ continueLoop: boolean }> {
+  // 查询待执行的工具计划（planned 或已成功但后续模型调用失败需要重试的）；
+  // 多步 ReAct 同 turn 有多条计划，取最新一条（步数键按 createdAt 递增）
   const executions = await db
     .select()
     .from(schema.toolExecutions)
     .where(eq(schema.toolExecutions.turnId, job.turnId))
+    .orderBy(
+      desc(schema.toolExecutions.createdAt),
+      desc(schema.toolExecutions.executionId),
+    )
     .limit(1);
   const execution = executions[0];
   if (!execution) {
@@ -349,11 +391,39 @@ export async function processPlannedToolTurn(
         },
       ],
     });
-    return;
+    return { continueLoop: false };
   }
   // 工具失败不再直接转人工：以「失败回执」进入恢复提示词，由模型决定
   // 无证据作答、换查询方式重试（计入步数预算），或确需人工时自行输出
   // handoff。持续性故障被步数预算封顶，不会无限循环。
+  try {
+    return await runPlannedToolTurnBody(db, client, model, job, dependencies, {
+      execution,
+    });
+  } catch (error) {
+    // 兜底契约与 fresh 路径一致：错误落事件（排错不依赖 stdout）、
+    // running 重置为 queued 让队列重试/回收接管。事发时若缺这一层，
+    // 异常静默退出会让 turn 假死到 STALE 兜底（2026-09-07 双 5min 回归）。
+    await recordTurnErrorAndRequeue(db, {
+      turnId: job.turnId,
+      conversationId: execution.conversationId,
+    }, error);
+    throw error;
+  }
+}
+
+/** processPlannedToolTurn 的主体检索/执行段（兜底 catch 拆分出去保持可读）。 */
+async function runPlannedToolTurnBody(
+  db: Database,
+  client: TextModel,
+  model: string,
+  job: AgentTurnExecutionInput,
+  dependencies: TurnRunnerDependencies,
+  ctx: {
+    execution: typeof schema.toolExecutions.$inferSelect;
+  },
+): Promise<{ continueLoop: boolean }> {
+  const execution = ctx.execution;
   let toolFailure: { toolName: string; errorCode: string } | null = null;
   let toolResultPayload: Record<string, unknown> | undefined;
   let evidenceList: KnowledgeEvidence[] = [];
@@ -383,7 +453,9 @@ export async function processPlannedToolTurn(
     // Another worker owns the current lease (or reclaimed it after this worker
     // became stale). The late worker must not create a duplicate Handoff or
     // overwrite the AgentTurn owned by the newer execution.
-    if (toolResult.status === "not_claimable") return;
+    if (toolResult.status === "not_claimable") {
+      return { continueLoop: false };
+    }
     if (
       toolResult.status !== "succeeded" &&
       toolResult.status !== "already_completed"
@@ -406,23 +478,61 @@ export async function processPlannedToolTurn(
     ? toolFailureFacts(toolFailure.toolName, toolFailure.errorCode)
     : `\n工具执行结果（可信事实）：${JSON.stringify(toolResultPayload ?? {})}`;
 
-  // 检测会话类型：conversationId 以 @chatroom 结尾表示群聊
-  const chatType = detectChatType(execution.conversationId);
+  // 会话类型（ADR-0010）：读 conversations.chat_type 事实（ingest 定一次）。
+  const [conversationTypeRow] = await db
+    .select({ chatType: schema.conversations.chatType })
+    .from(schema.conversations)
+    .where(eq(schema.conversations.conversationId, execution.conversationId))
+    .limit(1);
+  const chatType =
+    conversationTypeRow?.chatType ??
+    chatTypeFromConversationRef(execution.conversationId);
+
+  // 行为参数（R2）：提前加载供轮窗标签与后续预算使用。
+  let behavior: BehaviorSettings | undefined;
+  try {
+    behavior = dependencies.behaviorSettings
+      ? await dependencies.behaviorSettings()
+      : undefined;
+  } catch {
+    behavior = undefined;
+  }
 
   // 基于工具结果重新构建上下文，再次调用 LLM 生成最终回复
-  const context = await buildAgentContext(db, execution.conversationId, chatType);
+  const context = await buildAgentContext(
+    db,
+    execution.conversationId,
+    chatType,
+    {
+      ...(behavior?.roundSummaryLabels
+        ? { roundLabels: behavior.roundSummaryLabels }
+        : {}),
+      ...(dependencies.imageStorage
+        ? {
+            image: dependencies.readImage
+              ? {
+                  storage: dependencies.imageStorage,
+                  readImage: dependencies.readImage,
+                }
+              : { storage: dependencies.imageStorage },
+          }
+        : {}),
+    },
+  );
   // Skill 提示：注册 Skill 的 afterKnowledge 输出作为不透明上下文注入
   const skillHintSection = skillHintBlock(
     collectSkillHintsAfterKnowledge(
       dependencies.skillRegistry,
       evidenceList,
-      context.history,
+      historyAsText(context.history),
     ),
   );
 
   const turns = await db
     .select({
       executionProfileId: schema.agentTurns.executionProfileId,
+      // 吸收式回合：恢复路径同样以触发消息为基准检测客户插话
+      triggerMessageId: schema.agentTurns.triggerMessageId,
     })
     .from(schema.agentTurns)
     .where(eq(schema.agentTurns.turnId, job.turnId))
@@ -472,18 +582,8 @@ export async function processPlannedToolTurn(
       ),
     );
   const toolStepsUsed = attemptedToolSteps[0]?.count ?? 1;
-  // 行为参数（R2）：读取失败/未注入时回落出厂默认。
-  let behavior: BehaviorSettings | undefined;
-  try {
-    behavior = dependencies.behaviorSettings
-      ? await dependencies.behaviorSettings()
-      : undefined;
-  } catch {
-    behavior = undefined;
-  }
-  const toolStepBudget = (
-    behavior ?? DEFAULT_BEHAVIOR_SETTINGS
-  ).toolStepBudget;
+  // 行为参数已在上下文构建前加载（behavior）——此处直接复用。
+  const toolStepBudget = (behavior ?? DEFAULT_BEHAVIOR_SETTINGS).toolStepBudget;
   const budgetExhausted = toolStepsUsed >= toolStepBudget;
 
   // 恢复路径的 availableTools 与预算对齐：预算未耗尽且检索能力在位时
@@ -494,13 +594,14 @@ export async function processPlannedToolTurn(
         ...(dependencies.knowledgeSearch ? ["retrieve_knowledge"] : []),
         "query_contact_profile",
         "fetch_url",
+        ...(chatType === "group" ? ["search_chat_history"] : []),
       ];
 
   const strategySystem = strategy
     ? strategy.buildModelRequest({
         conversationId: execution.conversationId,
         contactId: conversation?.contactId ?? "",
-        messages: context.history,
+        messages: historyAsText(context.history),
         facts: {},
         availableTools: recoveryAvailableTools,
         chatType,
@@ -512,40 +613,61 @@ export async function processPlannedToolTurn(
 
   const decisionInstruction = toolFailure
     ? "请基于以上情况生成最终决策：可基于既有对话信息直接作答，或坦诚告知对方暂时无法完成该项查询；不得虚构工具结果。只输出 JSON。"
-    : "请基于工具结果输出最终决策：只输出 JSON，不要 Markdown，不要自然语言叙述；不得依据常识补全工具结果或声称执行了尚未执行的动作。\n- " + decisionFieldContractText();
+    : "请基于工具结果输出最终决策：只输出 JSON，不要 Markdown，不要自然语言叙述；不得依据常识补全工具结果或声称执行了尚未执行的动作。\n- " +
+      decisionFieldContractText();
 
-  const response = await completeAgentDecision(
+  // FC 协议：把工具调用与结果以 assistant(tool_calls) + tool 消息对回喂
+  //（替代旧文本注入），ID 用执行记录合成、请求内自洽即可。
+  const toolCallId = `call_${execution.executionId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  const fcToolMessages: TextModelMessage[] = [
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: toolCallId,
+          name: execution.toolName,
+          arguments: JSON.stringify(execution.arguments ?? {}),
+        },
+      ],
+    },
+    {
+      role: "tool",
+      toolCallId,
+      content: JSON.stringify(
+        toolFailure
+          ? { error: toolFailure.errorCode }
+          : (toolResultPayload ?? {}),
+      ),
+    },
+  ];
+  const recoveryNativeTools = budgetExhausted
+    ? []
+    : toNativeToolDefinitions(recoveryAvailableTools);
+
+  const decisionMessages: TextModelMessage[] = [
+    {
+      role: "system",
+      content: `${strategySystem}${context.prompt}${toolFacts}${skillHintSection}\n${decisionInstruction}next_action 必须为 reply、ask_for_information、handoff、no_action、wait、end_session 或 schedule_send${budgetExhausted ? "，不得再次调用工具（工具步数预算已耗尽）" : "；确有必要时可再次调用 retrieve_knowledge 或 call_tool 继续查证"}。`,
+    },
+    ...context.history,
+    ...fcToolMessages,
+  ];
+  // 决策获取与 fresh 路径共用单一实现（FC 出口闸门/协议解析/审计事件）
+  const { decision } = await acquireDecision({
+    db,
     client,
-    [
-      {
-        role: "system",
-        content: `${strategySystem}${context.prompt}${toolFacts}${skillHintSection}\n${decisionInstruction}next_action 必须为 reply、ask_for_information、handoff、no_action、wait、end_session 或 schedule_send${budgetExhausted ? "，不得再次调用工具（工具步数预算已耗尽）" : "；确有必要时可再次调用 retrieve_knowledge 或 call_tool 继续查证"}。`,
-      },
-      ...context.history,
-    ],
     model,
-    { timeoutMs: dependencies.decisionTimeoutMs },
-  );
-  await recordModelCallEvent(db, {
     turnId: job.turnId,
     conversationId: execution.conversationId,
-    model,
-    response,
+    decisionMessages,
+    nativeTools: recoveryNativeTools,
+    strategy,
+    decisionTimeoutMs: dependencies.decisionTimeoutMs,
   });
-  const decision = strategy
-    ? agentActionToDecision(strategy.parseModelResponse({ text: response.text }))
-    : parseAgentDecision(response.text);
-  if (response.reasoning) {
-    await recordAgentTurnEvent(db, {
-      turnId: job.turnId,
-      conversationId: execution.conversationId,
-      eventType: "model_reasoning",
-      payload: { reasoning: response.reasoning },
-    });
-  }
 
-  // 决策后处理：gate → 工具步数预算 → no_action → 校验 → 落库
-  await commitDecisionDisposition({
+  // 决策后处理：gate → 工具步数预算 → 吸收检查 → no_action → 校验 → 落库
+  const disposition = await commitDecisionDisposition({
     decision,
     db,
     turnId: job.turnId,
@@ -555,6 +677,8 @@ export async function processPlannedToolTurn(
     conversationRevision: null,
     model,
     aiEmployeeId,
+    chatType,
+    triggerMessageId: turns[0]?.triggerMessageId ?? undefined,
     toolStepsUsed,
     toolStepBudget,
     ...(behavior
@@ -562,42 +686,52 @@ export async function processPlannedToolTurn(
           defaultWaitMs: behavior.defaultWaitMs,
           defaultSessionTtlMinutes: behavior.sessionTtlMinutes,
           defaultSessionRoundBudget: behavior.sessionRoundBudget,
-          ...(behavior.nudgeText ? { defaultNudgeText: behavior.nudgeText } : {}),
+          decisionStepBudget: behavior.decisionStepBudget,
+          replyStepBudget: behavior.replyStepBudget,
+          ...(behavior.nudgeText
+            ? { defaultNudgeText: behavior.nudgeText }
+            : {}),
         }
       : {}),
   });
+  return { continueLoop: disposition.action === "continue" };
 }
 
-/** 记录一次决策模型调用的可观测事实（token/延迟/finish_reason）。 */
-async function recordModelCallEvent(
+/**
+ * 双路径共有的错误尾：AgentTurnTransitionNotApplied 原样上抛（不落事件、
+ * 不重置状态——它属于执行权交接，不是可重试故障）；其余错误落 turn_error
+ * 事件（排错不依赖 stdout）并把 running 重置为 queued，让队列重试/回收接管。
+ */
+async function recordTurnErrorAndRequeue(
   db: Database,
-  input: {
-    turnId: string;
-    conversationId: string;
-    model: string;
-    response: {
-      finishReason?: string | undefined;
-      latencyMs?: number | undefined;
-      usage?:
-        | {
-            inputTokens?: number | undefined;
-            outputTokens?: number | undefined;
-            totalTokens?: number | undefined;
-          }
-        | undefined;
-    };
-  },
+  ids: { turnId: string; conversationId: string },
+  error: unknown,
 ): Promise<void> {
+  if (error instanceof AgentTurnTransitionNotApplied) throw error;
+  const errorCode = classifyError(error);
+  // 错误统一落事件；落库失败不阻断重试链路
   await recordAgentTurnEvent(db, {
-    turnId: input.turnId,
-    conversationId: input.conversationId,
-    eventType: "model_call",
+    turnId: ids.turnId,
+    conversationId: ids.conversationId,
+    eventType: "turn_error",
+    reasonCode: errorCode,
     payload: {
-      finishReason: input.response.finishReason ?? null,
-      latencyMs: input.response.latencyMs ?? null,
-      usage: input.response.usage ?? null,
+      message:
+        error instanceof Error ? error.message.slice(0, 500) : String(error),
     },
-  });
+  }).catch(() => undefined);
+  await db
+    .update(schema.agentTurns)
+    .set({
+      status: "queued",
+      errorCode,
+    })
+    .where(
+      and(
+        eq(schema.agentTurns.turnId, ids.turnId),
+        eq(schema.agentTurns.status, "running"),
+      ),
+    );
 }
 
 /**
@@ -623,13 +757,23 @@ function skillHintBlock(skillHints: string[]): string {
  * 调用方按「无路由输入」处理。该辅助不理解任何业务关键词。
  */
 export function lastInboundText(
-  history: readonly { role: "user" | "assistant"; content: string }[],
+  history: readonly { role: "user" | "assistant"; content: TextModelContent }[],
 ): string | undefined {
   for (let i = history.length - 1; i >= 0; i -= 1) {
     const message = history[i];
-    if (message && message.role === "user" && message.content.trim() !== "") {
-      return message.content;
-    }
+    if (!message || message.role !== "user") continue;
+    const text = textOfContent(message.content);
+    if (text.trim() !== "") return text;
   }
   return undefined;
+}
+
+/** 把多模态历史（可能含 image part）压平回纯文本，供契约仍为 string 的消费方。 */
+function historyAsText(
+  history: readonly { role: "user" | "assistant"; content: TextModelContent }[],
+): { role: "user" | "assistant"; content: string }[] {
+  return history.map((message) => ({
+    role: message.role,
+    content: textOfContent(message.content),
+  }));
 }

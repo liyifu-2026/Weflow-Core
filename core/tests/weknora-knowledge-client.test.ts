@@ -334,4 +334,74 @@ describe("WeKnoraKnowledgeClient", () => {
       expect.objectContaining({}),
     );
   });
+
+  it("sends a custom auth header when authHeaderName is set", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(Response.json({ data: [] }));
+    const client = new WeKnoraKnowledgeClient({
+      baseUrl: "http://weknora.test/api/v1",
+      authHeaderName: "Authorization",
+      authHeaderValue: "Bearer ui-token",
+      timeoutMs: 1_000,
+      fetch,
+    });
+
+    await client.listKnowledgeBases();
+    const headers = new Headers(
+      fetch.mock.calls[0]?.[1]?.headers as ConstructorParameters<
+        typeof Headers
+      >[0],
+    );
+    expect(headers.get("Authorization")).toBe("Bearer ui-token");
+    expect(headers.get("x-api-key")).toBeNull();
+  });
+
+  it("omits auth header entirely when no credential is configured", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(Response.json({ data: [] }));
+    const client = new WeKnoraKnowledgeClient({
+      baseUrl: "http://weknora.test/api/v1",
+      timeoutMs: 1_000,
+      fetch,
+    });
+
+    await client.listKnowledgeBases();
+    const headers = new Headers(
+      fetch.mock.calls[0]?.[1]?.headers as ConstructorParameters<
+        typeof Headers
+      >[0],
+    );
+    expect(headers.get("x-api-key")).toBeNull();
+  });
+
+  it("hot-swaps options via updateOptions and rejects when unset", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(Response.json({ data: [{ id: "kb-a" }] }));
+    const client = new WeKnoraKnowledgeClient({
+      baseUrl: "http://old.test/api/v1",
+      apiKey: "old-key",
+      timeoutMs: 1_000,
+      fetch,
+    });
+
+    client.updateOptions({
+      baseUrl: "http://new.test/api/v1",
+      apiKey: "new-key",
+      timeoutMs: 1_000,
+      fetch,
+    });
+    await client.listKnowledgeBases();
+    expect(fetch).toHaveBeenLastCalledWith(
+      "http://new.test/api/v1/knowledge-bases",
+      expect.objectContaining({}),
+    );
+
+    client.updateOptions(undefined);
+    await expect(client.listKnowledgeBases()).rejects.toThrow(
+      "weknora_not_configured",
+    );
+  });
 });

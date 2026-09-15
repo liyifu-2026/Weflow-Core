@@ -20,6 +20,7 @@ import { startMemoryCaptureDispatcher } from "../../infrastructure/redis/memory-
 import { startMediaProcessingDispatcher } from "../../infrastructure/redis/media-processing-dispatcher.js";
 import { startTurnAdmissionDispatcher } from "../../modules/conversations/application/start-turn-admission-dispatcher.js";
 import { processDueScheduledSends } from "../../modules/agent/application/scheduled-sends.js";
+import { processDueSessionWakes } from "../../modules/agent/application/process-session-wakes.js";
 import { processTurnAdmissions } from "../../modules/conversations/application/process-turn-admissions.js";
 import {
   HttpChannelProvider,
@@ -50,17 +51,20 @@ import { registerNotificationRoutes } from "../../modules/notifications/interfac
 import { registerCollaborationRoutes } from "../../modules/collaboration/interface/http-routes.js";
 import { registerKnowledgeRoutes } from "../../modules/knowledge/interface/http-routes.js";
 import { OpenAiCompatibleClient } from "../../infrastructure/model_runtime/openai-compatible-client.js";
-import { WeKnoraKnowledgeClient } from "../../infrastructure/knowledge/weknora-knowledge-client.js";
+import { createAdaptiveKnowledgeClient } from "../../infrastructure/knowledge/knowledge-connector-settings.js";
 import { startExpoPushDispatcher } from "../../infrastructure/notifications/expo-push-dispatcher.js";
 import { registerKnowledgeProviderRoutes } from "../../modules/knowledge-provider/interface/http-routes.js";
 import { registerKnoraBridgeRoutes } from "../../modules/knora-bridge/interface/http-routes.js";
 import { registerOperationsRoutes } from "../../modules/operations/interface/http-routes.js";
 import { inspectKnowledgeEngine } from "../../modules/knowledge-provider/application/boundary.js";
 import { startMobileHandoffMaintenance } from "../../modules/handoff/application/mobile-handoff-service.js";
+import { processHandoffReminders } from "../../modules/handoff/application/handoff-reminder.js";
 import { startMemoryMaintenance } from "../../modules/memory/application/memory-maintenance.js";
 import { routeMediaToHuman } from "../../modules/handoff/application/route-media-to-human.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
+import { resolveSlotChainRuntime } from "../../modules/operations/application/model-gateway.js";
 import { createCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
+import { createBehaviorSettingsReader } from "../../modules/agent/application/behavior-settings.js";
 import {
   extractGroupChatSettings,
   resolveGroupChatPolicy,
@@ -73,6 +77,13 @@ import { processOutboundMessages } from "../../modules/conversations/application
 import { syncChannelMedia } from "../../modules/media/application/sync-channel-media.js";
 import { upgradeChannelImageOriginals } from "../../modules/media/application/upgrade-channel-image-originals.js";
 import { syncChannelContactProfiles } from "../../modules/contacts/application/sync-channel-contact-profiles.js";
+
+/**
+ * Channel Host 适配器（唯一实例）：configureServer 创建，路由（poke/历史
+ * 重扫）与 start 钩子的内核能力共用同一实例——认证/协议校验/错误翻译
+ * 不再被绕过。
+ */
+let channelProvider: HttpChannelProvider | undefined;
 
 /** 启动 Core API 进程 */
 await runProcess({
@@ -96,7 +107,15 @@ await runProcess({
       postgres.db,
       new LocalFileStorage(`${config.fileStorageRoot}/identity`),
     );
-    registerConversationRoutes(server, postgres.db, config.channelHost);
+    // Channel Host 适配器（唯一实例）：路由（poke/历史重扫）与内核能力共用，
+    // 认证/协议校验/错误翻译不再被绕过。
+    channelProvider = config.channelHost
+      ? new HttpChannelProvider({
+          baseUrl: config.channelHost.baseUrl,
+          token: config.channelHost.token,
+        })
+      : undefined;
+    registerConversationRoutes(server, postgres.db, channelProvider);
     registerConsoleEventRoutes(server, postgres.db);
     registerContactProfileRoutes(server, postgres.db);
     registerContactAvatarRoutes(
@@ -110,7 +129,7 @@ await runProcess({
     );
     registerHandoffRoutes(server, postgres.db);
     registerMemoryRoutes(server, postgres.db);
-  registerScheduledSendRoutes(server, postgres.db);
+    registerScheduledSendRoutes(server, postgres.db);
     registerMediaRoutes(server, postgres.db, `${config.fileStorageRoot}/media`);
     registerAssetRoutes(
       server,
@@ -119,11 +138,13 @@ await runProcess({
     );
     registerNotificationRoutes(server, postgres.db);
     registerCollaborationRoutes(server, postgres.db);
-    const knowledgeClient = config.weknora
-      ? new WeKnoraKnowledgeClient(config.weknora)
-      : undefined;
+    // 知识库客户端（ADR-0008）：设置中心连接器优先、env 兜底，30s 热加载。
+    const knowledge = await createAdaptiveKnowledgeClient(
+      postgres.db,
+      config.weknora ?? undefined,
+    );
     registerKnowledgeRoutes(server, postgres.db, {
-      weknora: knowledgeClient,
+      weknora: knowledge.client,
       model: config.model
         ? new OpenAiCompatibleClient({
             baseUrl: config.model.baseUrl,
@@ -133,7 +154,9 @@ await runProcess({
           })
         : undefined,
     });
-    registerKnowledgeProviderRoutes(server, postgres.db, config.weknora);
+    registerKnowledgeProviderRoutes(server, postgres.db, () =>
+      knowledge.currentOptions(),
+    );
     registerKnoraBridgeRoutes(server, postgres.db, {
       weknora: config.weknora,
       encKey: config.knoraBridge.encKey,
@@ -141,106 +164,60 @@ await runProcess({
       emailDomain: config.knoraBridge.emailDomain,
       origin: config.knoraBridge.origin,
     });
-    registerOperationsRoutes(
-      server,
-      postgres.db,
-      {
-        channelHostConfigured: Boolean(config.channelHost),
-        modelConfigured: Boolean(config.model),
-        knowledgeConfigured: Boolean(config.weknora),
-        inspectKnowledge: () => inspectKnowledgeEngine(config.weknora),
-        inspectChannelHost: async () => {
-          if (!config.channelHost)
-            return { status: "not_configured" as const, summary: "尚未配置" };
-          try {
-            const response = await fetch(
-              `${config.channelHost.baseUrl}/api/v1/status`,
-              {
-                headers: {
-                  authorization: `Bearer ${config.channelHost.token}`,
-                },
-                signal: AbortSignal.timeout(5_000),
+    registerOperationsRoutes(server, postgres.db, {
+      channelHostConfigured: Boolean(config.channelHost),
+      modelConfigured: Boolean(config.model),
+      knowledgeConfigured: Boolean(knowledge.currentOptions()),
+      inspectKnowledge: () =>
+        inspectKnowledgeEngine(knowledge.currentOptions()),
+      inspectChannelHost: async () => {
+        if (!config.channelHost)
+          return { status: "not_configured" as const, summary: "尚未配置" };
+        try {
+          const response = await fetch(
+            `${config.channelHost.baseUrl}/api/v1/status`,
+            {
+              headers: {
+                authorization: `Bearer ${config.channelHost.token}`,
               },
-            );
-            if (!response.ok)
-              return {
-                status: "unreachable" as const,
-                summary: `状态端点返回 ${String(response.status)}`,
-              };
-            return { status: "healthy" as const, summary: "服务可访问" };
-          } catch {
-            return {
-              status: "unreachable" as const,
-              summary: "连接失败",
-            };
-          }
-        },
-        inspectModel: async () => {
-          if (!config.model)
-            return { status: "not_configured" as const, summary: "尚未配置" };
-          try {
-            const response = await fetch(`${config.model.baseUrl}/models`, {
-              headers: { authorization: `Bearer ${config.model.apiKey}` },
               signal: AbortSignal.timeout(5_000),
-            });
-            if (!response.ok)
-              return {
-                status: "unreachable" as const,
-                summary: `模型端点返回 ${String(response.status)}`,
-              };
-            return { status: "healthy" as const, summary: "服务可访问" };
-          } catch {
+            },
+          );
+          if (!response.ok)
             return {
               status: "unreachable" as const,
-              summary: "连接失败",
+              summary: `状态端点返回 ${String(response.status)}`,
             };
-          }
-        },
+          return { status: "healthy" as const, summary: "服务可访问" };
+        } catch {
+          return {
+            status: "unreachable" as const,
+            summary: "连接失败",
+          };
+        }
       },
-      {
-        textModel: {
-          name: config.model?.name ?? "deepseek-v4-flash",
-          baseUrl: config.model?.baseUrl ?? "https://api.deepseek.com",
-          ...(config.model?.apiKey !== undefined
-            ? { apiKey: config.model.apiKey }
-            : {}),
-        },
-        visionModel: {
-          name: config.vision?.name ?? "mimo-v2.5",
-          baseUrl: config.vision?.baseUrl ?? "",
-          ...(config.vision?.apiKey !== undefined
-            ? { apiKey: config.vision.apiKey }
-            : {}),
-        },
-        asrModel: {
-          name: config.asr?.model ?? config.vision?.asrModel ?? "mimo-v2.5",
-          baseUrl: config.asr?.baseUrl ?? config.vision?.baseUrl ?? "",
-          ...(config.asr?.apiKey !== undefined
-            ? { apiKey: config.asr.apiKey }
-            : config.vision?.apiKey !== undefined
-              ? { apiKey: config.vision.apiKey }
-              : {}),
-        },
-        ...(config.triage
-          ? {
-              triageModel: {
-                name: config.triage.model,
-                baseUrl: config.triage.baseUrl,
-                apiKey: config.triage.apiKey,
-              },
-            }
-          : {}),
-        ...(config.fast
-          ? {
-              fastModel: {
-                name: config.fast.model,
-                baseUrl: config.fast.baseUrl,
-                apiKey: config.fast.apiKey,
-              },
-            }
-          : {}),
+      inspectModel: async () => {
+        if (!config.model)
+          return { status: "not_configured" as const, summary: "尚未配置" };
+        try {
+          const response = await fetch(`${config.model.baseUrl}/models`, {
+            headers: { authorization: `Bearer ${config.model.apiKey}` },
+            signal: AbortSignal.timeout(5_000),
+          });
+          if (!response.ok)
+            return {
+              status: "unreachable" as const,
+              summary: `模型端点返回 ${String(response.status)}`,
+            };
+          return { status: "healthy" as const, summary: "服务可访问" };
+        } catch {
+          return {
+            status: "unreachable" as const,
+            summary: "连接失败",
+          };
+        }
       },
-    );
+    });
     // 业务 Solution 的 backend 插件（BFF）：从 WEFLOW_PLUGIN_DIR 直读
     // 业务路由（如 AI Employees）。加载失败只降级告警。
     await loadInstalledBackendPlugins(server, {
@@ -258,19 +235,11 @@ await runProcess({
       subscribe: true,
     });
     let channelKernel: RuntimeKernel | undefined;
-    if (config.channelHost) {
+    if (channelProvider) {
       channelKernel = new RuntimeKernel();
-      channelKernel.register(
-        httpChannelPlugin(
-          new HttpChannelProvider({
-            baseUrl: config.channelHost.baseUrl,
-            token: config.channelHost.token,
-          }),
-        ),
-      );
+      channelKernel.register(httpChannelPlugin(channelProvider));
       await channelKernel.start();
-    }
-    const stopMobileHandoffMaintenance = startMobileHandoffMaintenance(
+    }    const stopMobileHandoffMaintenance = startMobileHandoffMaintenance(
       postgres.db,
       logger,
     );
@@ -302,16 +271,62 @@ await runProcess({
       intervalMs: 5_000,
       logger,
     });
+    // 会话唤醒 dispatcher（Phase 3 接线）：wait 决策到点兑现——带 nudge 的
+    // 直发提醒话术，否则建唤醒续轮（模型面对"对方未回复"上下文自行决策）。
+    // 新入站消息已把 pending 唤醒作废（打断等待）；这里再做 handoff/停用
+    // 闸门复检，绝不向已转人工/已停用的联系人发消息。
+    const stopSessionWakeDispatcher = startTurnAdmissionDispatcher({
+      process: async () =>
+        processDueSessionWakes(postgres.db, undefined, logger),
+      intervalMs: 2_000,
+      logger,
+    });
+    // 转人工兜底提醒 dispatcher：pending 无人认领超时后系统代发一条轻提示。
+    // 文案/延迟来自客服 Solution 扩展设置 behavior 键；文案为空 = 功能关闭。
+    const readHandoffReminderSettings = createBehaviorSettingsReader(
+      postgres.db,
+      {
+        solutionId: "weflow.customer-support",
+        extensionId: "support-pipeline",
+      },
+    );
+    const stopHandoffReminderDispatcher = startTurnAdmissionDispatcher({
+      process: async () => {
+        const behavior = await readHandoffReminderSettings();
+        await processHandoffReminders(postgres.db, {
+          reminderText: behavior.handoffReminderText,
+          delayMs: behavior.handoffReminderDelayMs,
+        });
+        return 0;
+      },
+      intervalMs: 30_000,
+      logger,
+    });
     const stopMemoryMaintenance = startMemoryMaintenance(postgres.db, logger);
+    // 媒体门禁（配置收敛）：env 或 槽位绑定任一在位即可用——执行端
+    // （ingestion-worker）已槽位优先，门禁必须与它说同一套话，否则
+    // "只绑槽位不配 env"的部署会静默短路面。启动时解析一次。
+    const slotReady = async (slot: "vision" | "asr") => {
+      try {
+        const chain = await resolveSlotChainRuntime(postgres.db, slot);
+        return chain.length > 0;
+      } catch {
+        return false;
+      }
+    };
+    const [visionSlotReady, asrSlotReady] = await Promise.all([
+      slotReady("vision"),
+      slotReady("asr"),
+    ]);
     // 启动媒体处理调度器，处理入站媒体文件的转码和存储。
     // 业务依赖由组合根绑定：infrastructure 的 dispatcher/poller 不反向依赖 modules。
     const stopMediaProcessingDispatcher = startMediaProcessingDispatcher({
       db: postgres.db,
       redisUrl: config.redisUrl,
       logger,
-      visionConfigured: Boolean(config.vision),
+      visionConfigured: Boolean(config.vision) || visionSlotReady,
       // ASR 与视觉共用 MiMo 端点与密钥（asrModel 由 ASR_MODEL 配置）
-      asrConfigured: Boolean(config.vision?.asrModel),
+      asrConfigured: Boolean(config.vision?.asrModel) || asrSlotReady,
       dependencies: {
         readSettings: (db) => readRuntimeSettings(db),
         routeToHuman: (input) => routeMediaToHuman(postgres.db, logger, input),
@@ -406,6 +421,8 @@ await runProcess({
         stopMemoryCaptureDispatcher();
         stopTurnAdmissionDispatcher();
         stopScheduledSendDispatcher();
+        stopSessionWakeDispatcher();
+        stopHandoffReminderDispatcher();
         stopMemoryMaintenance();
         stopMediaProcessingDispatcher();
         stopPushDispatcher();
@@ -422,6 +439,8 @@ await runProcess({
       stopMemoryCaptureDispatcher();
       stopTurnAdmissionDispatcher();
       stopScheduledSendDispatcher();
+      stopSessionWakeDispatcher();
+      stopHandoffReminderDispatcher();
       stopMemoryMaintenance();
       stopMediaProcessingDispatcher();
       stopPushDispatcher();

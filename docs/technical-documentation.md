@@ -39,6 +39,7 @@
 
 | 日期 | 版本 | 变更 |
 | --- | --- | --- |
+| 2026-09-09 | 2.1 | 双仓合并：Weflow-Solutions 整仓并入 `solutions/` 子目录（历史保留），路径与加载配置同步更新 |
 | 2026-09-04 | 2.0 | R4 部署形态重写：删除 Solution Pack / Runner / Console 扩展点内容；部署收敛为三进程 Windows 服务 + 前端静态托管；新增热更新规程与桌面端说明 |
 | 2026-08-20 | 1.2 | 客服业务包迁出为独立仓库 Weflow-Solutions |
 | 2026-08-20 | 1.1 | 移除客服业务与微信实现目录的引用，文档对齐 Platform Core 仓库形态 |
@@ -51,7 +52,7 @@
 Weflow 是一个「**单进程部署、配置集中、可高效热更新的 AI 客服产品**」。它把多入口消息、Agent Runtime、业务事实和人工协作组织成一个可审计、可热更新的系统。
 
 - **平台层（`weflow` 仓库）**：Core（认证、会话/消息/Handoff 等领域事实、系统管理、审计、设置）、Contracts、Plugin SDK、weflowctl。
-- **业务层（`weflow-solutions` 仓库）**：产品网页端 support-web、业务插件（Skill / Execution Strategy）、业务 BFF。
+- **业务层（`solutions/` 子目录）**：产品网页端 support-web、业务插件（Skill / Execution Strategy）、业务 BFF。
 
 没有方案市场，没有微前端，没有 Console 业务页面。产品网页端只有 support-web（自带登录 + 应用布局），部署时由 api 进程静态托管。
 
@@ -135,7 +136,7 @@ Core 与 Channel Host 之间只暴露四个正式 Channel 能力：
 
 ### 5.1 产品网页端（support-web）
 
-产品唯一网页端是 `weflow-solutions/solutions/customer-support/apps/support-web`（自带登录 + 应用布局 + browser history 真实路径）。主要路由：
+产品唯一网页端是 `solutions/customer-support/apps/support-web`（自带登录 + 应用布局 + browser history 真实路径）。主要路由：
 
 | 路径 | 说明 |
 | --- | --- |
@@ -174,7 +175,7 @@ ingestion-worker 只发布。事件只作「失效信号」：前端收到后回
 轮询（web 15s、mobile 详情 30s / 列表 60s）降为对账兜底；Redis 不可用时自动退化为
 进程内投递。见 ADR-0009。
 
-### 5.3 业务插件（weflow-solutions）
+### 5.3 业务插件（solutions/ 子目录）
 
 业务能力通过**插件目录直读**加载（R3 后唯一插件机制）：Core 从 `WEFLOW_PLUGIN_DIR` 指向的目录直读
 
@@ -247,15 +248,15 @@ ingestion-worker 只发布。事件只作「失效信号」：前端收到后回
 ```text
 weflow/
 ├─ core/                         # Weflow Core（api / agent-worker / ingestion-worker）
-├─ packages/                     # contracts / plugin-sdk / admin-sdk / ui
+├─ packages/                     # contracts / plugin-sdk / ui
 ├─ apps/                         # desktop（Tauri 壳）；console 已退役
 ├─ runtimes/channel-host-wechat/ # 微信通道参考实现
 ├─ docs/                         # 平台文档
 ├─ tooling/weflowctl/            # CLI（dev / service / config / completion）
 └─ tooling/tools/winsw/          # Windows 服务包装（运行时生成）
 
-weflow-solutions/
-└─ solutions/customer-support/   # 产品业务：support-web / plugins / backend
+└─ solutions/                    # 业务子目录（原 Weflow-Solutions 仓，2026-09 并入）
+   └─ customer-support/          # 产品业务：support-web / mobile / plugins / backend
 ```
 
 ### 9.2 验证命令
@@ -265,7 +266,7 @@ weflow-solutions/
 cd weflow/core && pnpm check
 
 # 前端
-cd weflow-solutions/solutions/customer-support/apps/support-web && pnpm build
+cd solutions/customer-support/apps/support-web && pnpm build
 
 # weflowctl
 cd weflow/tooling/weflowctl && pnpm build && pnpm test

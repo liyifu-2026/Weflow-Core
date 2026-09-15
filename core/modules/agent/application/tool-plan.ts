@@ -15,7 +15,7 @@ import {
 /** 工具执行计划 */
 export type ToolPlan = {
   name: ToolName;
-  arguments: Record<string, string>;
+  arguments: Record<string, unknown>;
   idempotencyKey: string;
 };
 

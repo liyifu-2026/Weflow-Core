@@ -25,17 +25,37 @@ describe("agent decision contract", () => {
     });
   });
 
-  it("accepts up to three complete reply segments", () => {
+  it("accepts fragmented reply segments up to the platform cap", () => {
+    const eightSegments = [
+      "先把设备断电。",
+      "等 10 秒。",
+      "重新上电。",
+      "看指示灯什么颜色。",
+      "如果是红灯，拍张照发我。",
+      "如果是绿灯，再按一次复位键。",
+      "复位后等它自检完。",
+      "然后告诉我现在的状态。",
+    ];
     expect(
       parseAgentDecision(
         JSON.stringify({
-          reply_segments: ["先确认电源。", "再长按电源键 10 秒。"],
+          reply_segments: eightSegments,
           next_action: "reply",
           requires_human: false,
           risk_level: "low",
         }),
       ).replySegments,
-    ).toEqual(["先确认电源。", "再长按电源键 10 秒。"]);
+    ).toEqual(eightSegments);
+    expect(() =>
+      parseAgentDecision(
+        JSON.stringify({
+          reply_segments: Array.from({ length: 9 }, (_, i) => `第${i + 1}条`),
+          next_action: "reply",
+          requires_human: false,
+          risk_level: "low",
+        }),
+      ),
+    ).toThrow("invalid agent decision");
   });
 
   it("joins segments into replyText", () => {

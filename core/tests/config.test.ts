@@ -33,7 +33,7 @@ describe("runtime configuration", () => {
     expect(loadConfig().channelHost).toEqual({
       baseUrl: "http://127.0.0.1:43123",
       token: "test-channel-host",
-      pollIntervalMs: 1000,
+      pollIntervalMs: 500,
     });
   });
 

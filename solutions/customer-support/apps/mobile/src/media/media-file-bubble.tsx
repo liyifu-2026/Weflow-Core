@@ -82,12 +82,51 @@ function mimeOf(fileName: string | null | undefined): string {
       return "image/gif";
     case "webp":
       return "image/webp";
+    case "bmp":
+      return "image/bmp";
     case "txt":
       return "text/plain";
+    case "csv":
+      return "text/csv";
+    case "md":
+    case "markdown":
+      return "text/markdown";
+    case "json":
+      return "application/json";
+    case "xml":
+      return "application/xml";
     case "mp4":
       return "video/mp4";
     case "mov":
       return "video/quicktime";
+    // Office / 压缩包：系统分享面板按 MIME 选择打开方式，
+    // 缺失映射会退化成 octet-stream（系统认不出该用什么打开）
+    case "doc":
+      return "application/msword";
+    case "docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case "xls":
+      return "application/vnd.ms-excel";
+    case "xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case "ppt":
+      return "application/vnd.ms-powerpoint";
+    case "pptx":
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    case "zip":
+      return "application/zip";
+    case "rar":
+      return "application/vnd.rar";
+    case "7z":
+      return "application/x-7z-compressed";
+    case "gz":
+      return "application/gzip";
+    case "mp3":
+      return "audio/mpeg";
+    case "wav":
+      return "audio/wav";
+    case "m4a":
+      return "audio/mp4";
     default:
       return "application/octet-stream";
   }

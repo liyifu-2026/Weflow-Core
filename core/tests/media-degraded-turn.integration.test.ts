@@ -383,4 +383,36 @@ integration("media degraded turn（图片消息不得静默死亡）", () => {
       .where(eq(schema.agentTurns.conversationId, conversationId));
     expect(turns).toHaveLength(1);
   });
+
+  it("outbound 回声媒体失败不创建降级 Turn（AI 不回复客服自己的文件）", async () => {
+    // 回归场景：客服发文件 → manual 行与回声融合失败 → 独立回声行
+    // （direction=outbound/actorType=system）带 failed mediaAssets。
+    // 修复前：createDegradedTurns 把它当客户消息建 Turn，AI 自动回复。
+    const { conversationId } = await createImageConversation("echo");
+    // 把夹具消息改造成自回声行（与 ingest 的 isSelf=true 回声落库一致）
+    await postgres.db
+      .update(schema.messages)
+      .set({ direction: "outbound", actorType: "system", isSelf: true })
+      .where(eq(schema.messages.conversationId, conversationId));
+    await postgres.db
+      .update(schema.mediaAssets)
+      .set({
+        status: "failed",
+        errorCode: "source_pending",
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.mediaAssets.conversationId, conversationId));
+
+    const createdTurns = await createDegradedTurns(
+      postgres.db,
+      createLogger({ logLevel: "silent" }, "test"),
+      readRuntimeSettings,
+    );
+    expect(createdTurns).toBe(0);
+    const turns = await postgres.db
+      .select()
+      .from(schema.agentTurns)
+      .where(eq(schema.agentTurns.conversationId, conversationId));
+    expect(turns).toHaveLength(0);
+  });
 });

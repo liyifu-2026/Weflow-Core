@@ -81,6 +81,9 @@ const bindingError = ref("");
 const error = ref("");
 const editing = ref(false);
 const creating = ref(false);
+// 弹窗可见性与提交进行中是两个状态：creating 只表示请求在途，
+// 否则弹窗一打开按钮就常驻「建立中」且被禁用，表单永远无法提交。
+const createOpen = ref(false);
 const prompt = ref("");
 const name = ref("");
 const description = ref("");
@@ -198,6 +201,7 @@ async function createEmployee() {
     newName.value = "";
     newDescription.value = "";
     newPrompt.value = "";
+    createOpen.value = false;
     await load();
     const created = employees.value.find(
       (item) => item.definitionId === result.employee.definition.definitionId,
@@ -394,7 +398,7 @@ onMounted(load);
           <CardTitle class="text-base">AI Employee</CardTitle>
           <CardDescription>{{ employees.length }} 个</CardDescription>
           <CardAction>
-            <Button size="sm" @click="creating = true">
+            <Button size="sm" @click="createOpen = true">
               <Plus class="size-4" />
               新建
             </Button>
@@ -407,7 +411,7 @@ onMounted(load);
             <p class="text-sm text-muted-foreground">
               先建立一个草稿，再发布给新建的 Agent Turn 使用。
             </p>
-            <Button size="sm" variant="outline" class="mt-1" @click="creating = true">
+            <Button size="sm" variant="outline" class="mt-1" @click="createOpen = true">
               <Plus class="size-4" />
               新建 AI Employee
             </Button>
@@ -712,7 +716,7 @@ onMounted(load);
     <Separator class="opacity-0" />
   </div>
     <!-- 新建 AI Employee（Dialog） -->
-    <Dialog :open="creating" @update:open="(v: boolean) => (creating = v)">
+    <Dialog :open="createOpen" @update:open="(v: boolean) => (createOpen = v)">
       <DialogContent class="max-w-lg">
         <DialogHeader>
           <DialogTitle>建立 AI Employee</DialogTitle>
@@ -744,8 +748,13 @@ onMounted(load);
               placeholder="描述这个 AI Employee 的工作目标、语气、业务范围与限制。"
             />
           </div>
+          <!-- 失败原因就地展示：页面级 Alert 会被弹窗遮罩挡住，看起来像"卡住" -->
+          <Alert v-if="error" variant="destructive">
+            <CircleAlert class="size-4" />
+            <AlertDescription>{{ error }}</AlertDescription>
+          </Alert>
           <div class="flex justify-end gap-2">
-            <Button type="button" variant="outline" size="sm" @click="creating = false">
+            <Button type="button" variant="outline" size="sm" @click="createOpen = false">
               取消
             </Button>
             <Button type="submit" :disabled="creating || !newKey || !newName || !newPrompt">

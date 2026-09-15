@@ -379,7 +379,7 @@ integration("Manual Takeover V2 (Console 全会话访问 + 主动接管)", () =>
     expect([404, 409]).toContain(onActive.statusCode);
   });
 
-  it("接管后 queued/running turn → suppressed_handoff，pending agent 消息 → cancelled_handoff", async () => {
+  it("接管后 queued/running turn → suppressed_handoff，pending agent 消息 → cancelled（send_error=handoff_active）", async () => {
     const { conversationId, triggerMessageId } =
       await seedAgentActive("suppress");
     const turnId = `turn:${conversationId}:${randomUUID()}`;
@@ -428,7 +428,8 @@ integration("Manual Takeover V2 (Console 全会话访问 + 主动接管)", () =>
       )[0],
       "pending agent message",
     );
-    expect(message.sendState).toBe("cancelled_handoff");
+    expect(message.sendState).toBe("cancelled");
+    expect(message.sendError).toBe("handoff_active");
   });
 
   it("能看≠能回复：无接管时人工回复 403；接管后 202", async () => {

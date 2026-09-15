@@ -9,10 +9,10 @@ import {
 import { buildOutboundPayload } from "../modules/conversations/application/process-outbound-messages.js";
 
 describe("ADR-0006 群聊引用/@ 策略", () => {
-  it("默认策略：被 @ 必回，未 @ 不回", () => {
+  it("默认策略（ADR-0011 引擎缺省 botNames 空）：回落 Host mentioned fail-open", () => {
     expect(
       shouldRespondToGroupMessage(DEFAULT_GROUP_CHAT_POLICY, {
-        text: "hello",
+        text: "@客服 hello",
         mentioned: true,
       }),
     ).toBe(true);
@@ -22,6 +22,14 @@ describe("ADR-0006 群聊引用/@ 策略", () => {
         mentioned: false,
       }),
     ).toBe(false);
+    // botNames 空 = 未配置：任何 @（fail-open）都算被点名——与历史"未配置"行为一致；
+    // 精确昵称匹配由部署种子/设置下发 botNames 后生效。
+    expect(
+      shouldRespondToGroupMessage(DEFAULT_GROUP_CHAT_POLICY, {
+        text: "@张三 你看这个",
+        mentioned: true,
+      }),
+    ).toBe(true);
   });
 
   it("关键词命中即回", () => {
@@ -197,5 +205,58 @@ describe("ADR-0006 出站 payload 构建", () => {  it("有引用 → reply payl
       sendState: "pending",
     });
     expect(payload).toEqual({ kind: "text", text: "普通回复" });
+  });
+});
+
+describe("botNames 文本匹配 + 对话线程配置（2026-09-07 群聊体验批）", () => {
+  const policyWithBot = (botNames: string[]): GroupChatPolicy => ({
+    ...DEFAULT_GROUP_CHAT_POLICY,
+    botNames,
+  });
+
+  it("botNames 配置后：@昵称文本命中即响应，不再依赖 Host mentioned", () => {
+    const policy = policyWithBot(["客服"]);
+    expect(
+      shouldRespondToGroupMessage(policy, {
+        text: "@客服 v9打不开怎么办",
+        mentioned: false, // Host 漏判也不影响
+      }),
+    ).toBe(true);
+  });
+
+  it("botNames 配置后：@别人不算被点名（Host fail-open 不再误触发）", () => {
+    const policy = policyWithBot(["客服"]);
+    expect(
+      shouldRespondToGroupMessage(policy, {
+        text: "@张三 你看这个",
+        mentioned: true, // Host fail-open 误标
+      }),
+    ).toBe(false);
+  });
+
+  it("botNames 为空：回落 Host mentioned 判定（既有行为）", () => {
+    const policy = policyWithBot([]);
+    expect(
+      shouldRespondToGroupMessage(policy, {
+        text: "随便什么",
+        mentioned: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("botNames 解析：缺省 ['客服']；非法项过滤；threadTtlMinutes 缺省 15、越界回落", () => {
+    const parsed = extractGroupChatSettings({
+      groupChat: {
+        mode: "mention_only",
+        botNames: ["客服", "  ", 42],
+        threadTtlMinutes: 999,
+      },
+    });
+    expect(parsed.global.policy.botNames).toEqual(["客服"]);
+    expect(parsed.global.threadTtlMinutes).toBe(15); // 越界回落默认
+
+    const legacy = extractGroupChatSettings({});
+    expect(legacy.global.policy.botNames).toEqual([]); // ADR-0011：引擎缺省中立（空 = 回落 Host fail-open）
+    expect(legacy.global.threadTtlMinutes).toBe(0); // 未配置 mode = 旧行为（无线程）
   });
 });

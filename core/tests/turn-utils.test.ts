@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyError,
-  detectChatType,
   isTerminal,
   normalizeStatus,
 } from "../modules/agent/application/turn-utils.js";
@@ -44,16 +43,6 @@ describe("turn-utils normalizeStatus", () => {
 
   it("未知状态规范为 unknown（向前兼容）", () => {
     expect(normalizeStatus("some_future_state")).toBe("unknown");
-  });
-});
-
-describe("turn-utils detectChatType", () => {
-  it("以 @chatroom 结尾判定群聊", () => {
-    expect(detectChatType("channel:room-1@chatroom")).toBe("group");
-  });
-
-  it("其他会话判定私聊", () => {
-    expect(detectChatType("channel:wxid_abc")).toBe("private");
   });
 });
 

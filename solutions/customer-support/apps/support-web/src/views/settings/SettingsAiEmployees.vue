@@ -23,7 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   readPipelineSettings,
-  writePipelineSettings,
+  writePipelineSettingsSection,
 } from "./common";
 
 const router = useRouter();
@@ -33,6 +33,8 @@ type BehaviorConfig = {
   sessionRoundBudget: number;
   defaultWaitMs: number;
   nudgeText: string;
+  handoffReminderText: string;
+  handoffReminderDelayMs: number;
   toolStepBudget: number;
 };
 
@@ -41,6 +43,8 @@ const DEFAULTS: BehaviorConfig = {
   sessionRoundBudget: 24,
   defaultWaitMs: 300_000,
   nudgeText: "",
+  handoffReminderText: "",
+  handoffReminderDelayMs: 120_000,
   toolStepBudget: 4,
 };
 
@@ -67,6 +71,14 @@ function applyBehavior(raw: unknown) {
     defaultWaitMs: num(source.defaultWaitMs, DEFAULTS.defaultWaitMs),
     nudgeText:
       typeof source.nudgeText === "string" ? source.nudgeText : DEFAULTS.nudgeText,
+    handoffReminderText:
+      typeof source.handoffReminderText === "string"
+        ? source.handoffReminderText
+        : DEFAULTS.handoffReminderText,
+    handoffReminderDelayMs: num(
+      source.handoffReminderDelayMs,
+      DEFAULTS.handoffReminderDelayMs,
+    ),
     toolStepBudget: num(source.toolStepBudget, DEFAULTS.toolStepBudget),
   };
 }
@@ -90,10 +102,8 @@ async function save() {
   notice.value = "";
   error.value = "";
   try {
-    await writePipelineSettings({
-      ...rawSettings.value,
-      behavior: { ...config.value },
-    });
+    // 保存前重读整行再合并，避免覆盖其他分区刚保存的内容。
+    await writePipelineSettingsSection("behavior", { ...config.value });
     notice.value = "已保存；30 秒内生效（无需重启）";
     emit("saved");
   } catch (reason) {
@@ -212,6 +222,35 @@ onMounted(load);
               />
               <p class="text-xs text-muted-foreground">
                 留空 = 不代发（模型自带 nudge 优先）。配置后唤醒超时由代码直发该话术，不开模型。
+              </p>
+            </div>
+            <div class="space-y-2 sm:col-span-2">
+              <Label for="behavior-handoff-reminder">转人工兜底提醒话术</Label>
+              <Textarea
+                id="behavior-handoff-reminder"
+                v-model="config.handoffReminderText"
+                rows="2"
+                placeholder="例：已帮你转人工客服了，稍等一下哈。"
+              />
+              <p class="text-xs text-muted-foreground">
+                留空 = 关闭。转人工后长时间无人认领时，系统代发这条轻提示，避免客户干等。
+              </p>
+            </div>
+            <div class="space-y-2">
+              <Label for="behavior-handoff-reminder-delay">转人工提醒延迟（秒）</Label>
+              <Input
+                id="behavior-handoff-reminder-delay"
+                :value="Math.round(config.handoffReminderDelayMs / 1000)"
+                type="number"
+                min="30"
+                max="1800"
+                @input="
+                  config.handoffReminderDelayMs =
+                    Number(($event.target as HTMLInputElement).value || '120') * 1000
+                "
+              />
+              <p class="text-xs text-muted-foreground">
+                转人工后无人认领多久发提醒，30~1800 秒（默认 120）。
               </p>
             </div>
           </div>

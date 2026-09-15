@@ -27,6 +27,7 @@ type RuntimeSettings = {
   memoryEnabled: boolean;
   visionEnabled: boolean;
   mergeWindowEnabled: boolean;
+  outboundInterjectGateEnabled: boolean;
 };
 
 const SWITCH_ROWS: Array<{
@@ -48,6 +49,11 @@ const SWITCH_ROWS: Array<{
     key: "mergeWindowEnabled",
     label: "合并窗口",
     desc: "开启后入站消息先进窗合并、到期才建 Agent Turn（省模型调用）；关闭则逐条建 Turn。",
+  },
+  {
+    key: "outboundInterjectGateEnabled",
+    label: "发送期插话闸门",
+    desc: "开启后 AI 分段回复的发送途中若客户插话，剩余未发段落自动扣留，由 AI 结合插话内容重新组织回复（私聊全量生效；群聊仅原提问者插话生效）。",
   },
   {
     key: "knowledgeEnabled",

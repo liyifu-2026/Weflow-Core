@@ -25,6 +25,7 @@ import { getMobileCapabilities } from "@/api/capabilities";
 import { apiBaseUrl } from "@/api/config";
 import {
   fetchTagVocabulary,
+  getMe,
   updateProfile,
   type AgentTag,
 } from "@/auth/api";
@@ -73,6 +74,16 @@ export default function ProfileScreen() {
         if (!stored) return;
         setNameDraft(stored.user.displayName ?? "");
         setSelectedTags(stored.user.tags ?? []);
+        // 服务端对齐：桌面端/网页端改了头像或显示名后，进本页即拉到最新
+        void getMe(stored)
+          .then(async (user) => {
+            if (!active) return;
+            const updated: MobileSession = { ...stored, user };
+            await saveSession(updated);
+            setSession(updated);
+            setNameDraft(user.displayName ?? "");
+          })
+          .catch(() => undefined);
         void getMobileCapabilities(stored)
           .then((capabilities) => {
             if (active) setCapable(capabilities.agentProfile);

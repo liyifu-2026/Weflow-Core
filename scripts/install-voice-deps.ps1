@@ -1,16 +1,17 @@
-# Installs the SILK -> PCM -> MP3 voice toolchain used by the Ingestion Worker.
+# Installs the SILK decoder (silk-python) used by the Ingestion Worker's
+# voice transcode pipeline into the channel-host venv.
+#
+# Scope note (2026-09-09): this script no longer manages ffmpeg. The encoder
+# now ships at workspace-root tools/ffmpeg/ffmpeg.exe and is configured via
+# core/.env VOICE_FFMPEG_PATH — no imageio-ffmpeg, no PATH guessing.
 #
 # Requirements:
 #   - uv (https://docs.astral.sh/uv/) on PATH
 #   - runtimes/channel-host-wechat/.venv already created (it is the venv that
-#     ships the WeChat DB/media driver and now also the SILK decoder)
+#     ships the WeChat DB/media driver and also the SILK decoder)
 #
-# After running this script, start the Ingestion Worker with:
-#   $env:PYTHON_PATH = '<venv>\Scripts\python.exe'
-#   $env:FFMPEG_PATH = '<venv>\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-win-x86_64-v7.1.exe'
-#
-# The script prints those two values so you can copy them into your dev
-# environment or a wrapper script.
+# PyPI's "pysilk" 0.0.1 is an empty placeholder; "silk-python" is the real
+# package providing the pysilk module. Never use the system Python.
 
 $ErrorActionPreference = "Stop"
 
@@ -23,21 +24,22 @@ if (-not (Test-Path $venvPython)) {
 
 Get-Command uv | Out-Null
 
-Write-Host "Installing silk-python and imageio-ffmpeg into $venvDir ..."
-& uv pip install --python $venvPython silk-python imageio-ffmpeg
+Write-Host "Installing silk-python into $venvDir ..."
+& uv pip install --python $venvPython silk-python
+if ($LASTEXITCODE -ne 0) {
+    throw "uv pip install failed"
+}
 
-$ffmpegPath = & $venvPython -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"
-if ($LASTEXITCODE -ne 0 -or -not $ffmpegPath) {
-    throw "Could not resolve imageio_ffmpeg executable path"
+& $venvPython -c "import pysilk; print('pysilk ok')"
+if ($LASTEXITCODE -ne 0) {
+    throw "pysilk import check failed"
 }
 
 Write-Host ""
-Write-Host "Voice dependencies ready."
-Write-Host "Start the Ingestion Worker with:"
-Write-Host "  `$env:PYTHON_PATH = '$venvPython'"
-Write-Host "  `$env:FFMPEG_PATH = '$ffmpegPath'"
+Write-Host "Voice SILK decoder ready."
+Write-Host "Make sure core/.env contains (adjust to your checkout):"
+Write-Host "  VOICE_PYTHON_PATH=$($venvPython -replace '\\', '/')"
+Write-Host "  VOICE_FFMPEG_PATH=<workspace-root>\tools\ffmpeg\ffmpeg.exe"
 Write-Host ""
-Write-Host "Example:"
-Write-Host "  `$env:PYTHON_PATH = '$venvPython'"
-Write-Host "  `$env:FFMPEG_PATH = '$ffmpegPath'"
-Write-Host "  pnpm --dir core dev:ingestion-worker"
+Write-Host "Then restart the ingestion worker (weflowctl dev restart / up) so"
+Write-Host "the injected environment is picked up."

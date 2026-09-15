@@ -6,7 +6,7 @@ Weflow 共享 UI 基础包。
 
 - `statusTone` / `validationTone`：状态 → 视觉 tone 映射
 
-后续会从 Console 增量抽取：
+后续会从 support-web 增量抽取（Console 已退役冻结，不再是抽取来源）：
 
 - `wf-page / wf-panel / wf-table / wf-inspector`
 - `labels`

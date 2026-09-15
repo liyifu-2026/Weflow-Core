@@ -13,7 +13,7 @@ import { completeAgentDecision } from "../modules/agent/application/complete-age
 const envText = readFileSync(new URL("../.env", import.meta.url), "utf8");
 function env(name: string): string | undefined {
   const m = envText.match(new RegExp(`^${name}=(.*)$`, "m"));
-  return m ? m[1].trim().replace(/^"|"$/g, "") : undefined;
+  return m?.[1]?.trim().replace(/^"|"$/g, "");
 }
 
 const client = new OpenAiCompatibleClient({

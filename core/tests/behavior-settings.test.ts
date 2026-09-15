@@ -22,11 +22,14 @@ describe("extractBehaviorSettings", () => {
         sessionRoundBudget: 48,
         defaultWaitMs: 600_000,
         nudgeText: "还在吗？",
+        handoffReminderText: "已帮你转人工了，稍等。",
+        handoffReminderDelayMs: 180_000,
         toolStepBudget: 6,
         scheduledSendMaxPending: 3,
         scheduledSendMaxPerDay: 20,
         scheduledSendQuietStartHour: 23,
         scheduledSendQuietEndHour: 7,
+        roundSummaryLabels: { customer: "客户", agent: "客服" },
       },
     });
     expect(parsed).toEqual({
@@ -34,13 +37,32 @@ describe("extractBehaviorSettings", () => {
       sessionRoundBudget: 48,
       defaultWaitMs: 600_000,
       nudgeText: "还在吗？",
+      handoffReminderText: "已帮你转人工了，稍等。",
+      handoffReminderDelayMs: 180_000,
       toolStepBudget: 6,
+      // 真 ReAct 循环预算未配置时回落出厂默认
+      decisionStepBudget: 8,
+      replyStepBudget: 2,
       // 定时发送护栏未配置时回落出厂默认
       scheduledSendMaxPending: 3,
       scheduledSendMaxPerDay: 20,
       scheduledSendQuietStartHour: 23,
       scheduledSendQuietEndHour: 7,
+      roundSummaryLabels: { customer: "客户", agent: "客服" },
     });
+  });
+
+  it("转人工兜底提醒：空白文案回落为空（关闭），越界延迟回落默认", () => {
+    const parsed = extractBehaviorSettings({
+      behavior: {
+        handoffReminderText: "   ",
+        handoffReminderDelayMs: 5_000, // 低于下限 30s
+      },
+    });
+    expect(parsed.handoffReminderText).toBe("");
+    expect(parsed.handoffReminderDelayMs).toBe(
+      DEFAULT_BEHAVIOR_SETTINGS.handoffReminderDelayMs,
+    );
   });
 
   it("越界 / 畸形字段逐项回落默认，不影响其他字段", () => {

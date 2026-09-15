@@ -484,6 +484,55 @@
       "when": 1788690000007,
       "tag": "0071_scheduled_send",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1788690000008,
+      "tag": "0072_notification_kinds",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1788690000009,
+      "tag": "0073_model_registry_protocol",
+      "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1788725993526,
+      "tag": "0074_add_fact_cards",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1788925413012,
+      "tag": "0076_chat_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1789000000001,
+      "tag": "0077_emotion_text_only",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1789000000002,
+      "tag": "0078_blacklist_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1789000000003,
+      "tag": "0079_blacklist_backfill",
+      "breakpoints": true
     }
   ]
 }

@@ -64,7 +64,6 @@ def create_media_resolver(
     event_store: EventStore,
     downloader,
     staging_root: str,
-    emoji_capture: Optional[Callable[[str, int], Optional[str]]] = None,
     ui_original_enabled: bool = False,
 ) -> Callable[[str], ChannelMediaReadResult]:
     """Create a bounded, host-owned resolver around wechatauto media reading.
@@ -184,25 +183,10 @@ def create_media_resolver(
             )
 
         if kind == "emotion":
-            if emoji_capture is None:
-                _remove_directory(request_dir)
-                return ChannelMediaReadResult.failed("emoji_capture_unavailable")
-            try:
-                path = emoji_capture(conversation_ref, local_id)
-            except Exception:
-                path = None
-            if not path or not os.path.isfile(path):
-                _remove_directory(request_dir)
-                return ChannelMediaReadResult.pending()
-            mime_type = _image_mime_type(path)
-            if mime_type is None:
-                _remove_directory(request_dir)
-                return ChannelMediaReadResult.failed("media_mime_unsupported")
-            return ChannelMediaReadResult.ready(
-                path,
-                mime_type,
-                cleanup=lambda: _remove_directory(request_dir),
-            )
+            # 表情包截图链路已下线：新事件不再带 emotion 的 mediaRef，
+            # 历史 mediaRef 一律判 failed，Core 侧前端按文本「[表情包]<含义>」渲染。
+            _remove_directory(request_dir)
+            return ChannelMediaReadResult.failed("emoji_capture_unavailable")
 
         try:
             path = downloader.download_file(

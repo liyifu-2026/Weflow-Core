@@ -13,9 +13,20 @@ import * as schema from "../../../infrastructure/postgres/schema.js";
 import { createLogger } from "../../../infrastructure/observability/logger.js";
 import type { ChannelEvent } from "../../channel/contracts/channel-event-source.js";
 import { cancelPendingScheduledSendsOnInbound } from "../../agent/application/scheduled-sends.js";
-import { contactIdForChannel } from "../../contacts/application/contact-profile-service.js";
+import { cancelPendingSessionWakesOnInbound } from "../../agent/application/session-wake.js";
+import {
+  CHANNEL_KIND,
+  contactIdForChannel,
+  conversationIdForChannel,
+  normalizeChannelAccount,
+} from "../../contacts/application/channel-identity.js";
 import { scheduleMemoryCaptureInTransaction } from "../../memory/application/schedule-memory-capture.js";
 import { scheduleTurnAdmissionInTransaction } from "./turn-admission.js";
+import { chatTypeFromConversationRef } from "./chat-type.js";
+import {
+  OUTBOUND_LOOP_SEND_STATES,
+  SEND_STATE,
+} from "./send-states.js";
 import { enqueueAssigneeInboundNotification } from "../../notifications/application/notification-outbox.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
 import { createHandoff } from "../../handoff/application/handoff-service.js";
@@ -26,11 +37,14 @@ import {
   shouldRespondToGroupMessage,
   type ResolvedGroupChatPolicy,
 } from "../../agent/application/group-chat-policy.js";
+import {
+  ensureGroupThreadSession,
+  isGroupThreadOpen,
+} from "../../agent/application/agent-session.js";
+import { isGroupNoiseText } from "../../agent/application/agent-context.js";
 import { gt } from "drizzle-orm";
 
 const CHANNEL_SOURCE = "channel-host";
-/** 平台通道标识：用于会话/联系人/消息 ID 前缀与 channel 列（通道无关） */
-const CHANNEL_KIND = "channel";
 
 /**
  * 出站自回声融合（echo fusion）窗口：本地 manual reply 先落库（occurredAt
@@ -43,16 +57,15 @@ const OUTBOUND_ECHO_FUSION_WINDOW_MS = 10 * 60_000;
 
 /** 群聊策略依赖：由组合根注入（扩展设置读取器），未注入 = 平台默认策略 */
 export type GroupChatDeps = {
-  resolvePolicy: (
-    conversationRef: string,
-  ) => Promise<ResolvedGroupChatPolicy>;
+  resolvePolicy: (conversationRef: string) => Promise<ResolvedGroupChatPolicy>;
 };
 
-/** 平台默认群聊策略（仅@；无冷却）——未配置/读取失败时的统一回落 */
+/** 平台默认群聊策略（仅@；无冷却无线程）——未配置/读取失败时的统一回落 */
 const DEFAULT_GROUP_CHAT_POLICY_RESOLVED: ResolvedGroupChatPolicy = {
   policy: DEFAULT_GROUP_CHAT_POLICY,
   cooldown: { minutes: 0, maxReplies: 2 },
   off: false,
+  threadTtlMinutes: 0,
 };
 
 const DEFAULT_LOGGER = createLogger(
@@ -78,7 +91,7 @@ export async function currentChannelCursor(
  * 处理图片媒体关联、触发内存捕获、通知人工坐席、
  * 以及为符合条件的入站消息创建 Agent Turn。
  */
-/** Ingest normalized text events from the real Channel Host boundary. */export async function ingestChannelEvents(
+/** Ingest normalized text events from the real Channel Host boundary. */ export async function ingestChannelEvents(
   db: NodePgDatabase<typeof schema>,
   events: ChannelEvent[],
   nextCursor: string,
@@ -104,6 +117,8 @@ type NormalizedChannelEvent = {
   conversationId: string;
   /** 账号维度（ADR-0005）；缺省 "default" */
   account: string;
+  /** 会话类型（协议 v6，ADR-0010）；null = 旧 Host，读取处按通道约定回退推导 */
+  conversationKind: "private" | "group" | null;
   channelMessageId: string;
   sourceLocalId: number | null;
   sourceMediaRef: string | null;
@@ -198,11 +213,10 @@ async function ingestNormalizedEvents(
 }
 
 type IngestTransaction = Parameters<
-  NodePgDatabase<typeof schema>["transaction"]>[0] extends (
-    tx: infer T,
-  ) => Promise<unknown>
-    ? T
-    : never;
+  NodePgDatabase<typeof schema>["transaction"]
+>[0] extends (tx: infer T) => Promise<unknown>
+  ? T
+  : never;
 
 /** 单个通道事件的完整摄取（原整页事务的循环体；continue 语义改为 return） */
 async function ingestNormalizedEvent(
@@ -221,18 +235,30 @@ async function ingestNormalizedEvent(
     fresh: true,
   });
 
-  const account = normalizeAccount(event.account);
+  // 会话类型（ADR-0010）：Host 上报优先；旧 Host 缺省时按通道约定推导
+  // ——后缀知识在此收敛为全 Core 唯一回退点，下游一律读落库事实。
+  const chatType: "private" | "group" =
+    event.conversationKind ??
+    chatTypeFromConversationRef(event.conversationId);
+
+  const account = normalizeChannelAccount(event.account);
   // default 账号保持旧格式 ID（channel:<ref>），兼容存量数据不回写；
   // 非 default 账号带 account 段（channel:<account>:<ref>）实现多账号隔离。
-  let conversationId =
-    account === "default"
-      ? `${CHANNEL_KIND}:${event.conversationId}`
-      : `${CHANNEL_KIND}:${account}:${event.conversationId}`;
+  let conversationId = conversationIdForChannel(
+    CHANNEL_KIND,
+    event.conversationId,
+    account,
+  );
   let contactId = contactIdForChannel(
     CHANNEL_KIND,
     event.conversationId,
     account,
   );
+  // 身份三元组 (channel, channelAccount, channelContactId) 随 rescue 同步：
+  // contact upsert 的冲突列必须与被并入的既有联系人行一致，否则会出现
+  // 「主键已存在但唯一三元组不冲突」的 pkey 违例，整条事件事务回滚、消息
+  // 被静默丢弃（曾使缺账号事件永远无法并入既有会话）。
+  let identityAccount = account;
   // 防护（ADR-0005 数据一致性）：事件缺账号（回落 default）时，若该客户
   // 已在某个真实账号下存在会话，则路由进既有账号会话，避免再造 default 孤儿
   // 会话、拆散该客户历史（历史事件曾因 host 未注入 WECHAT_ACCOUNT 而缺账号）。
@@ -241,6 +267,7 @@ async function ingestNormalizedEvent(
       .select({
         conversationId: schema.conversations.conversationId,
         contactId: schema.conversations.contactId,
+        channelAccount: schema.conversations.channelAccount,
       })
       .from(schema.conversations)
       .where(
@@ -254,6 +281,7 @@ async function ingestNormalizedEvent(
     if (existing[0]) {
       conversationId = existing[0].conversationId;
       contactId = existing[0].contactId;
+      identityAccount = normalizeChannelAccount(existing[0].channelAccount);
     }
   }
   await transaction
@@ -261,13 +289,15 @@ async function ingestNormalizedEvent(
     .values({
       contactId,
       channel: CHANNEL_KIND,
-      channelAccount: account,
+      channelAccount: identityAccount,
       channelContactId: event.conversationId,
       // 显示名保护（§4.2 污染修复）：senderId 是 wxid 且可能恰为自账号
       // （历史 bug：自消息事件把客户显示名覆盖成自账号 wxid）。
       // 自消息（isSelf）绝不写显示名；真实昵称/备注由
       // sync-channel-contact-profiles 以微信资料为准写入。
-      channelDisplayName: event.isSelf ? undefined : (event.senderId ?? undefined),
+      channelDisplayName: event.isSelf
+        ? undefined
+        : (event.senderId ?? undefined),
       updatedAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -290,6 +320,7 @@ async function ingestNormalizedEvent(
       channel: CHANNEL_KIND,
       channelAccount: account,
       channelConversationId: event.conversationId,
+      chatType,
     })
     .onConflictDoNothing();
 
@@ -346,13 +377,11 @@ async function ingestNormalizedEvent(
       channelType: event.type,
       text: event.content,
       isSelf: event.isSelf,
-      processingState:
-        direction === "inbound" ? "received" : "not_applicable",
-      sendState: direction === "outbound" ? "observed" : null,
+      processingState: direction === "inbound" ? "received" : "not_applicable",
+      sendState:
+        direction === "outbound" ? SEND_STATE.observed : null,
       replyToChannelMessageId: event.replyToChannelMessageId ?? null,
-      mentionContactRefs: event.mentioned
-        ? [event.senderId ?? "unknown"]
-        : [],
+      mentionContactRefs: event.mentioned ? [event.senderId ?? "unknown"] : [],
       idempotencyKey: event.eventId,
       occurredAt: new Date(event.occurredAt * 1000),
       traceId: `${source}-event:${event.eventId}`,
@@ -363,8 +392,10 @@ async function ingestNormalizedEvent(
   // 定时发送新事件作废（SCHEDULED-SEND-PLAN 决策 #5）：入站消息落库
   // 即作废该会话全部 pending 定时发送——预承诺内容可能已过时，正常
   // 轮次的上下文会展示被作废项，由模型自行决定补发/改期/放弃。
+  // 同步作废 pending 会话唤醒：对方开口即打断等待，唤醒轮不再触发。
   if (insertedMessages[0] && direction === "inbound" && !event.historical) {
     await cancelPendingScheduledSendsOnInbound(transaction, conversationId);
+    await cancelPendingSessionWakesOnInbound(transaction, conversationId);
   }
 
   const handoff = await transaction
@@ -387,8 +418,7 @@ async function ingestNormalizedEvent(
     .limit(1);
   // 黑名单联系人不触发任何 AI / 通知副作用（消息照常入库展示）
   const blocked = contactProfiles[0]?.blocked ?? false;
-  const agentEnabled =
-    (contactProfiles[0]?.agentEnabled ?? true) && !blocked;
+  const agentEnabled = (contactProfiles[0]?.agentEnabled ?? true) && !blocked;
   const insertedMessageId = insertedMessages[0]?.messageId;
   // 空库 Backfill（historical=true）：历史消息只入库展示，绝不触发
   // 任何 AI/通知副作用——实时事件链路的四个副作用点（UI 事件流、
@@ -441,7 +471,9 @@ async function ingestNormalizedEvent(
     // sync-channel-media 落 stored_files.original_name。
     else if (
       direction === "outbound" &&
-      (event.kind === "image" || event.kind === "file" || event.kind === "video")
+      (event.kind === "image" ||
+        event.kind === "file" ||
+        event.kind === "video")
     ) {
       await transaction
         .insert(schema.mediaAssets)
@@ -456,7 +488,7 @@ async function ingestNormalizedEvent(
         })
         .onConflictDoNothing();
     }
-    // 记忆捕获属于 AI 服务（提取调用模型）：非白名单（agentEnabled=false）
+    // 记忆捕获属于 AI 服务（提取调用模型）：「仅人工」（agentEnabled=false）
     // 客户只入库展示，不触发任何 AI 动作（无回复、无记忆提取、无昵称查询）。
     if (agentEnabled) {
       await scheduleMemoryCaptureInTransaction(transaction, {
@@ -482,23 +514,35 @@ async function ingestNormalizedEvent(
     // 群聊响应策略（ADR-0006）：由 Solution 扩展设置解析（群 override >
     // 全局 > 默认仅@）；未配置/读取失败时与既有行为逐字节一致。私聊恒通过。
     const groupPolicy = groupChatDeps
-      ? await groupChatDeps.resolvePolicy(event.conversationId).catch(
-          () => DEFAULT_GROUP_CHAT_POLICY_RESOLVED,
-        )
+      ? await groupChatDeps
+          .resolvePolicy(event.conversationId)
+          .catch(() => DEFAULT_GROUP_CHAT_POLICY_RESOLVED)
       : DEFAULT_GROUP_CHAT_POLICY_RESOLVED;
-    if (shouldAcceptForAgentTurn(event, groupPolicy)) {
+    if (
+      await shouldAcceptForAgentTurn(
+        transaction,
+        event,
+        conversationId,
+        groupPolicy,
+        chatType,
+      )
+    ) {
       const messageId = insertedMessageId;
       if (!messageId) {
         throw new Error("inserted inbound message did not return an id");
       }
       // 群聊冷却护栏：窗口内该群最多 N 条 AI 回复（DB 计数，跨实例准确）
       if (
-        await groupChatCooldownBlocks(transaction, conversationId, groupPolicy)
+        await groupChatCooldownBlocks(
+          transaction,
+          conversationId,
+          groupPolicy,
+          chatType,
+        )
       ) {
         return;
       }
-      const admission =
-        await resolveExecutionProfileForAdmission(transaction);
+      const admission = await resolveExecutionProfileForAdmission(transaction);
       if (!admission.allowed) {
         // Phase 7: no active Execution Profile -> no new Agent Turn.
         // The refusal is intentionally not persisted as a Turn.
@@ -507,7 +551,7 @@ async function ingestNormalizedEvent(
       // 合并窗口（Phase 1）：ON 时消息先进窗（同会话 upsert 重置收窗、
       // revision+1），由 processTurnAdmissions 到期合并建 Turn；
       // OFF 时走原路径逐条建 Turn（v1 行为逐字节一致）。两条路径共享
-      // 上面全部既有护栏（Handoff 暂停/白名单/群策略/冷却/Profile）。
+      // 上面全部既有护栏（Handoff 暂停/自动回复开关/群策略/冷却/Profile）。
       if (settings.mergeWindowEnabled) {
         const [existingAdmission] = await transaction
           .select({
@@ -515,22 +559,17 @@ async function ingestNormalizedEvent(
             messageCount: schema.turnAdmissionStates.messageCount,
           })
           .from(schema.turnAdmissionStates)
-          .where(
-            eq(schema.turnAdmissionStates.conversationId, conversationId),
-          )
+          .where(eq(schema.turnAdmissionStates.conversationId, conversationId))
           .limit(1);
-        await scheduleTurnAdmissionInTransaction(
-          transaction as never,
-          {
-            conversationId,
-            contactId,
-            messageId,
-            text: event.content,
-            now: new Date(),
-            existingRevision: existingAdmission?.revision,
-            existingCount: existingAdmission?.messageCount,
-          },
-        );
+        await scheduleTurnAdmissionInTransaction(transaction as never, {
+          conversationId,
+          contactId,
+          messageId,
+          text: event.content,
+          now: new Date(),
+          existingRevision: existingAdmission?.revision,
+          existingCount: existingAdmission?.messageCount,
+        });
         return;
       }
       await transaction
@@ -637,10 +676,7 @@ export function sanitizeInboundContent(
   const trimmed = cleaned.trim();
   if (!trimmed) return cleaned;
   const sender = senderRef?.trim() ?? "";
-  if (
-    (sender && trimmed === sender) ||
-    BARE_CHANNEL_REF_RE.test(trimmed)
-  ) {
+  if ((sender && trimmed === sender) || BARE_CHANNEL_REF_RE.test(trimmed)) {
     return UNKNOWN_CUSTOMER_TEXT;
   }
   return cleaned;
@@ -650,8 +686,7 @@ function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
   // pat 与文本化 emotion（[表情包]<含义>）按文本处理，无需 mediaRef；
   // 传统 emotion 带 mediaRef 时仍走图片链路（兼容旧 Host）。
   const isTextLike = TEXT_LIKE_KINDS.has(event.kind);
-  const isEmotionWithRef =
-    event.kind === "emotion" && Boolean(event.mediaRef);
+  const isEmotionWithRef = event.kind === "emotion" && Boolean(event.mediaRef);
   if (event.kind !== "text" && !MEDIA_KINDS.has(event.kind) && !isTextLike) {
     throw new Error(`channel_event_unsupported_kind:${event.kind}`);
   }
@@ -674,7 +709,8 @@ function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
   return {
     eventId: event.eventId,
     conversationId: event.conversationRef,
-    account: normalizeAccount(event.account),
+    account: normalizeChannelAccount(event.account),
+    conversationKind: event.conversationKind ?? null,
     channelMessageId,
     sourceLocalId: null,
     sourceMediaRef: event.mediaRef ?? null,
@@ -700,12 +736,6 @@ function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
     replyToChannelMessageId: event.replyToChannelMessageId ?? null,
     historical: event.historical === true,
   };
-}
-
-/** 归一化账号标识（ADR-0005）：空值回落 "default" */
-export function normalizeAccount(account: string | null | undefined): string {
-  const trimmed = account?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : "default";
 }
 
 /**
@@ -763,13 +793,13 @@ async function fuseOutboundSelfEcho(
         eq(schema.mediaAssets.kind, event.kind),
         gte(schema.messages.occurredAt, windowStart),
         lte(schema.messages.occurredAt, occurredAt),
-        // sendState 非 failed：failed 是终态，不应被迟到的回声"复活"
-        ne(schema.messages.sendState, "failed"),
+        // sendState 非 failed：failed 是终态，不应被迟到的回声"复活"；
+        // 候选集 = 出站循环驱动集（pending/submitting/unknown——unknown 行
+        // 可借回声融合恢复）+ 已确认行（补绑定通道消息 ID）
+        ne(schema.messages.sendState, SEND_STATE.failed),
         inArray(schema.messages.sendState, [
-          "pending",
-          "submitting",
-          "unknown",
-          "confirmed",
+          ...OUTBOUND_LOOP_SEND_STATES,
+          SEND_STATE.confirmed,
         ]),
       ),
     )
@@ -781,7 +811,7 @@ async function fuseOutboundSelfEcho(
     .update(schema.messages)
     .set({
       channelMessageId: event.channelMessageId,
-      sendState: "confirmed",
+      sendState: SEND_STATE.confirmed,
       sendError: null,
       sendUpdatedAt: new Date(),
     })
@@ -802,23 +832,63 @@ function mediaIdForEvent(eventId: string): string {
 }
 
 /**
- * 群聊消息是否进入 Agent Turn（ADR-0006）。
- * 群会话（conversationRef 以 @chatroom 结尾）应用群聊响应策略；
+ * 群聊消息是否进入 Agent Turn（ADR-0006 + 对话线程）。
+ * 群会话（chatType=group，ADR-0010 Channel 事实）按群聊响应策略判定：
+ *  1. off → 拒绝；私聊恒通过；
+ *  2. @机器人（botNames 文本匹配）→ 建轮，并开线/续期对话线程；
+ *  3. 未命中但线程存活（threadTtlMinutes 内）→ 开放地板：任何群成员的
+ *     跟进免 @ 建轮——纯噪声（表情包/标点）除外，不烧模型；
+ *  4. 其余 → 只入库不建轮。
  * 私聊始终接受。策略由 Solution 扩展设置解析（群 override > 全局 >
  * 默认仅@）；未提供 deps 时使用平台默认策略，与既有行为一致。
  */
-function shouldAcceptForAgentTurn(
+async function shouldAcceptForAgentTurn(
+  transaction: Parameters<
+    NodePgDatabase<typeof schema>["transaction"]
+  >[0] extends (tx: infer T) => Promise<unknown>
+    ? T
+    : never,
   event: NormalizedChannelEvent,
+  conversationId: string,
   resolved: ResolvedGroupChatPolicy,
-): boolean {
-  const isGroup = event.conversationId.endsWith("@chatroom");
-  if (!isGroup) return true;
+  chatType: "private" | "group",
+): Promise<boolean> {
+  if (chatType !== "group") return true;
   // off 模式：该群完全静默
   if (resolved.off) return false;
-  return shouldRespondToGroupMessage(resolved.policy, {
+  const mentionHit = shouldRespondToGroupMessage(resolved.policy, {
     text: event.content,
     mentioned: event.mentioned === true,
   });
+  const now = new Date();
+  if (mentionHit) {
+    if (resolved.threadTtlMinutes > 0) {
+      // @ 命中：开线或续期（失败不阻断建轮，线程只是降噪机制）
+      await ensureGroupThreadSession(transaction, {
+        conversationId,
+        now,
+        ttlMinutes: resolved.threadTtlMinutes,
+      }).catch(() => undefined);
+    }
+    return true;
+  }
+  // 未命中：对话线程开放地板
+  if (resolved.threadTtlMinutes <= 0) return false;
+  const threadOpen = await isGroupThreadOpen(transaction, {
+    conversationId,
+    now,
+    ttlMinutes: resolved.threadTtlMinutes,
+  });
+  if (!threadOpen) return false;
+  // 纯噪声（表情包/纯标点）在线程内也不值得一次模型调用
+  if (isGroupNoiseText(event.content)) return false;
+  // 跟进准入：续期线程（空闲超时重置）并计一轮
+  await ensureGroupThreadSession(transaction, {
+    conversationId,
+    now,
+    ttlMinutes: resolved.threadTtlMinutes,
+  }).catch(() => undefined);
+  return true;
 }
 
 /**
@@ -835,8 +905,9 @@ async function groupChatCooldownBlocks(
     : never,
   conversationId: string,
   resolved: ResolvedGroupChatPolicy,
+  chatType: "private" | "group",
 ): Promise<boolean> {
-  if (!conversationId.endsWith("@chatroom")) return false;
+  if (chatType !== "group") return false;
   const { minutes, maxReplies } = resolved.cooldown;
   if (minutes <= 0) return false;
   try {

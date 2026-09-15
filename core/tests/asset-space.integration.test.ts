@@ -127,6 +127,13 @@ integration("素材空间（assets）", () => {
     await postgres.db
       .delete(schema.mediaAssets)
       .where(inArray(schema.mediaAssets.conversationId, conversationIds));
+    // 先删记忆水位：capture_states.watermark_message_id 外键引用 messages，
+    // 顺序反了会因 FK 约束删不掉消息（清理阶段报错）
+    await postgres.db
+      .delete(schema.memoryCaptureStates)
+      .where(
+        inArray(schema.memoryCaptureStates.conversationId, conversationIds),
+      );
     await postgres.db
       .delete(schema.messages)
       .where(inArray(schema.messages.conversationId, conversationIds));
@@ -142,11 +149,6 @@ integration("素材空间（assets）", () => {
     await postgres.db
       .delete(schema.agentTurns)
       .where(inArray(schema.agentTurns.conversationId, conversationIds));
-    await postgres.db
-      .delete(schema.memoryCaptureStates)
-      .where(
-        inArray(schema.memoryCaptureStates.conversationId, conversationIds),
-      );
     await postgres.db
       .delete(schema.conversations)
       .where(inArray(schema.conversations.conversationId, conversationIds));

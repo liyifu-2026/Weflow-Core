@@ -1,7 +1,5 @@
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type {
+  AgentAction,
   AgentExecutionStrategy,
   AgentStrategyContext,
 } from "@weflow-leaif/contracts";
@@ -9,48 +7,60 @@ import {
   customerSupportSystemPrompt,
   aiEmployeeSystemPrompt,
 } from "./prompt.js";
-import { parseCustomerSupportResponse } from "./parser.js";
+import { DEFAULT_REPLY_WAIT_MS } from "./decision-protocol.js";
+import {
+  parseCustomerSupportResponse,
+  type ParseCustomerSupportOptions,
+} from "./parser.js";
+
+/**
+ * 安装的 contracts@1.0.0 类型尚不认识 wait / end_session / reply.waitMs
+ * （运行时对象与平台新契约一致，见 parser.ts 的本地扩展类型）；
+ * 联合类型到成员的窄化 cast，contracts 发版后移除。
+ */
+function parseModelAction(
+  text: string,
+  options?: ParseCustomerSupportOptions,
+): AgentAction {
+  return parseCustomerSupportResponse(text, options) as AgentAction;
+}
 
 /**
  * Customer Support structured execution strategy.
  *
- * The system prompt has been migrated from Core. Decision schema parsing
- * lives in parser.ts.
+ * The system prompt assembles persona (here / decision-protocol.ts) from the
+ * single-source decision protocol. Decision schema parsing lives in parser.ts.
  *
  * Export contract: the platform Agent Worker loads strategies from
- * STRATEGY_PLUGIN_PATH and expects a named export `strategy`
- * (AgentExecutionStrategy). Keep this export name stable.
+ * STRATEGY_PLUGIN_PATH and expects the named exports `strategy` (static,
+ * built-in prompt only) and/or `createStrategy` (factory), plus
+ * `preResolveAiEmployeePrompt` and `getCachedAiEmployeeId`. Keep these four
+ * stable — they are the plugin's real seam.
  *
- * AI Employee runtime connection (R2):
- * When the Worker provides a database via `createStrategy({ db })`, the
- * strategy resolves the AI employee's published prompt from the
- * `customer_support` schema at request time. Resolution order (R2):
+ * AI Employee runtime connection (R2): the Worker provides a database via
+ * `preResolveAiEmployeePrompt(db, ...)`. Resolution order:
  *   1. per-contact AI employee binding → published prompt
  *   2. workspace default AI employee → published prompt
- *   3. prompts.json static overrides
- *   4. built-in customer support system prompt
+ *   3. built-in customer support system prompt
  *
  * Keyword → employee routes (reception plan) were removed in R2. Contact
  * binding + workspace default are the only routing rules.
  *
- * The group chat extra instruction lives in the Solution's extension
- * settings (extensionId support-pipeline) and is read through the same
- * database handle with a short TTL cache. Any failure fails open.
+ * The Solution's extension settings (extensionId support-pipeline) are read
+ * through the same database handle with a short TTL cache: groupChat.
+ * extraInstruction (group chat extra instruction) and pacing.
+ * defaultReplyWaitMs (default wait for reply/ask; null disables). Any failure
+ * fails open — the last known values stay in effect.
  */
 
-type PromptMap = {
-  default?: string | null;
-  contacts?: Record<string, string>;
-  conversations?: Record<string, string>;
-};
+type SqlTag = (strings: TemplateStringsArray, ...values: unknown[]) => unknown;
 
-/** Minimal database interface for raw SQL queries (drizzle-compatible). */
+/** Minimal database interface for raw SQL queries (host-injected handle). */
 type RawDb = {
   execute: (
-    queryOrParams:
-      | string
-      | { sql: string; args: unknown[] },
+    query: unknown,
   ) => Promise<{ rows: Array<Record<string, unknown>> }>;
+  sql: SqlTag;
 };
 
 const EXTENSION_SETTINGS = {
@@ -74,129 +84,28 @@ function extractGroupInstruction(raw: unknown): string | null {
     : null;
 }
 
-let lastGroupFetch = 0;
-let cachedGroupInstruction: string | null = null;
-
 /**
- * 读取群聊附加指令（TTL 缓存）。读失败 fail-open：返回 null 且不缓存失败结果。
+ * 从扩展设置容错提取「reply/ask 缺 wait_ms 时的默认等待」
+ * （pacing.defaultReplyWaitMs）。返回 undefined = 未配置（保持业务默认
+ * DEFAULT_REPLY_WAIT_MS，即默认开启）；null = 显式关闭（回到引擎语义：
+ * 不带 wait_ms 表示本回合继续工作）；正数 = 自定义毫秒（parser 负责 clamp）。
  */
-async function readGroupInstruction(db: RawDb): Promise<string | null> {
-  if (
-    lastGroupFetch !== 0 &&
-    Date.now() - lastGroupFetch < SETTINGS_CACHE_TTL_MS
-  ) {
-    return cachedGroupInstruction;
+function extractDefaultReplyWaitMs(raw: unknown): number | null | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const pacing = (raw as Record<string, unknown>).pacing;
+  if (typeof pacing !== "object" || pacing === null) return undefined;
+  const value = (pacing as Record<string, unknown>).defaultReplyWaitMs;
+  if (value === null || value === 0) return null;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return undefined;
+    return value > 0 ? value : null;
   }
-  try {
-    const result = await db.execute({
-      sql:
-        "SELECT settings_json FROM solution.extension_settings " +
-        "WHERE solution_id = $1 AND extension_id = $2 LIMIT 1",
-      args: [
-        EXTENSION_SETTINGS.solutionId,
-        EXTENSION_SETTINGS.extensionId,
-      ],
-    });
-    const settingsJson = result.rows?.[0]?.settings_json;
-    cachedGroupInstruction = extractGroupInstruction(settingsJson);
-    lastGroupFetch = Date.now();
-    return cachedGroupInstruction;
-  } catch {
-    return null;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return undefined;
+    return parsed > 0 ? parsed : null;
   }
-}
-
-function readPromptMap(): PromptMap {
-  try {
-    const currentDir = dirname(fileURLToPath(import.meta.url));
-    const filePath = join(currentDir, "..", "prompts.json");
-    return JSON.parse(readFileSync(filePath, "utf8")) as PromptMap;
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Resolve the AI employee's published prompt for a given contact.
- * Resolution order (R2): per-contact binding → workspace default → null.
- */
-async function resolveAiEmployeePrompt(
-  db: RawDb,
-  contactId: string,
-): Promise<string | null> {
-  try {
-    // 1. Per-contact binding
-    if (contactId) {
-      const bindingResult = await db.execute({
-        sql:
-          "SELECT cb.definition_id " +
-          "FROM customer_support.contact_agent_bindings cb " +
-          "JOIN customer_support.ai_employee_definitions ad ON ad.definition_id = cb.definition_id " +
-          "WHERE cb.contact_id = $1 AND ad.status = 'active' " +
-          "LIMIT 1",
-        args: [contactId],
-      });
-      const bindingRow = bindingResult.rows?.[0];
-      if (bindingRow?.definition_id) {
-        const prompt = await fetchPublishedPrompt(
-          db,
-          bindingRow.definition_id as string,
-        );
-        if (prompt) return prompt;
-      }
-    }
-    // 2. Workspace default
-    const defaultResult = await db.execute(
-      "SELECT default_definition_id FROM customer_support.ai_employee_workspace_default WHERE id = 1",
-    );
-    const defaultRow = defaultResult.rows?.[0];
-    if (defaultRow?.default_definition_id) {
-      const prompt = await fetchPublishedPrompt(
-        db,
-        defaultRow.default_definition_id as string,
-      );
-      if (prompt) return prompt;
-    }
-  } catch {
-    // Database query failure should not block the strategy; fall through to static prompts.
-  }
-  return null;
-}
-
-/** Fetch the latest published prompt for a given AI employee definition. */
-async function fetchPublishedPrompt(
-  db: RawDb,
-  definitionId: string,
-): Promise<string | null> {
-  const result = await db.execute({
-    sql:
-      "SELECT prompt FROM customer_support.ai_employee_versions " +
-      "WHERE definition_id = $1 AND status = 'published' " +
-      "ORDER BY version DESC LIMIT 1",
-    args: [definitionId],
-  });
-  return (result.rows?.[0]?.prompt as string) ?? null;
-}
-
-/**
- * AI 员工运行时解析缓存，keyed by `${contactId}:${conversationId}`。
- * prompt 与 employeeId 在一次预解析中成对写入、同时过期。
- */
-type CachedEmployee = {
-  prompt: string | null;
-  employeeId: string | null;
-  fetchedAt: number;
-};
-const aiEmployeeCache = new Map<string, CachedEmployee>();
-
-function cachedEmployee(key: string): CachedEmployee | undefined {
-  const entry = aiEmployeeCache.get(key);
-  if (!entry) return undefined;
-  if (Date.now() - entry.fetchedAt >= RESOLUTION_CACHE_TTL_MS) {
-    aiEmployeeCache.delete(key);
-    return undefined;
-  }
-  return entry;
+  return undefined;
 }
 
 /** 群聊附加指令拼接：空指令原样返回（prompt 与未配置时逐字节一致） */
@@ -209,63 +118,140 @@ function appendGroupInstruction(
     : system;
 }
 
-function resolveSystemPrompt(
-  input: AgentStrategyContext,
-): string {
-  const promptMap = readPromptMap();
-  const knowledgeAvailable = input.availableTools.includes("retrieve_knowledge");
-  const chatType = input.chatType ?? "private";
-
-  // Static prompts.json overrides (per-contact / per-conversation / default)
-  const staticPrompt =
-    (input.contactId ? promptMap.contacts?.[input.contactId] : undefined) ??
-    promptMap.conversations?.[input.conversationId] ??
-    promptMap.default ??
-    null;
-  if (staticPrompt) return staticPrompt;
-
-  // Fall back to the built-in customer support system prompt.
-  return customerSupportSystemPrompt(knowledgeAvailable, chatType);
-}
-
-/**
- * Synchronous strategy (backward-compatible static export).
- * Uses prompts.json + built-in prompt; no database access for AI employee resolution.
- */
-export const strategy: AgentExecutionStrategy = {
-  id: "weflow.customer-support/structured-v1",
-  version: "1.0.0",
-  buildModelRequest: (input) => ({
-    system: resolveSystemPrompt(input),
-    messages: input.messages,
-  }),
-  parseModelResponse: (input) => parseCustomerSupportResponse(input.text),
-  validateAction: () => ({ ok: true }),
+/** AI 员工运行时解析条目：prompt 与 employeeId 成对写入、同时过期。 */
+type CachedEmployee = {
+  prompt: string | null;
+  employeeId: string | null;
+  fetchedAt: number;
 };
 
 /**
- * Factory that creates a strategy with AI employee prompt cache support.
- * The Agent Worker should prefer this over the static `strategy` export.
- * The actual database query for AI employee prompts is done by the
- * companion `preResolveAiEmployeePrompt` export, which populates the
- * cache before `buildModelRequest` is called.
- *
- * Resolution order at request time (R2):
- *   1. AI employee prompt (per-contact binding → workspace default)
- *   2. prompts.json static overrides
- *   3. Built-in customer support system prompt
+ * 插件运行时工厂。Worker 走模块级单例；测试传 `now` 创建隔离实例
+ * （假时钟驱动两个 TTL 缓存，互不串扰）。导出仅为测试接缝，
+ * Worker 消费面始终是上面四个命名导出。
  */
-export function createStrategy(_ctx?: { db?: unknown }): AgentExecutionStrategy {
-  return {
+export function createStrategyApi(options: { now?: () => number } = {}) {
+  const now = options.now ?? Date.now;
+  const employeeCache = new Map<string, CachedEmployee>();
+  let settingsFetchedAt = 0;
+  let groupInstruction: string | null = null;
+  /** reply/ask 缺 wait_ms 时的默认等待；null = 关闭（沿用引擎语义）。 */
+  let defaultReplyWaitMs: number | null = DEFAULT_REPLY_WAIT_MS;
+
+  function cachedEmployee(key: string): CachedEmployee | undefined {
+    const entry = employeeCache.get(key);
+    if (!entry) return undefined;
+    if (now() - entry.fetchedAt >= RESOLUTION_CACHE_TTL_MS) {
+      employeeCache.delete(key);
+      return undefined;
+    }
+    return entry;
+  }
+
+  /**
+   * 读取支撑管线扩展设置（TTL 缓存）：群聊附加指令 + 对话节奏开关。
+   * 读失败 fail-open：保持上一次已生效值（首次即默认值），且不写缓存时间
+   * 以便下次重试。
+   */
+  async function readPipelineSettings(db: RawDb): Promise<void> {
+    if (
+      settingsFetchedAt !== 0 &&
+      now() - settingsFetchedAt < SETTINGS_CACHE_TTL_MS
+    ) {
+      return;
+    }
+    try {
+      const result = await db.execute(
+        db.sql`SELECT settings_json FROM solution.extension_settings
+          WHERE scope = ${EXTENSION_SETTINGS.solutionId}
+            AND key = ${EXTENSION_SETTINGS.extensionId}
+          LIMIT 1`,
+      );
+      const settingsJson = result.rows?.[0]?.settings_json;
+      groupInstruction = extractGroupInstruction(settingsJson);
+      const extractedWaitMs = extractDefaultReplyWaitMs(settingsJson);
+      if (extractedWaitMs !== undefined) defaultReplyWaitMs = extractedWaitMs;
+      settingsFetchedAt = now();
+    } catch {
+      // fail-open：沿用当前值
+    }
+  }
+
+  /** Fetch the latest published prompt for a given AI employee definition. */
+  async function fetchPublishedPrompt(
+    db: RawDb,
+    definitionId: string,
+  ): Promise<string | null> {
+    const result = await db.execute(
+      db.sql`SELECT prompt FROM customer_support.ai_employee_versions
+        WHERE definition_id = ${definitionId} AND status = 'published'
+        ORDER BY version DESC LIMIT 1`,
+    );
+    return (result.rows?.[0]?.prompt as string) ?? null;
+  }
+
+  /**
+   * Resolve the AI employee (definition_id + published prompt) for a contact.
+   * Priority: per-contact binding → workspace default. 一次解析成对返回，
+   * 避免旧实现里 prompt/employeeId 两条路径重复跑同样的两条定位查询。
+   * 任何失败 fail-open：返回 { null, null }，上层回退内置提示词。
+   */
+  async function resolveAiEmployee(
+    db: RawDb,
+    contactId: string,
+  ): Promise<{ employeeId: string | null; prompt: string | null }> {
+    try {
+      // 1. Per-contact binding
+      if (contactId) {
+        const bindingResult = await db.execute(
+          db.sql`SELECT cb.definition_id
+            FROM customer_support.contact_agent_bindings cb
+            JOIN customer_support.ai_employee_definitions ad ON ad.definition_id = cb.definition_id
+            WHERE cb.contact_id = ${contactId} AND ad.status = 'active'
+            LIMIT 1`,
+        );
+        const bindingId = bindingResult.rows?.[0]?.definition_id;
+        if (typeof bindingId === "string") {
+          return {
+            employeeId: bindingId,
+            prompt: await fetchPublishedPrompt(db, bindingId),
+          };
+        }
+      }
+      // 2. Workspace default
+      const defaultResult = await db.execute(
+        db.sql`SELECT default_definition_id FROM customer_support.ai_employee_workspace_default WHERE id = 1`,
+      );
+      const defaultId = defaultResult.rows?.[0]?.default_definition_id;
+      if (typeof defaultId === "string") {
+        return {
+          employeeId: defaultId,
+          prompt: await fetchPublishedPrompt(db, defaultId),
+        };
+      }
+    } catch {
+      // Database query failure should not block the strategy; fall through to built-in prompt.
+    }
+    return { employeeId: null, prompt: null };
+  }
+
+  function resolveBuiltinSystemPrompt(input: AgentStrategyContext): string {
+    const knowledgeAvailable =
+      input.availableTools.includes("retrieve_knowledge");
+    const chatType = input.chatType ?? "private";
+    return customerSupportSystemPrompt(knowledgeAvailable, chatType);
+  }
+
+  const strategy: AgentExecutionStrategy = {
     id: "weflow.customer-support/structured-v1",
-    version: "1.2.0",
+    version: "1.3.0",
     buildModelRequest: (input) => {
       const knowledgeAvailable =
         input.availableTools.includes("retrieve_knowledge");
       const chatType = input.chatType ?? "private";
       // 群聊附加指令（扩展设置）：preResolve 时随员工解析一并预取
-      const groupInstruction =
-        chatType === "group" ? (cachedGroupInstruction ?? null) : null;
+      const groupInstructionForRequest =
+        chatType === "group" ? (groupInstruction ?? null) : null;
 
       // Cached AI employee resolution (populated by the async pre-resolver)
       const cached = cachedEmployee(
@@ -277,7 +263,7 @@ export function createStrategy(_ctx?: { db?: unknown }): AgentExecutionStrategy 
             cached.prompt,
             knowledgeAvailable,
             chatType,
-            groupInstruction ?? undefined,
+            groupInstructionForRequest ?? undefined,
           ),
           messages: input.messages,
         };
@@ -285,97 +271,97 @@ export function createStrategy(_ctx?: { db?: unknown }): AgentExecutionStrategy 
 
       return {
         system: appendGroupInstruction(
-          resolveSystemPrompt(input),
-          groupInstruction,
+          resolveBuiltinSystemPrompt(input),
+          groupInstructionForRequest,
         ),
         messages: input.messages,
       };
     },
-    parseModelResponse: (input) => parseCustomerSupportResponse(input.text),
+    parseModelResponse: (input) =>
+      parseModelAction(input.text, { defaultReplyWaitMs }),
     validateAction: () => ({ ok: true }),
   };
-}
 
-/**
- * Pre-resolve AI employee prompt for a given contact/conversation pair.
- * Called by the agent-turn-executor before the strategy's buildModelRequest
- * to populate the cache.
- *
- * `triggerText` is the customer message that started this turn; it is
- * accepted for signature compatibility but no longer used (reception plan
- * keyword routing was removed in R2).
- */
-export async function preResolveAiEmployeePrompt(
-  db: RawDb,
-  contactId: string,
-  conversationId: string,
-  _triggerText?: string | undefined,
-): Promise<void> {
-  const cacheKey = `${contactId}:${conversationId}`;
-  if (cachedEmployee(cacheKey)) return;
+  /**
+   * Pre-resolve AI employee prompt for a given contact/conversation pair.
+   * Called by the agent-turn-executor before the strategy's buildModelRequest
+   * to populate the cache.
+   *
+   * `triggerText` is the customer message that started this turn; it is
+   * accepted for signature compatibility but no longer used (reception plan
+   * keyword routing was removed in R2).
+   */
+  async function preResolveAiEmployeePrompt(
+    db: RawDb,
+    contactId: string,
+    conversationId: string,
+    _triggerText?: string | undefined,
+  ): Promise<void> {
+    const cacheKey = `${contactId}:${conversationId}`;
+    if (cachedEmployee(cacheKey)) return;
 
-  // 群聊附加指令随每次预解析刷新（TTL 缓存），供 buildModelRequest 同步使用。
-  await readGroupInstruction(db).catch(() => null);
+    // 群聊附加指令随每次预解析刷新（TTL 缓存），供 buildModelRequest 同步使用。
+    await readPipelineSettings(db);
 
-  // prompt 与 definition_id 同优先级（联系人绑定 → 工作区默认）成对解析并
-  // 写入同一条缓存：prompt 供 buildModelRequest 使用，definition_id 供 Turn
-  // 落库时写入 messages.actor_id（前端渲染头像）。
-  const employeeId = await resolveAiEmployeeId(db, contactId);
-  const prompt = employeeId
-    ? await fetchPublishedPrompt(db, employeeId)
-    : await resolveAiEmployeePrompt(db, contactId);
-
-  // 命中即缓存（含 employeeId 为 null 的否定结果，避免反复查库）；
-  // prompt 为 null 时下次 buildModelRequest 回落静态/内置提示词。
-  aiEmployeeCache.set(cacheKey, {
-    prompt,
-    employeeId,
-    fetchedAt: Date.now(),
-  });
-}
-
-/**
- * 解析本次消息命中的 AI 员工 definition_id（同 prompt 优先级：
- * 联系人绑定 → 工作区默认）；未命中返回 null。
- */
-export async function resolveAiEmployeeId(
-  db: RawDb,
-  contactId: string,
-): Promise<string | null> {
-  try {
-    if (contactId) {
-      const bindingResult = await db.execute({
-        sql: `
-          SELECT cb.definition_id
-          FROM customer_support.contact_agent_bindings cb
-          JOIN customer_support.ai_employee_definitions ad ON ad.definition_id = cb.definition_id
-          WHERE cb.contact_id = $1 AND ad.status = 'active'
-          LIMIT 1
-        `,
-        args: [contactId],
-      });
-      const bindingRow = bindingResult.rows?.[0];
-      if (typeof bindingRow?.definition_id === "string") {
-        return bindingRow.definition_id;
-      }
-    }
-    const defaultResult = await db.execute(
-      "SELECT default_definition_id FROM customer_support.ai_employee_workspace_default WHERE id = 1",
-    );
-    const defaultRow = defaultResult.rows?.[0];
-    if (typeof defaultRow?.default_definition_id === "string") {
-      return defaultRow.default_definition_id;
-    }
-  } catch {
-    // 解析失败不影响主链路；返回 null 由上层回退通用标识。
+    // prompt 与 definition_id 同优先级成对解析并写入同一条缓存：prompt 供
+    // buildModelRequest 使用，definition_id 供 Turn 落库时写入
+    // messages.actor_id（前端渲染头像）。未命中（含否定结果）也缓存，
+    // 避免反复查库；prompt 为 null 时下次 buildModelRequest 回落内置提示词。
+    const resolved = await resolveAiEmployee(db, contactId);
+    employeeCache.set(cacheKey, {
+      prompt: resolved.prompt,
+      employeeId: resolved.employeeId,
+      fetchedAt: now(),
+    });
   }
-  return null;
+
+  /** 读取缓存的 AI 员工 definition_id（preResolve 之后调用）；未命中 null */
+  function getCachedAiEmployeeId(
+    contactId: string,
+    conversationId: string,
+  ): string | null {
+    return cachedEmployee(`${contactId}:${conversationId}`)?.employeeId ?? null;
+  }
+
+  return { strategy, preResolveAiEmployeePrompt, getCachedAiEmployeeId };
 }
 
-/** 读取缓存的 AI 员工 definition_id（preResolve 之后调用）；未命中 null */
-export function getCachedAiEmployeeId(
-  contactId: string,
-  conversationId: string,
-): string | null {
-  return cachedEmployee(`${contactId}:${conversationId}`)?.employeeId ?? null;
+// 模块级单例：Worker 进程内共享缓存（每个 agent turn preResolve 一次）。
+const api = createStrategyApi();
+
+/**
+ * Factory that creates the strategy with AI employee prompt cache support.
+ * The Agent Worker should prefer this over the static `strategy` export.
+ * The database query for AI employee prompts is done by the companion
+ * `preResolveAiEmployeePrompt` export, which populates the cache before
+ * `buildModelRequest` is called.
+ */
+export function createStrategy(_ctx?: {
+  db?: unknown;
+}): AgentExecutionStrategy {
+  return api.strategy;
 }
+
+export const preResolveAiEmployeePrompt = api.preResolveAiEmployeePrompt;
+
+export const getCachedAiEmployeeId = api.getCachedAiEmployeeId;
+
+/**
+ * Synchronous strategy (backward-compatible static export).
+ * Uses the built-in prompt only; no database access for AI employee resolution.
+ */
+export const strategy: AgentExecutionStrategy = {
+  id: "weflow.customer-support/structured-v1",
+  version: "1.0.0",
+  buildModelRequest: (input) => {
+    const knowledgeAvailable =
+      input.availableTools.includes("retrieve_knowledge");
+    const chatType = input.chatType ?? "private";
+    return {
+      system: customerSupportSystemPrompt(knowledgeAvailable, chatType),
+      messages: input.messages,
+    };
+  },
+  parseModelResponse: (input) => parseModelAction(input.text),
+  validateAction: () => ({ ok: true }),
+};

@@ -87,7 +87,8 @@ export const contactProfiles = conversationSchema.table(
     aliasUpdatedAt: timestamp("alias_updated_at", { withTimezone: true }),
     note: text("note"),
     tags: jsonb("tags").$type<string[]>().default([]).notNull(),
-    // 白名单开关：false = 该联系人不触发 Agent 对话（人工处理）；默认开启（所有用户默认白名单，ADR-0060）
+    // 自动回复开关：false = 该联系人不触发 Agent 对话（人工处理）。
+    // 黑名单制（0078 起）：默认 true，新联系人默认由 AI 接待。
     agentEnabled: boolean("agent_enabled").default(true).notNull(),
     // 定时发送开关（SCHEDULED-SEND-PLAN 决策 #3）：false = 模型提示词不提供
     // schedule_send 动作；落库侧同步兜底压制。默认关闭。
@@ -159,6 +160,15 @@ export const conversations = conversationSchema.table("conversations", {
   channelConversationId: varchar("channel_conversation_id", {
     length: 256,
   }).notNull(),
+  /**
+   * 会话类型（ADR-0010）：Channel 事实，ingest 时定一次
+   * （Host 上报 conversationKind 优先，旧 Host 缺省时按通道约定在
+   * ingest 单点回退推导）。消费方一律读本列，不从 ID 实时推导。
+   */
+  chatType: varchar("chat_type", { length: 16 })
+    .$type<"private" | "group">()
+    .default("private")
+    .notNull(),
   revision: integer("revision").default(0).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
@@ -422,6 +432,24 @@ export const sessionWakes = agentSchema.table(
 );
 
 /**
+ * 会话事实卡（私聊批）：每个会话一份持久工作状态（当前问题/已确认事实/
+ * 已尝试方案/未兑现承诺/待确认问题），由模型随决策以 facts_card 字段更新、
+ * 下回合开头注入上下文。卡是咨询性上下文（非事务事实），整个对象替换语义。
+ */
+export const conversationFacts = agentSchema.table(
+  "fact_cards",
+  {
+    conversationId: varchar("conversation_id", { length: 300 })
+      .primaryKey()
+      .references(() => conversations.conversationId),
+    card: jsonb("card").notNull().default({}),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+);
+
+/**
  * 定时发送（SCHEDULED-SEND-PLAN）：schedule_send 决策的持久化执行计划。
  * 预承诺直发家法——内容在决策时定死，到点由 dispatcher 走既有 send
  * operation 链路直发（发送时不调用模型）。到点前会话出现新入站 →
@@ -515,7 +543,7 @@ export const toolExecutions = agentSchema.table(
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
     leaseUntil: timestamp("lease_until", { withTimezone: true }),
     arguments: jsonb("arguments")
-      .$type<Record<string, string>>()
+      .$type<Record<string, unknown>>()
       .default({})
       .notNull(),
     result: jsonb("result").$type<Record<string, unknown> | null>(),
@@ -1336,6 +1364,8 @@ export const notificationDevices = notificationSchema.table(
     pushToken: varchar("push_token", { length: 300 }).notNull().unique(),
     platform: varchar("platform", { length: 20 }).notNull(),
     showPreview: boolean("show_preview").default(false).notNull(),
+    /** 订阅的通知类型（NULL/空数组 = 全部订阅，兼容旧设备行） */
+    notifyKinds: jsonb("notify_kinds").$type<string[]>(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .defaultNow()
@@ -1576,6 +1606,8 @@ export const modelRegistry = operationsSchema.table("model_registry", {
   baseUrl: text("base_url").notNull(),
   apiKey: text("api_key"),
   capabilities: jsonb("capabilities").$type<string[]>().default([]).notNull(),
+  /** asr 端点协议：chat_inline（chat/completions 内联）| audio_transcriptions（multipart） */
+  protocol: varchar("protocol", { length: 30 }).default("chat_inline").notNull(),
   timeoutMs: integer("timeout_ms").default(60_000).notNull(),
   failoverTo: varchar("failover_to", { length: 120 }),
   enabled: boolean("enabled").default(true).notNull(),

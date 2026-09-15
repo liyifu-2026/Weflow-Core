@@ -7,18 +7,14 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../../../infrastructure/postgres/schema.js";
 import { contactProfiles } from "../../../infrastructure/postgres/schema.js";
 import type { ChannelContactSource } from "../../channel/contracts/channel-contact-source.js";
-import { contactIdForChannel } from "./contact-profile-service.js";
+import {
+  CHANNEL_KIND,
+  contactIdForChannel,
+  normalizeChannelAccount,
+} from "./channel-identity.js";
 
 const PAGE_SIZE = 100;
 const MAX_CONTACTS = 10_000;
-/** 平台通道标识（与 ingest-channel-events 保持一致） */
-const CHANNEL_KIND = "channel";
-
-/** 归一化账号标识（ADR-0005）：空值回落 "default" */
-function normalizeAccount(account: string | null | undefined): string {
-  const trimmed = account?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : "default";
-}
 
 /** 从 Channel Host 分页拉取联系人资料并同步到 Contact Profile，返回同步数量。 */
 export async function syncChannelContactProfiles(
@@ -34,7 +30,7 @@ export async function syncChannelContactProfiles(
     });
     for (const contact of result.contacts) {
       const now = new Date();
-      const account = normalizeAccount(contact.account);
+      const account = normalizeChannelAccount(contact.account);
       const rows = await db
         .insert(contactProfiles)
         .values({

@@ -115,13 +115,28 @@ export type KnowledgeDocumentContent = {
   truncated: boolean;
 };
 
-type WeKnoraClientOptions = {
+export type WeKnoraClientOptions = {
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string | undefined;
   timeoutMs: number;
+  /** 显式指定认证头（设置中心连接器）；缺省用 x-api-key: apiKey。 */
+  authHeaderName?: string | undefined;
+  authHeaderValue?: string | undefined;
   knowledgeBaseIds?: string[] | undefined;
-  fetch?: typeof globalThis.fetch;
+  fetch?: typeof globalThis.fetch | undefined;
 };
+
+/** 上游请求的认证头；authHeaderName 优先，其次 x-api-key，两者皆缺省时不带认证。 */
+export function weknoraAuthHeaders(options: {
+  apiKey?: string | undefined;
+  authHeaderName?: string | undefined;
+  authHeaderValue?: string | undefined;
+}): Record<string, string> {
+  if (options.authHeaderName) {
+    return { [options.authHeaderName]: options.authHeaderValue ?? "" };
+  }
+  return options.apiKey ? { "x-api-key": options.apiKey } : {};
+}
 
 type KnowledgeBasePayload = {
   data?: unknown;
@@ -157,8 +172,25 @@ export class WeKnoraKnowledgeClient {
   private cachedKnowledgeBaseIds: string[] | undefined;
   private cacheExpiresAt = 0;
 
-  constructor(private readonly options: WeKnoraClientOptions) {
-    this.fetch = options.fetch ?? globalThis.fetch;
+  /**
+   * options 可为 undefined（尚未配置任何知识服务，env 与设置中心皆空）；
+   * 后续经 updateOptions 热更新（设置中心连接器热加载）。
+   */
+  constructor(private options: WeKnoraClientOptions | undefined) {
+    this.fetch = options?.fetch ?? globalThis.fetch;
+  }
+
+  /** 未配置时统一抛错——与 execute-tool-plan 缺能力时的错误码一致。 */
+  private requireOptions(): WeKnoraClientOptions {
+    if (!this.options) throw new Error("weknora_not_configured");
+    return this.options;
+  }
+
+  /** 热更新连接配置（设置中心保存后由 reloader 调用）；清除 KB 列表缓存。 */
+  public updateOptions(next: WeKnoraClientOptions | undefined): void {
+    this.options = next;
+    this.cachedKnowledgeBaseIds = undefined;
+    this.cacheExpiresAt = 0;
   }
 
   /**
@@ -246,13 +278,13 @@ export class WeKnoraKnowledgeClient {
   ): Promise<Response> {
     const response = await this.fetch(
       // WeKnora v0.7.1 将问答路由从 /sessions/:id/knowledge-qa 调整为 /knowledge-chat/:session_id
-      `${this.options.baseUrl}/knowledge-chat/${encodeURIComponent(sessionId)}`,
+      `${this.requireOptions().baseUrl}/knowledge-chat/${encodeURIComponent(sessionId)}`,
       {
         method: "POST",
         headers: {
           accept: "text/event-stream",
           "content-type": "application/json",
-          "x-api-key": this.options.apiKey,
+          ...weknoraAuthHeaders(this.requireOptions()),
           "x-request-id": weknoraRequestId(),
         },
         body: JSON.stringify({
@@ -347,14 +379,15 @@ export class WeKnoraKnowledgeClient {
 
   /** 通过 Core 受保护地读取 WeKnora 原文预览。 */
   async preview(knowledgeId: string): Promise<KnowledgePreview> {
+    const options = this.requireOptions();
     const response = await this.fetch(
-      `${this.options.baseUrl}/knowledge/${encodeURIComponent(knowledgeId)}/preview`,
+      `${options.baseUrl}/knowledge/${encodeURIComponent(knowledgeId)}/preview`,
       {
         headers: {
-          "x-api-key": this.options.apiKey,
+          ...weknoraAuthHeaders(options),
           "x-request-id": weknoraRequestId(),
         },
-        signal: AbortSignal.timeout(this.options.timeoutMs),
+        signal: AbortSignal.timeout(options.timeoutMs),
       },
     );
     if (!response.ok) {
@@ -373,14 +406,15 @@ export class WeKnoraKnowledgeClient {
     resourcePath: string,
   ): Promise<KnowledgePreview> {
     const query = `?file_path=${encodeURIComponent(resourcePath)}`;
+    const options = this.requireOptions();
     const response = await this.fetch(
-      `${this.options.baseUrl}/knowledge-bases/${encodeURIComponent(kbId)}/files${query}`,
+      `${options.baseUrl}/knowledge-bases/${encodeURIComponent(kbId)}/files${query}`,
       {
         headers: {
-          "x-api-key": this.options.apiKey,
+          ...weknoraAuthHeaders(options),
           "x-request-id": weknoraRequestId(),
         },
-        signal: AbortSignal.timeout(this.options.timeoutMs),
+        signal: AbortSignal.timeout(options.timeoutMs),
       },
     );
     if (!response.ok) {
@@ -561,7 +595,8 @@ export class WeKnoraKnowledgeClient {
 
   /** 获取可用知识库 ID 列表（带60秒缓存） */
   private async availableKnowledgeBaseIds(): Promise<string[]> {
-    if (this.options.knowledgeBaseIds) return this.options.knowledgeBaseIds;
+    const current = this.requireOptions();
+    if (current.knowledgeBaseIds) return current.knowledgeBaseIds;
     if (this.cachedKnowledgeBaseIds && Date.now() < this.cacheExpiresAt) {
       return this.cachedKnowledgeBaseIds;
     }
@@ -587,13 +622,16 @@ export class WeKnoraKnowledgeClient {
     path: string,
     init: RequestInit = {},
   ): Promise<unknown> {
+    const options = this.requireOptions();
     const headers = new Headers(init.headers);
-    headers.set("x-api-key", this.options.apiKey);
+    for (const [name, value] of Object.entries(weknoraAuthHeaders(options))) {
+      headers.set(name, value);
+    }
     headers.set("x-request-id", weknoraRequestId());
-    const response = await this.fetch(`${this.options.baseUrl}${path}`, {
+    const response = await this.fetch(`${options.baseUrl}${path}`, {
       ...init,
       headers,
-      signal: AbortSignal.timeout(this.options.timeoutMs),
+      signal: AbortSignal.timeout(options.timeoutMs),
     });
     const body = await response.text();
     if (!response.ok) {

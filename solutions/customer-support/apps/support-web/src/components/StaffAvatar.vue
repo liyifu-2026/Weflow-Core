@@ -7,14 +7,16 @@
  * 2. 平台预设头像（DiceBear Blobs，GET /api/v1/users/avatar-presets），
  *    按显示名哈希稳定分配 —— 与 Core identity/application/avatar-presets 同源同算法。
  * 3. 预设清单不可用时降级为首字母占位。
+ * 拉取生命周期来自 useAuthenticatedBlob（工作台媒体组件共用）。
  */
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import {
   loadUserAvatarPresets,
   presetImageUrl,
   presetIndexForSeed,
   type UserAvatarPreset,
 } from "../user-avatar-presets";
+import { useAuthenticatedBlob } from "../composables/use-authenticated-blob";
 
 const props = withDefaults(
   defineProps<{
@@ -23,13 +25,20 @@ const props = withDefaults(
     size?: number;
     /** 直接传入已知的头像相对路径（如 auth.me.avatarUrl），有值时优先用 <img src> 加载 */
     avatarUrl?: string | null;
+    /** 预设占位头像的哈希种子；缺省用 fallbackText。展示其他客服时传其 userId，
+     *  让加载期/取图失败时的占位预设也按人区分 */
+    seed?: string | null;
   }>(),
-  { size: 30, avatarUrl: null },
+  { size: 30, avatarUrl: null, seed: null },
 );
 
-const state = ref<"loading" | "ready" | "failed">("loading");
-const objectUrl = ref("");
-let blobUrl: string | null = null;
+const { status: state, objectUrl, load } = useAuthenticatedBlob({
+  url: () =>
+    props.avatarUrl ||
+    (props.userId
+      ? `/api/v1/users/${encodeURIComponent(props.userId)}/avatar`
+      : null),
+});
 
 const presets = ref<UserAvatarPreset[]>([]);
 
@@ -45,7 +54,7 @@ onMounted(() => {
 
 const preset = computed(() => {
   if (!presets.value.length) return undefined;
-  const seed = props.fallbackText || "W";
+  const seed = props.seed || props.fallbackText || "W";
   return presets.value[presetIndexForSeed(seed, presets.value.length)];
 });
 
@@ -58,34 +67,10 @@ const fallbackLetter = computed(() =>
   (props.fallbackText || "W").trim().slice(0, 1).toUpperCase(),
 );
 
-async function load() {
-  // 如果有 avatarUrl 相对路径，直接用 <img> 加载（走 authenticated fetch 拿 blob）
-  const target = props.avatarUrl || (props.userId ? `/api/v1/users/${encodeURIComponent(props.userId)}/avatar` : null);
-  if (!target) {
-    state.value = "failed";
-    return;
-  }
-  state.value = "loading";
-  try {
-    const response = await fetch(target, { credentials: "include" });
-    if (!response.ok) throw new Error(`avatar ${response.status}`);
-    const blob = await response.blob();
-    blobUrl = URL.createObjectURL(blob);
-    objectUrl.value = blobUrl;
-    state.value = "ready";
-  } catch {
-    state.value = "failed";
-  }
-}
-
-onMounted(load);
 watch(
   () => [props.userId, props.avatarUrl] as const,
-  load,
+  () => void load(),
 );
-onUnmounted(() => {
-  if (blobUrl) URL.revokeObjectURL(blobUrl);
-});
 </script>
 
 <template>

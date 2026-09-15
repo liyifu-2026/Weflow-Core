@@ -8,6 +8,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
+import { UploadTypeBlockedError } from "../../../infrastructure/file_storage/upload-policy.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 import {
   ASSET_CATEGORY_VALUES,
@@ -62,6 +63,9 @@ export function registerAssetRoutes(
       });
       return await reply.code(201).send({ asset: result.projection });
     } catch (error) {
+      if (error instanceof UploadTypeBlockedError) {
+        return reply.code(415).send({ error: "upload_type_blocked" });
+      }
       return reply.code(500).send({
         error: "asset_upload_failed",
         message: error instanceof Error ? error.message : String(error),

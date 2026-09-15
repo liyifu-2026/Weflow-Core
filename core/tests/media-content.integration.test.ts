@@ -1,7 +1,8 @@
 /**
  * 媒体内容端点集成测试
  * 验证：failed 但文件存在 → 出图；queued（未就绪）→ 404 media_not_ready；
- * 文件记录存在但磁盘缺失 → 404 media_not_found；响应头 no-store。
+ * 文件记录存在但磁盘缺失 → 404 media_not_found；响应头带 ETag/Content-Length
+ * 且可用 If-None-Match 重验（304）。
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -199,8 +200,39 @@ integration("media content endpoint", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("image/jpeg");
-    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.headers["cache-control"]).toBe("private, no-cache");
+    expect(response.headers["etag"]).toBeTruthy();
+    expect(Number(response.headers["content-length"])).toBeGreaterThan(0);
     expect(response.body).toContain("fake-image");
+  });
+
+  it("streams an image while vision processing is still queued (落盘即可见)", async () => {
+    const mediaId = await seedMedia("processing_queued", true);
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/v1/media/${encodeURIComponent(mediaId)}/content`,
+      headers: { cookie },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("fake-image");
+  });
+
+  it("returns 304 when If-None-Match matches the content ETag", async () => {
+    const mediaId = await seedMedia("ready", true);
+    const first = await server.inject({
+      method: "GET",
+      url: `/api/v1/media/${encodeURIComponent(mediaId)}/content`,
+      headers: { cookie },
+    });
+    expect(first.statusCode).toBe(200);
+    const etag = first.headers["etag"] as string;
+    const revalidated = await server.inject({
+      method: "GET",
+      url: `/api/v1/media/${encodeURIComponent(mediaId)}/content`,
+      headers: { cookie, "if-none-match": etag },
+    });
+    expect(revalidated.statusCode).toBe(304);
+    expect(revalidated.body).toBe("");
   });
 
   it("streams the file for a ready asset", async () => {
@@ -290,7 +322,7 @@ integration("media content endpoint", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("image/jpeg");
-    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.headers["cache-control"]).toBe("private, no-cache");
     expect(response.body).toContain("fake-original");
   });
 

@@ -31,7 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   readPipelineSettings,
-  writePipelineSettings,
+  writePipelineSettingsSection,
 } from "./common";
 
 const router = useRouter();
@@ -80,7 +80,7 @@ const GROUP_MODE_OPTIONS: Array<{
 ];
 
 const ENTRY_LINKS: Array<{ label: string; desc: string; to: string }> = [
-  { label: "联系人白名单", desc: "逐联系人启用/停用 AI（管理页内）", to: "/admin" },
+  { label: "联系人策略", desc: "逐联系人设置自动回复 / 仅人工 / 拉黑（管理页内）", to: "/admin" },
   { label: "审计日志", desc: "设置变更 / Handoff / 运营操作", to: "/system/audit" },
   { label: "用户与角色", desc: "账号与权限管理", to: "/system/users" },
 ];
@@ -185,10 +185,8 @@ async function save() {
   notice.value = "";
   error.value = "";
   try {
-    await writePipelineSettings({
-      ...rawSettings.value,
-      groupChat: { ...config.value },
-    });
+    // 保存前重读整行再合并，避免覆盖其他分区刚保存的内容。
+    await writePipelineSettingsSection("groupChat", { ...config.value });
     notice.value = "已保存；30 秒内生效（无需重启）";
     emit("saved");
   } catch (reason) {

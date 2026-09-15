@@ -3,7 +3,7 @@
  * 全部无副作用、无 DB 之外的依赖，独立单测。
  */
 
-import { and, eq, gt, ne, or } from "drizzle-orm";
+import { and, eq, gt, inArray, ne, or } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { AgentTurnExecutionStatus } from "./agent-turn-executor.js";
@@ -21,10 +21,9 @@ export function isTerminal(status: string): boolean {
   ].includes(status);
 }
 
-/** 根据 conversationId 检测会话类型：以 @chatroom 结尾为群聊 */
-export function detectChatType(conversationId: string): "private" | "group" {
-  return conversationId.endsWith("@chatroom") ? "group" : "private";
-}
+// 会话类型判定（原 detectChatType）已随 ADR-0010 删除：chatType 是
+// conversations.chat_type 落库事实，后缀回退推导仅存于
+// conversations/application/chat-type.ts（ingest 单点 + 读取兜底）。
 
 /** 未知状态统一规范为 unknown（向前兼容 host/worker 状态扩展） */
 export function normalizeStatus(status: string): AgentTurnExecutionStatus {
@@ -52,17 +51,21 @@ export function classifyError(error: unknown): string {
 }
 
 /**
- * 检查是否存在比当前轮次更新的 Agent 轮次
- * 基于触发消息的发送时间和消息 ID 排序判断
+ * 查找比当前轮次更新、仍在执行（queued/tool_planned/running）的轮次 ID。
+ * 吸收式回合用：把这些轮标记为 absorbed（superseded + 原因码）后，
+ * 当前回合以新鲜上下文重决策——插话被编织进当前 episode，而非打断重启。
+ * 只统计仍在执行的轮次：已被合并/取代的终态轮次不再算数——否则合并窗口
+ * 留下的幸存者可能被一个"更新的死轮次"处决，导致同会话双双 superseded、
+ * 客户收不到任何回复（2026-09-06 实测）。
  */
-export async function hasNewerAgentTurn(
+export async function findNewerActiveTurnIds(
   db: Database,
   turn: {
     turnId: string;
     conversationId: string;
     triggerMessageId: string;
   },
-): Promise<boolean> {
+): Promise<string[]> {
   const [trigger] = await db
     .select({
       messageId: schema.messages.messageId,
@@ -71,7 +74,7 @@ export async function hasNewerAgentTurn(
     .from(schema.messages)
     .where(eq(schema.messages.messageId, turn.triggerMessageId))
     .limit(1);
-  if (!trigger) return false;
+  if (!trigger) return [];
   const newer = await db
     .select({ turnId: schema.agentTurns.turnId })
     .from(schema.agentTurns)
@@ -83,6 +86,11 @@ export async function hasNewerAgentTurn(
       and(
         eq(schema.agentTurns.conversationId, turn.conversationId),
         ne(schema.agentTurns.turnId, turn.turnId),
+        inArray(schema.agentTurns.status, [
+          "queued",
+          "running",
+          "tool_planned",
+        ]),
         or(
           gt(schema.messages.occurredAt, trigger.occurredAt),
           and(
@@ -92,8 +100,8 @@ export async function hasNewerAgentTurn(
         ),
       ),
     )
-    .limit(1);
-  return newer.length > 0;
+    .limit(10);
+  return newer.map((row) => row.turnId);
 }
 
 /** 根据轮次 ID 查询所属会话 ID */

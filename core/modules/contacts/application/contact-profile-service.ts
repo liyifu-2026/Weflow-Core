@@ -5,13 +5,14 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import {
   cancelPendingScheduledSendsForConversation,
 } from "../../agent/application/scheduled-sends.js";
 import { AgentTurnService } from "../../agent/application/agent-turn-service.js";
+import { cancelPendingAgentOutbound } from "../../conversations/application/send-states.js";
 
 /** 联系人资料可更新字段 */
 export type ContactProfilePatch = {
@@ -26,20 +27,10 @@ export type ContactProfilePatch = {
 };
 
 /**
- * 根据渠道、账号和渠道联系人ID生成确定性联系人ID（ADR-0005 多账号隔离）。
- * default 账号保持旧格式（contact:channel:<ref>），兼容存量数据不回写；
- * 非 default 账号携带 account 段（contact:channel:<account>:<ref>）实现隔离。
+ * 联系人 ID 派生已收敛至 channel-identity（唯一权威）；此处按原路径
+ * re-export，既有消费方（ingest / 联系人同步 / 测试）不受影响。
  */
-export function contactIdForChannel(
-  channel: string,
-  channelContactId: string,
-  account?: string | null,
-): string {
-  const acc = account && account.trim() ? account.trim() : "default";
-  return acc === "default"
-    ? `contact:${channel}:${channelContactId}`
-    : `contact:${channel}:${acc}:${channelContactId}`;
-}
+export { contactIdForChannel } from "./channel-identity.js";
 
 /** 通过会话ID查询关联的联系人资料 */
 export async function getConversationContactProfile(
@@ -136,20 +127,11 @@ export async function updateConversationContactProfile(
         input.conversationId,
         input.patch.blocked === true ? "contact_blocked" : "agent_disabled",
       );
-      await transaction
-        .update(schema.messages)
-        .set({
-          sendState: "cancelled_policy",
-          sendError: input.patch.blocked === true ? "contact_blocked" : "agent_disabled",
-          sendUpdatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(schema.messages.conversationId, input.conversationId),
-            eq(schema.messages.actorType, "agent"),
-            eq(schema.messages.sendState, "pending"),
-          ),
-        );
+      await cancelPendingAgentOutbound(
+        transaction,
+        input.conversationId,
+        input.patch.blocked === true ? "contact_blocked" : "agent_disabled",
+      );
     }
 
     await transaction.insert(schema.auditEvents).values({

@@ -17,12 +17,7 @@
     "skipLibCheck": true,
     "outDir": "dist",
     "types": ["node"],
-    "typeRoots": ["../../core/node_modules/@types", "../../node_modules/@types"],
-    "baseUrl": ".",
-    "paths": {
-      "@weflow-leaif/solution-sdk": ["../../packages/solution-sdk/dist/index.d.ts"],
-      "@weflow/admin-sdk": ["../../packages/admin-sdk/dist/index.d.ts"]
-    }
+    "typeRoots": ["../../core/node_modules/@types", "../../node_modules/@types"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"]

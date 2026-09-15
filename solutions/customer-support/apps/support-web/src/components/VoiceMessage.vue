@@ -7,18 +7,18 @@
  * loadedmetadata). Transcription text is fetched from the media metadata.
  * audio/silk (converter unavailable upstream) renders an unplayable
  * placeholder; the transcription still displays if available.
+ * 拉取生命周期来自 useAuthenticatedBlob：audio/silk 用 onResponse 门控
+ * 自行处置；Audio 装配与 MP3 时长估算走 onBlob 回调。
  */
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Pause, Play } from "lucide-vue-next";
+import { useAuthenticatedBlob } from "../composables/use-authenticated-blob";
 
 const props = defineProps<{ mediaId: string; alt?: string }>();
 
-const state = ref<"loading" | "ready" | "failed" | "silk">("loading");
 const playing = ref(false);
 const durationSeconds = ref<number | null>(null);
 const transcription = ref("");
-const objectUrl = ref("");
-let blobUrl: string | null = null;
 let audio: HTMLAudioElement | null = null;
 
 /** MP3 时长估算：跳过 ID3v2 后找第一个 MPEG1 Layer III 帧头，按比特率估算 */
@@ -60,59 +60,64 @@ async function estimateMp3Seconds(blob: Blob): Promise<number | null> {
   }
 }
 
-async function load() {
-  state.value = "loading";
-  try {
-    const response = await fetch(
-      `/api/v1/media/${encodeURIComponent(props.mediaId)}/content`,
-      { credentials: "include" },
-    );
-    if (!response.ok) throw new Error(`media ${response.status}`);
+const silk = ref(false);
+const blobLifecycle = useAuthenticatedBlob({
+  url: () => `/api/v1/media/${encodeURIComponent(props.mediaId)}/content`,
+  onResponse: (response) => {
     if ((response.headers.get("content-type") ?? "").includes("audio/silk")) {
-      state.value = "silk";
-    } else {
-      const blob = await response.blob();
-      blobUrl = URL.createObjectURL(blob);
-      objectUrl.value = blobUrl;
-      audio = new Audio(blobUrl);
-      audio.preload = "metadata";
-      const syncDuration = () => {
-        if (audio && Number.isFinite(audio.duration) && audio.duration > 0) {
-          durationSeconds.value = audio.duration;
-        }
-      };
-      audio.addEventListener("loadedmetadata", syncDuration);
-      audio.addEventListener("durationchange", syncDuration);
-      audio.addEventListener("play", () => {
-        playing.value = true;
-      });
-      audio.addEventListener("pause", () => {
-        playing.value = false;
-      });
-      audio.addEventListener("ended", () => {
-        playing.value = false;
-      });
-      audio.load();
-      durationSeconds.value = await estimateMp3Seconds(blob);
-      state.value = "ready";
+      silk.value = true;
+      return true;
     }
-  } catch {
-    state.value = "failed";
-  }
-  // 转写文字（语音气泡下方展示；失败不影响播放）
-  try {
-    const meta = await fetch(
-      `/api/v1/media/${encodeURIComponent(props.mediaId)}`,
-      { credentials: "include" },
-    );
-    if (meta.ok) {
-      const data = (await meta.json()) as { media?: { description?: string } };
-      transcription.value = data.media?.description ?? "";
+    return false;
+  },
+  onBlob: (blob) => {
+    audio = new Audio(blobLifecycle.objectUrl.value);
+    audio.preload = "metadata";
+    const syncDuration = () => {
+      if (audio && Number.isFinite(audio.duration) && audio.duration > 0) {
+        durationSeconds.value = audio.duration;
+      }
+    };
+    audio.addEventListener("loadedmetadata", syncDuration);
+    audio.addEventListener("durationchange", syncDuration);
+    audio.addEventListener("play", () => {
+      playing.value = true;
+    });
+    audio.addEventListener("pause", () => {
+      playing.value = false;
+    });
+    audio.addEventListener("ended", () => {
+      playing.value = false;
+    });
+    audio.load();
+    void estimateMp3Seconds(blob).then((seconds) => {
+      durationSeconds.value = seconds;
+    });
+  },
+});
+// 组件展示态在通用 loading/ready/failed 之上多一个 silk（不可播放占位）
+const state = computed(() =>
+  silk.value ? ("silk" as const) : blobLifecycle.status.value,
+);
+const objectUrl = blobLifecycle.objectUrl;
+
+// 转写文字（语音气泡下方展示；失败不影响播放）
+onMounted(() => {
+  void (async () => {
+    try {
+      const meta = await fetch(
+        `/api/v1/media/${encodeURIComponent(props.mediaId)}`,
+        { credentials: "include" },
+      );
+      if (meta.ok) {
+        const data = (await meta.json()) as { media?: { description?: string } };
+        transcription.value = data.media?.description ?? "";
+      }
+    } catch {
+      /* 转写文字缺失不阻塞气泡 */
     }
-  } catch {
-    /* 转写文字缺失不阻塞气泡 */
-  }
-}
+  })();
+});
 
 function togglePlay() {
   if (!audio) return;
@@ -126,10 +131,8 @@ const durationLabel = computed(() =>
     : `${Math.max(1, Math.round(durationSeconds.value))}″`,
 );
 
-onMounted(load);
 onUnmounted(() => {
   audio?.pause();
-  if (blobUrl) URL.revokeObjectURL(blobUrl);
 });
 </script>
 

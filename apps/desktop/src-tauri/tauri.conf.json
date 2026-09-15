@@ -7,15 +7,7 @@
     "frontendDist": "./ui"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Weflow",
-        "width": 1440,
-        "height": 900,
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

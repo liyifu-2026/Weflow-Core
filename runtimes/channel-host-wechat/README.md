@@ -1,5 +1,8 @@
 [**English**](README.md) | [**中文**](README.zh-CN.md)
 
+> NOTE: This English README may lag behind the current library version;
+> [README.zh-CN.md](README.zh-CN.md) is the authoritative document.
+
 # wechatauto-replica — WeChat 4.x Windows Automation (wxauto-compatible)
 
 ![PyPI version](https://img.shields.io/pypi/v/wechatauto-replica)

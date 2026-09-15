@@ -10,7 +10,7 @@
   ```
 - `core` 提供 `core-api`、`agent-worker`、`ingestion-worker` 三个进程。
 - Channel Host 是平台级通道入口适配层，不由 Core 隐式启动；本仓库的参考实现位于 `runtimes/channel-host-wechat`（Python/微信本地自动化），生产环境可按同一契约部署外部适配器。
-- 产品网页端 support-web 由 Solution Pack 发布（R1 收敛后为唯一前端）；`apps/console` 平台壳退役，不再发布。
+- 产品网页端 support-web 构建产物由 Core API 静态托管（R1 收敛后为唯一前端）；`apps/console` 平台壳退役，不再发布。
 - ZhiNanKB/WeKnora 作为外部 Provider 部署，不被复制到本仓库。
 - 部署监控脚本（watchdog/backup）属私有运维资产，不随仓库发布。
 

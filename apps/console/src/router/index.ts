@@ -4,7 +4,7 @@ import { useWeflowAuthStore } from "@/weflow/auth-store";
 /**
  * Console 平台壳路由（R1 收敛后）。
  *
- * 业务 UI 已全部收敛到 support-web 产品本体（weflow-solutions 仓库），
+ * 业务 UI 已全部收敛到 support-web 产品本体（本仓 solutions/ 子目录），
  * Console 不再承载 ExtensionHost / consoleExtensions。这里只保留平台级
  * 路由；业务扩展相关路由（/extensions/:solutionId/:extensionId 与
  * catch-all）已删除。

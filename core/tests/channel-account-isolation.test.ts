@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { contactIdForChannel } from "../modules/contacts/application/contact-profile-service.js";
-import { normalizeAccount } from "../modules/conversations/application/ingest-channel-events.js";
+import { normalizeChannelAccount } from "../modules/contacts/application/channel-identity.js";
 import type { ChannelEvent } from "../modules/channel/contracts/channel-event-source.js";
 
 describe("ADR-0005 多微信账号隔离", () => {
   it("normalizeAccount 空值回落 default", () => {
-    expect(normalizeAccount(undefined)).toBe("default");
-    expect(normalizeAccount(null)).toBe("default");
-    expect(normalizeAccount("")).toBe("default");
-    expect(normalizeAccount("   ")).toBe("default");
-    expect(normalizeAccount("wx_account_a")).toBe("wx_account_a");
-    expect(normalizeAccount("  wx_b  ")).toBe("wx_b");
+    expect(normalizeChannelAccount(undefined)).toBe("default");
+    expect(normalizeChannelAccount(null)).toBe("default");
+    expect(normalizeChannelAccount("")).toBe("default");
+    expect(normalizeChannelAccount("   ")).toBe("default");
+    expect(normalizeChannelAccount("wx_account_a")).toBe("wx_account_a");
+    expect(normalizeChannelAccount("  wx_b  ")).toBe("wx_b");
   });
 
   it("contactIdForChannel 相同 wxid 不同账号派生不同 contactId", () => {

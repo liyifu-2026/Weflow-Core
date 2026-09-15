@@ -7,13 +7,12 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist",
-    "prompts.json"
+    "dist"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "test": "tsc -p tsconfig.build.json --noEmit"
+    "test": "tsc -p tsconfig.build.json && node --test"
   },
   "dependencies": {
     "@weflow-leaif/contracts": "^1.0.0"

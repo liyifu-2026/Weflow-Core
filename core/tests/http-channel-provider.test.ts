@@ -208,7 +208,7 @@ describe("HttpChannelProvider file media", () => {
 describe("HttpChannelProvider protocol reconciliation", () => {
   // 协议 v5：出站移除受限 voice 转发（recall 保留）
   const matchingCapabilities = {
-    protocolVersion: 5,
+    protocolVersion: 6,
     sendOperationStates: ["pending", "executing", "confirmed", "unknown", "failed"],
     sendKinds: ["text", "file", "image", "reply", "mention", "poke", "recall"],
   };
@@ -227,7 +227,7 @@ describe("HttpChannelProvider protocol reconciliation", () => {
       Response.json({ ...matchingCapabilities, protocolVersion: 99 }),
     );
     await expect(provider.ensureProtocol()).rejects.toThrow(
-      /channel_protocol_mismatch: protocol mismatch: protocolVersion 99 != 5/,
+      /channel_protocol_mismatch: protocol mismatch: protocolVersion 99 != 6/,
     );
     expect(provider.protocolStatus().ok).toBe(false);
   });

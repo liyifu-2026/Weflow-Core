@@ -36,8 +36,6 @@ const steps = [
   ["packages/contracts", ["test"]],
   ["packages/plugin-sdk", ["build"]],
   ["packages/plugin-sdk", ["test"]],
-  ["packages/admin-sdk", ["build"]],
-  ["packages/admin-sdk", ["test"]],
   ["packages/ui", ["build"]],
   ["packages/ui", ["test"]],
   // Platform apps.

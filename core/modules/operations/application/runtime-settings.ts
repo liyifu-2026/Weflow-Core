@@ -19,15 +19,12 @@ import * as schema from "../../../infrastructure/postgres/schema.js";
 
 const DEFAULT_LOGGER = pino({ level: "silent" });
 
-/** 服务端允许模型注册表：UI 只能选择这里列出的模型 */
-export const TEXT_MODEL_ALLOWLIST = [
-  "deepseek-v4-flash",
-  "deepseek-v4-pro",
-] as const;
-
-export const VISION_MODEL_ALLOWLIST = ["mimo-v2.5", "deepseek-v4-flash-vision-exp"] as const;
-
-/** 运行时设置的类型化结构（业务代码只允许通过它访问） */
+/**
+ * 运行时设置的类型化结构（业务代码只允许通过它访问）。
+ * 模型选择不在此处（配置收敛）：text/vision/asr 槽位（model_slot_* →
+ * 模型注册表）是唯一事实源，见 model-gateway 的槽位解析；本结构只承载
+ * 行为开关。
+ */
 export type RuntimeSettings = {
   agentEnabled: boolean;
   autoSendEnabled: boolean;
@@ -36,11 +33,14 @@ export type RuntimeSettings = {
   visionEnabled: boolean;
   /** 合并窗口：ON 时入站消息先进窗合并、到期才建 Agent Turn（Phase 1） */
   mergeWindowEnabled: boolean;
-  textModel: (typeof TEXT_MODEL_ALLOWLIST)[number];
-  visionModel: (typeof VISION_MODEL_ALLOWLIST)[number];
+  /**
+   * 发送期插话闸门：ON 时出站循环发送 agent 回复分段的每一步前检查
+   * 批次落库后的新入站，命中则扣留（held）剩余分段。发送边界安全开关。
+   */
+  outboundInterjectGateEnabled: boolean;
 };
 
-/** 明确默认值（配置缺失/非法时 fail-safe 回退目标） */
+/** 明确默认值（配置缺失/非法时 fail-safe 回退目标；出厂全开，合并窗口除外） */
 export const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   agentEnabled: true,
   autoSendEnabled: true,
@@ -48,8 +48,10 @@ export const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   memoryEnabled: true,
   visionEnabled: true,
   mergeWindowEnabled: false,
-  textModel: "deepseek-v4-flash",
-  visionModel: "mimo-v2.5",
+  // 发送期插话闸门出厂即开（2026-09-09 拍板）：未配置该键的部署/测试
+  // 直接获得「发送途中客户插话 → 扣留剩余分段」的应变能力；需要旧盲发
+  // 行为时显式置 false。
+  outboundInterjectGateEnabled: true,
 };
 
 /** 字段 → DB key 映射 */
@@ -60,8 +62,7 @@ const FIELD_TO_KEY: Record<keyof RuntimeSettings, string> = {
   memoryEnabled: "memory_enabled",
   visionEnabled: "vision_enabled",
   mergeWindowEnabled: "merge_window_enabled",
-  textModel: "text_model",
-  visionModel: "vision_model",
+  outboundInterjectGateEnabled: "outbound_interject_gate_enabled",
 };
 
 const KEY_TO_FIELD: Record<string, keyof RuntimeSettings> = Object.fromEntries(
@@ -78,6 +79,7 @@ const BOOLEAN_FIELDS = new Set<keyof RuntimeSettings>([
   "memoryEnabled",
   "visionEnabled",
   "mergeWindowEnabled",
+  "outboundInterjectGateEnabled",
 ]);
 
 /** 普通配置缓存（安全关键路径一律 fresh 读，不经过此缓存） */
@@ -99,16 +101,6 @@ function parseField(
     if (raw === "true") return true;
     if (raw === "false") return false;
     return undefined;
-  }
-  if (field === "textModel") {
-    return (TEXT_MODEL_ALLOWLIST as readonly string[]).includes(raw)
-      ? raw
-      : undefined;
-  }
-  if (field === "visionModel") {
-    return (VISION_MODEL_ALLOWLIST as readonly string[]).includes(raw)
-      ? raw
-      : undefined;
   }
   return undefined;
 }
@@ -429,7 +421,6 @@ export async function readRuntimeSettingsAudit(
 
 export type RuntimeConsoleResponse = {
   settings: RuntimeSettings;
-  allowlists: { text: readonly string[]; vision: readonly string[] };
   status: OperatorStatus;
   audit: AuditEvent[];
 };
@@ -444,10 +435,6 @@ export async function buildRuntimeConsole(
   ]);
   return {
     settings,
-    allowlists: {
-      text: TEXT_MODEL_ALLOWLIST,
-      vision: VISION_MODEL_ALLOWLIST,
-    },
     status,
     audit,
   };

@@ -6,47 +6,38 @@
  * The object URL is revoked on unmount; the full-screen overlay is a single
  * layer (never nested inside drawers). A 404/403 renders a friendly fallback
  * instead of guessing from text.
+ * 缩略图拉取生命周期来自 useAuthenticatedBlob；全屏原图是惰性的第二路
+ * 拉取（打开时才请求），失败降级为已加载的缩略图。
  */
-import { onMounted, onUnmounted, ref } from "vue";
+import { onUnmounted, ref } from "vue";
 import { X } from "lucide-vue-next";
+import {
+  cachedAuthenticatedBlob,
+  useAuthenticatedBlob,
+} from "../composables/use-authenticated-blob";
 
 const props = defineProps<{ mediaId: string; alt?: string }>();
 
-const state = ref<"loading" | "ready" | "failed">("loading");
-const objectUrl = ref("");
+const {
+  status: state,
+  objectUrl,
+  load: reload,
+} = useAuthenticatedBlob({
+  url: () => `/api/v1/media/${encodeURIComponent(props.mediaId)}/content`,
+});
+
 const fullscreen = ref(false);
 const fullscreenUrl = ref("");
-let blobUrl: string | null = null;
 let fullscreenBlobUrl: string | null = null;
-
-async function load() {
-  state.value = "loading";
-  try {
-    const response = await fetch(
-      `/api/v1/media/${encodeURIComponent(props.mediaId)}/content`,
-      { credentials: "include" },
-    );
-    if (!response.ok) throw new Error(`media ${response.status}`);
-    const blob = await response.blob();
-    blobUrl = URL.createObjectURL(blob);
-    objectUrl.value = blobUrl;
-    state.value = "ready";
-  } catch {
-    state.value = "failed";
-  }
-}
 
 /** 全屏打开时优先加载原图（高清），失败降级为已加载的缩略图 */
 async function openFullscreen() {
   fullscreen.value = true;
   if (fullscreenUrl.value) return;
   try {
-    const response = await fetch(
+    const blob = await cachedAuthenticatedBlob(
       `/api/v1/media/${encodeURIComponent(props.mediaId)}/content/original`,
-      { credentials: "include" },
     );
-    if (!response.ok) throw new Error(`original ${response.status}`);
-    const blob = await response.blob();
     fullscreenBlobUrl = URL.createObjectURL(blob);
     fullscreenUrl.value = fullscreenBlobUrl;
   } catch {
@@ -54,10 +45,8 @@ async function openFullscreen() {
   }
 }
 
-onMounted(load);
 onUnmounted(() => {
-  if (blobUrl) URL.revokeObjectURL(blobUrl);
-  if (fullscreenBlobUrl && fullscreenBlobUrl !== blobUrl)
+  if (fullscreenBlobUrl && fullscreenBlobUrl !== objectUrl.value)
     URL.revokeObjectURL(fullscreenBlobUrl);
 });
 </script>
@@ -72,9 +61,16 @@ onUnmounted(() => {
     </span>
     <span
       v-else-if="state === 'failed'"
-      class="inline-flex items-center rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground"
+      class="inline-flex items-center gap-2 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground"
     >
       图片暂时无法加载
+      <button
+        type="button"
+        class="text-xs font-medium text-primary underline underline-offset-2"
+        @click="reload()"
+      >
+        重试
+      </button>
     </span>
     <button
       v-else
@@ -87,6 +83,8 @@ onUnmounted(() => {
         :src="objectUrl"
         :alt="alt || '客户发送的图片'"
         class="block max-h-48 max-w-60 rounded-md border border-border bg-muted object-cover"
+        loading="lazy"
+        decoding="async"
       />
     </button>
   </span>

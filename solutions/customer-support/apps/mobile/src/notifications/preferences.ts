@@ -52,3 +52,57 @@ async function preferenceKey(accountId: string): Promise<string> {
   );
   return `${KEY_PREFIX}${digest}`;
 }
+
+/** 服务端支持的通知类型（与 Core outbox kind 同源） */
+export const ALL_NOTIFY_KINDS = [
+  "handoff_pending",
+  "handoff_assigned",
+  "assignee_inbound",
+] as const;
+
+export type NotifyKind = (typeof ALL_NOTIFY_KINDS)[number];
+
+const KINDS_KEY_PREFIX = "weflow.mobile.notify-kinds.";
+
+/**
+ * 读取本账号的通知类型订阅；undefined = 未配置（服务端默认全部订阅）。
+ * 存储数据非法时同样视为未配置，回退服务端默认。
+ */
+export async function loadNotifyKinds(
+  accountId: string,
+): Promise<NotifyKind[] | undefined> {
+  try {
+    const digest = await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      accountId,
+    );
+    const value = await sensitiveStorage.getItemAsync(`${KINDS_KEY_PREFIX}${digest}`);
+    if (!value) return undefined;
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return undefined;
+    const kinds = parsed.filter((kind): kind is NotifyKind =>
+      (ALL_NOTIFY_KINDS as readonly string[]).includes(kind as string),
+    );
+    return kinds.length > 0 ? kinds : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 保存本账号的通知类型订阅（空数组按未配置处理，回退全部订阅） */
+export async function saveNotifyKinds(
+  accountId: string,
+  kinds: NotifyKind[],
+): Promise<void> {
+  const digest = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    accountId,
+  );
+  const value = kinds.length > 0 ? JSON.stringify(kinds) : null;
+  const key = `${KINDS_KEY_PREFIX}${digest}`;
+  if (value === null) {
+    await sensitiveStorage.deleteItemAsync(key);
+    return;
+  }
+  await sensitiveStorage.setItemAsync(key, value);
+}

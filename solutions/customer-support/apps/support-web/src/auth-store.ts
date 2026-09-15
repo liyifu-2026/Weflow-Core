@@ -8,6 +8,7 @@ export type WeflowUser = {
   role: "admin" | "operator";
   mustChangePassword: boolean;
   avatarUrl?: string | null;
+  avatarPreset?: string | null;
   displayName?: string | null;
   tags?: string[];
 };
@@ -87,9 +88,31 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
       body: form,
     });
     if (user.value) {
-      user.value = { ...user.value, avatarUrl: result.avatarUrl };
+      user.value = { ...user.value, avatarUrl: result.avatarUrl, avatarPreset: null };
     }
     return result.avatarUrl;
+  }
+
+  /** 更新个人资料（显示名；null = 清除回落为用户名），返回更新后的用户 */
+  async function updateProfile(input: {
+    displayName?: string | null;
+  }): Promise<WeflowUser> {
+    const result = await api<{ user: WeflowUser }>("/api/v1/auth/me", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+    user.value = result.user;
+    return result.user;
+  }
+
+  /** 选择预设头像（null = 恢复默认），返回更新后的用户 */
+  async function selectAvatarPreset(preset: string | null): Promise<WeflowUser> {
+    const result = await api<{ user: WeflowUser }>("/api/v1/auth/avatar", {
+      method: "PATCH",
+      body: JSON.stringify({ preset }),
+    });
+    user.value = result.user;
+    return result.user;
   }
 
   return {
@@ -103,5 +126,7 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
     changePassword,
     fetchTagVocabulary,
     uploadAvatar,
+    updateProfile,
+    selectAvatarPreset,
   };
 });

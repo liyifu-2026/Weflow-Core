@@ -20,6 +20,7 @@ import * as schema from "../infrastructure/postgres/schema.js";
 import { OpenAiCompatibleClient } from "../infrastructure/model_runtime/openai-compatible-client.js";
 import type { ChannelSendOperations } from "../modules/channel/contracts/channel-send-operations.js";
 import { ingestChannelEvents } from "../modules/conversations/application/ingest-channel-events.js";
+import { processTurnAdmissions } from "../modules/conversations/application/process-turn-admissions.js";
 import { AgentTurnExecutor } from "../modules/agent/application/agent-turn-executor.js";
 import { processOutboundMessages } from "../modules/conversations/application/process-outbound-messages.js";
 import { updateRuntimeSettings } from "../modules/operations/application/runtime-settings.js";
@@ -51,6 +52,10 @@ function replyDecision(): Record<string, unknown> {
   return {
     reply_text: "好的，收到。",
     next_action: "reply",
+    // wait_ms = 说完交权：本决策直接落 outcome（auto_send 闸门所在路径）。
+    // 真 ReAct 续步（R3）落地后，不带 wait_ms 的裸 reply 会先走 step，
+    // 不经过 auto_send 检查。
+    wait_ms: 60_000,
     requires_human: false,
     risk_level: "low",
   };
@@ -69,6 +74,9 @@ integration("AI Kill Switch 双层闸门与 Agent 总开关", () => {
   afterAll(async () => {
     try {
       for (const { conversationId, contactId } of created) {
+        await postgres.db
+          .delete(schema.agentSessions)
+          .where(eq(schema.agentSessions.conversationId, conversationId));
         await postgres.db
           .delete(schema.agentTurns)
           .where(eq(schema.agentTurns.conversationId, conversationId));
@@ -108,7 +116,12 @@ integration("AI Kill Switch 双层闸门与 Agent 总开关", () => {
     }
   });
 
-  /** 通过真实 ingest 创建 文本消息会话（agent 默认开启） */
+  /**
+   * 通过真实 ingest 创建 文本消息会话。
+   * Phase 1 起联系人白名单为 opt-in（schema 默认 agent_enabled=false），
+   * 且 ingest 只登记 admission（合并窗建轮由调度器完成）——fixture 按当前
+   * 架构：建档 → 开启白名单 → 二条入站触发 admission → 驱动调度器建轮。
+   */
   async function createTextConversation(tag: string) {
     const eventId = `${eventBase}-${tag}-event`;
     const sourceConversationId = `${eventBase}-${tag}`;
@@ -138,6 +151,33 @@ integration("AI Kill Switch 双层闸门与 Agent 总开关", () => {
       .limit(1);
     if (!conversation) throw new Error("conversation fixture missing");
     created.push({ conversationId, contactId: conversation.contactId });
+    await postgres.db
+      .update(schema.contactProfiles)
+      .set({ agentEnabled: true })
+      .where(eq(schema.contactProfiles.contactId, conversation.contactId));
+    await ingestChannelEvents(
+      postgres.db,
+      [
+        {
+          cursor: "2",
+          eventId: `${eventBase}-${tag}-event-2`,
+          conversationRef: sourceConversationId,
+          channelMessageId: `channel-${eventBase}-${tag}-event-2`,
+          senderRef: "wxid_friend",
+          kind: "text",
+          content: "还在吗？",
+          occurredAt: "2026-08-17T00:01:00.000Z",
+          observedAt: "2026-08-17T00:01:01.000Z",
+          isSelf: false,
+        },
+      ],
+      "2",
+    );
+    await processTurnAdmissions(
+      postgres.db,
+      logger,
+      new Date(Date.now() + 60_000),
+    );
     return { conversationId };
   }
 
@@ -308,7 +348,8 @@ integration("AI Kill Switch 双层闸门与 Agent 总开关", () => {
       create,
     };
 
-    await processOutboundMessages(postgres.db, client);
+    // 共享测试库存在其他套件的在途消息：过滤到本会话，隔离扫描窗口
+    await processOutboundMessages(postgres.db, client, { conversationId });
     // human 消息被正常提交（submitting），Channel 被调用
     expect(create).toHaveBeenCalled();
     const [human] = await postgres.db

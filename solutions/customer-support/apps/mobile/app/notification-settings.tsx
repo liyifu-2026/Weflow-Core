@@ -26,9 +26,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { loadSession, type MobileSession } from "@/auth/session";
 import {
   registerPushDevice,
+  updateNotificationKinds,
   updateNotificationPreview,
 } from "@/notifications/register-device";
-import { loadConfirmedNotificationPreference } from "@/notifications/preferences";
+import {
+  loadConfirmedNotificationPreference,
+  loadNotifyKinds,
+  saveNotifyKinds,
+  ALL_NOTIFY_KINDS,
+  type NotifyKind,
+} from "@/notifications/preferences";
 import type { ThemeColors } from "@/ui/theme";
 import { useTheme, useThemedStyles } from "@/ui/theme-context";
 import { uiTokens } from "@/ui/tokens";
@@ -43,6 +50,8 @@ export default function NotificationSettingsScreen() {
   const [session, setSession] = useState<MobileSession>();
   const [showPreview, setShowPreview] = useState(false);
   const [confirmedAt, setConfirmedAt] = useState<string>();
+  const /** undefined = 未配置（= 全部订阅） */
+    [notifyKinds, setNotifyKinds] = useState<NotifyKind[]>();
   const [permission, setPermission] = useState<PermissionState>("undetermined");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -56,14 +65,16 @@ export default function NotificationSettingsScreen() {
         router.replace("/");
         return;
       }
-      const [confirmed, permissionState] = await Promise.all([
+      const [confirmed, kinds, permissionState] = await Promise.all([
         loadConfirmedNotificationPreference(storedSession.user.userId),
+        loadNotifyKinds(storedSession.user.userId),
         readPermissionState(),
       ]);
       if (disposed) return;
       setSession(storedSession);
       setShowPreview(confirmed?.showPreview ?? false);
       setConfirmedAt(confirmed?.confirmedAt);
+      setNotifyKinds(kinds);
       setPermission(permissionState);
       setLoading(false);
     })().catch(() => {
@@ -115,6 +126,38 @@ export default function NotificationSettingsScreen() {
         { text: "允许预览", onPress: () => void savePreview(true) },
       ],
     );
+  }
+
+  /** 通知类型开关：全部关闭 = 恢复全部订阅（避免用户把自己静音到收不到任何提醒） */
+  async function toggleKind(kind: NotifyKind) {
+    if (!session || saving) return;
+    const current = notifyKinds ?? [...ALL_NOTIFY_KINDS];
+    const enabled = current.includes(kind);
+    const next = enabled
+      ? current.filter((value) => value !== kind)
+      : [...current, kind];
+    const optimistic = next.length > 0 ? next : undefined;
+    setNotifyKinds(optimistic);
+    setSaving(true);
+    setError(undefined);
+    try {
+      const result = await updateNotificationKinds(session, next);
+      if (!result.cachedLocally) {
+        await saveNotifyKinds(session.user.userId, next).catch(() => undefined);
+        setError("已同步到服务端，但本机缓存保存失败；重新登录前设置可能回退。");
+      }
+      setNotifyKinds(next.length > 0 ? next : undefined);
+    } catch {
+      setNotifyKinds(current.length === ALL_NOTIFY_KINDS.length ? undefined : current);
+      setError("通知类型设置没有保存，请检查网络后重试。");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** 当前订阅状态下的开关态：undefined（未配置）= 全部订阅 */
+  function kindEnabled(kind: NotifyKind): boolean {
+    return notifyKinds === undefined || notifyKinds.includes(kind);
   }
 
   async function updateSystemPermission() {
@@ -175,6 +218,33 @@ export default function NotificationSettingsScreen() {
           {saving && <View style={styles.savingLine}><ActivityIndicator size="small" color={colors.blue} /><Text style={styles.savingText}>正在同步到 Server2</Text></View>}
           {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
           <Text style={styles.confirmedText}>{confirmedAt ? `最近确认 · ${formatConfirmedAt(confirmedAt)}` : "默认采用隐藏消息正文"}</Text>
+          <Text style={styles.sectionLabel}>提醒类型</Text>
+          <KindToggleRow
+            enabled={kindEnabled("handoff_pending")}
+            title="有等待处理的消息"
+            description="客户进入等待人工队列，或有会话转给你时提醒。"
+            disabled={saving}
+            onToggle={() => void toggleKind("handoff_pending")}
+          />
+          <KindToggleRow
+            enabled={kindEnabled("handoff_assigned")}
+            title="有会话转给你"
+            description="同事把会话转交给你时提醒。"
+            disabled={saving}
+            onToggle={() => void toggleKind("handoff_assigned")}
+          />
+          <KindToggleRow
+            enabled={kindEnabled("assignee_inbound")}
+            title="我处理的消息用户有新回复"
+            description="你处理中的会话收到客户新消息时提醒（5 分钟内不重复）。"
+            disabled={saving}
+            onToggle={() => void toggleKind("assignee_inbound")}
+          />
+          <Text style={styles.confirmedText}>
+            {notifyKinds === undefined
+              ? "当前接收全部提醒。"
+              : "关闭全部类型会恢复接收全部提醒。"}
+          </Text>
           <Text style={styles.sectionLabel}>系统通知权限</Text>
           <View style={styles.permissionCard}>
             <View style={styles.permissionCopy}>
@@ -195,6 +265,43 @@ export default function NotificationSettingsScreen() {
         </ScrollView>
       )}
     </SafeAreaView>
+  );
+}
+
+/** 通知类型开关行：单类提醒的开/关 */
+function KindToggleRow({
+  enabled,
+  title,
+  description,
+  disabled,
+  onToggle,
+}: {
+  enabled: boolean;
+  title: string;
+  description: string;
+  disabled?: boolean;
+  onToggle: () => void;
+}) {
+  const styles = useThemedStyles(createStyles);
+  return (
+    <Pressable
+      accessibilityLabel={`${title}，${enabled ? "已开启" : "已关闭"}`}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: enabled, disabled }}
+      disabled={disabled}
+      onPress={onToggle}
+      style={({ pressed }) => [styles.kindRow, pressed && styles.optionPressed]}
+    >
+      <View style={styles.optionCopy}>
+        <Text style={styles.optionTitle}>{title}</Text>
+        <Text style={styles.optionDescription}>{description}</Text>
+      </View>
+      <View style={[styles.switchTrack, enabled && styles.switchTrackOn]}>
+        <View
+          style={[styles.switchKnob, enabled && styles.switchKnobOn]}
+        />
+      </View>
+    </Pressable>
   );
 }
 
@@ -295,6 +402,11 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   optionTitleWarning: { color: colors.orange },
   optionBadge: { color: colors.green, backgroundColor: colors.greenWash, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, fontSize: 10, fontWeight: "800" },
   optionDescription: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 5 },
+  kindRow: { minHeight: 72, borderRadius: uiTokens.radius.md, backgroundColor: colors.paper, borderWidth: 1, borderColor: colors.rule, padding: 14, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 11 },
+  switchTrack: { width: 44, height: 26, borderRadius: 13, backgroundColor: colors.rule, padding: 2 },
+  switchTrackOn: { backgroundColor: colors.green },
+  switchKnob: { width: 22, height: 22, borderRadius: 11, backgroundColor: colors.paper },
+  switchKnobOn: { alignSelf: "flex-end" },
   savingLine: { flexDirection: "row", alignItems: "center", gap: 7, marginTop: 8 },
   savingText: { color: colors.blue, fontSize: 12, fontWeight: "600" },
   error: { color: colors.red, fontSize: 12, fontWeight: "600", marginTop: 8 },

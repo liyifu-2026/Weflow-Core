@@ -1,8 +1,7 @@
 /**
  * 平台模型设置热加载（Hot Reload）应用层。
  *
- * 背景：model-settings.ts 的写路径（updateModelSettings）由 Console
- * 「平台大模型」表单调用；消费方（agent-worker）过去在启动时读取一次，
+ * 背景：消费方（agent-worker）过去在启动时读取一次，
  * 改 baseUrl / apiKey / 槽位模型名需重启 worker 才生效。
  *
  * 热加载机制（跨进程安全）：

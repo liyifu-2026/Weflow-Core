@@ -1,3 +1,5 @@
+import { weknoraAuthHeaders } from "../../../infrastructure/knowledge/weknora-knowledge-client.js";
+
 const SAFE_PATHS = [
   /^knowledge-bases(?:\/.*)?$/,
   /^knowledge(?:\/.*)?$/,
@@ -16,9 +18,12 @@ export const MAX_KNOWLEDGE_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 export type KnowledgeProviderOptions = {
   baseUrl: string;
-  apiKey: string;
+  apiKey?: string | undefined;
+  /** 显式指定认证头（设置中心连接器，ADR-0008）；缺省用 x-api-key: apiKey。 */
+  authHeaderName?: string | undefined;
+  authHeaderValue?: string | undefined;
   timeoutMs: number;
-  fetch?: typeof globalThis.fetch;
+  fetch?: typeof globalThis.fetch | undefined;
 };
 
 export function providerPath(request: {
@@ -112,7 +117,7 @@ export async function inspectKnowledgeEngine(
       `${options.baseUrl}/knowledge-bases?page=1&page_size=1`,
       {
         method: "GET",
-        headers: { "x-api-key": options.apiKey },
+        headers: weknoraAuthHeaders(options),
         signal: AbortSignal.timeout(options.timeoutMs),
       },
     );

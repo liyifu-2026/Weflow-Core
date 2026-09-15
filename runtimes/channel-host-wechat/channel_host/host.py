@@ -19,7 +19,8 @@ from .event_store import ChannelObservation, EventStore
 # sender prefixes across different group message variants.
 GROUP_SENDER_RE = re.compile(r"^(wxid_[^\s:\n]+|gh_[^\s:\n]+|\d{6,}):\s*\n")
 
-# 平台决定表情包不渲染截图，事件内容统一为文本「[表情包]<含义>」。
+# 平台决定表情包不渲染截图，事件内容统一为文本「[表情包]<含义>」，
+# 且不再携带 mediaRef（截图链路已下线，Core 按纯文本 kind=emotion 落库）。
 EMOTION_FALLBACK_TEXT = "[表情包]表情"
 # 微信「拍一拍」系统消息捕获后的固定文案（ADR 之外的平台文案约定）。
 PAT_EVENT_TEXT = "对方拍了拍你"
@@ -307,9 +308,12 @@ class WeChatChannelHost:
             occurred_at=occurred_at,
             observed_at=datetime.now(timezone.utc).isoformat(),
             is_self=is_self,
+            conversation_kind=(
+                "group" if conversation_ref.endswith("@chatroom") else "private"
+            ),
             media_ref=(
                 f"wechat-media:v1:{hashlib.sha256(event_id.encode()).hexdigest()}"
-                if is_image or is_file or is_voice or is_video or is_emotion
+                if is_image or is_file or is_voice or is_video
                 else None
             ),
             file_name=file_name,

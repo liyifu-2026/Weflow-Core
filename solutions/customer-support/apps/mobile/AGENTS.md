@@ -23,19 +23,19 @@ Mobile 的设计应接近专业人士每天使用的高级移动应用，而不�
 
 ## Build, Test, and Development Commands
 
-Use the npm scripts declared in `package.json`:
+Use the scripts declared in `package.json` (run with pnpm; see also `docs/dev-debug.md`):
 
 ```sh
-npm run start    # launch Expo development server
-npm run android  # open the Android development target
-npm run ios      # open the iOS development target (macOS required)
-npm run web      # launch the web target
-npm run lint     # run static checks
-npm run typecheck # validate TypeScript
-npx expo export --platform web # verify Metro/static routing can bundle
+pnpm run start    # launch Expo development server
+pnpm run android  # open the Android development target
+pnpm run ios      # open the iOS development target (macOS required)
+pnpm run web      # launch the web target
+pnpm run lint     # run static checks
+pnpm run typecheck # validate TypeScript
+pnpm exec expo export --platform web # verify Metro/static routing can bundle
 ```
 
-Vitest is configured (`npm run test`; 20 files, 100+ cases). Add tests with each feature and cover the races listed under Testing Guidelines. Daily dev/debug workflows (emulator, LAN device, OTA release) live in `docs/dev-debug.md`.
+Vitest is configured (`pnpm run test`; 20 files, 100+ cases). Add tests with each feature and cover the races listed under Testing Guidelines. Daily dev/debug workflows (emulator, LAN device, OTA release) live in `docs/dev-debug.md`.
 
 ## Coding Style & Naming
 

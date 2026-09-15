@@ -24,18 +24,8 @@ import {
   readOperatorStatus,
   readRuntimeSettingsAudit,
   buildRuntimeConsole,
-  TEXT_MODEL_ALLOWLIST,
-  VISION_MODEL_ALLOWLIST,
   type RuntimeSettings,
 } from "../application/runtime-settings.js";
-import {
-  readModelSettings,
-  updateModelSettings,
-  MODEL_NAME_ALLOWLIST,
-  VISION_MODEL_NAME_ALLOWLIST,
-  type ModelSettingsDefaults,
-  type ModelSettingsPatch,
-} from "../application/model-settings.js";
 import { notifyModelSettingsChanged } from "../application/model-settings-hot.js";
 import {
   listModelRegistry,
@@ -43,10 +33,11 @@ import {
   deleteModelRegistryEntry,
   readSlotBindings,
   bindModelSlot,
+  resolveModelProbeEndpoint,
   MODEL_SLOTS,
   type ModelRegistryPatch,
 } from "../application/model-gateway.js";
-import { readModelHealth } from "../application/model-failover.js";
+import { readModelHealth, probeModelAndRecord } from "../application/model-failover.js";
 import {
   readSolutionExtensionSettings,
   writeSolutionExtensionSettings,
@@ -66,51 +57,7 @@ const runtimeSettingsPatchSchema = z.object({
   memoryEnabled: z.boolean().optional(),
   visionEnabled: z.boolean().optional(),
   mergeWindowEnabled: z.boolean().optional(),
-  textModel: z.enum(TEXT_MODEL_ALLOWLIST).optional(),
-  visionModel: z.enum(VISION_MODEL_ALLOWLIST).optional(),
 });
-
-const modelSettingsPatchSchema = z
-  .object({
-    textModel: z
-      .object({
-        name: z.enum(MODEL_NAME_ALLOWLIST).optional(),
-        baseUrl: z.string().trim().min(1).max(500).optional(),
-        apiKey: z.string().trim().max(1_000).optional(),
-      })
-      .optional(),
-    visionModel: z
-      .object({
-        name: z.enum(VISION_MODEL_NAME_ALLOWLIST).optional(),
-        baseUrl: z.string().trim().min(1).max(500).optional(),
-        apiKey: z.string().trim().max(1_000).optional(),
-      })
-      .optional(),
-    asrModel: z
-      .object({
-        name: z.string().trim().min(1).max(200).optional(),
-        baseUrl: z.string().trim().min(1).max(500).optional(),
-        apiKey: z.string().trim().max(1_000).optional(),
-      })
-      .optional(),
-    /** 分流/直答模型槽位：供应商模型名自由命名（如 Qwen/Qwen2.5-7B-Instruct） */
-    triageModel: z
-      .object({
-        name: z.string().trim().min(1).max(200).optional(),
-        baseUrl: z.string().trim().min(1).max(500).optional(),
-        apiKey: z.string().trim().max(1_000).optional(),
-      })
-      .optional(),
-    fastModel: z
-      .object({
-        name: z.string().trim().min(1).max(200).optional(),
-        baseUrl: z.string().trim().min(1).max(500).optional(),
-        apiKey: z.string().trim().max(1_000).optional(),
-      })
-      .optional(),
-  })
-  .strict()
-  .refine((patch) => Object.keys(patch).length > 0);
 
 const modelRegistryUpsertSchema = z
   .object({
@@ -119,6 +66,7 @@ const modelRegistryUpsertSchema = z
     /** 空串/缺省 = 保持原值 */
     apiKey: z.string().max(1_000).optional(),
     capabilities: z.array(z.enum(["text", "vision", "asr"])).optional(),
+    protocol: z.enum(["chat_inline", "audio_transcriptions"]).optional(),
     timeoutMs: z.number().int().min(1_000).max(300_000).optional(),
     failoverTo: z.string().trim().max(120).nullable().optional(),
     enabled: z.boolean().optional(),
@@ -131,7 +79,6 @@ export function registerOperationsRoutes(
   server: FastifyInstance,
   db: NodePgDatabase<typeof schema>,
   capabilities: RuntimeCapabilities,
-  modelDefaults: ModelSettingsDefaults,
 ): void {
   server.get("/api/v1/system/status", async (request, reply) => {
     if (!(await requireBusinessIdentity(db, request, reply))) return;
@@ -194,10 +141,6 @@ export function registerOperationsRoutes(
     if (!(await requireAdminIdentity(db, request, reply))) return;
     return {
       settings: await readRuntimeSettings(db),
-      allowlists: {
-        text: TEXT_MODEL_ALLOWLIST,
-        vision: VISION_MODEL_ALLOWLIST,
-      },
     };
   });
 
@@ -214,36 +157,6 @@ export function registerOperationsRoutes(
       sourceIp: request.ip,
       patch: body.data as Partial<RuntimeSettings>,
     });
-    return result;
-  });
-
-  // ---------- Platform Model Settings ----------
-
-  server.get("/api/v1/admin/model-settings", async (request, reply) => {
-    if (!(await requireAdminIdentity(db, request, reply))) return;
-    return {
-      settings: await readModelSettings(db, modelDefaults),
-      allowlists: {
-        text: MODEL_NAME_ALLOWLIST,
-        vision: VISION_MODEL_NAME_ALLOWLIST,
-      },
-    };
-  });
-
-  server.patch("/api/v1/admin/model-settings", async (request, reply) => {
-    const identity = await requireAdminIdentity(db, request, reply);
-    if (!identity) return;
-    const body = modelSettingsPatchSchema.safeParse(request.body);
-    if (!body.success)
-      return reply.code(400).send({ error: "invalid_request" });
-    const result = await updateModelSettings(db, {
-      actorUserId: identity.user.userId,
-      sourceIp: request.ip,
-      patch: body.data as ModelSettingsPatch,
-      defaults: modelDefaults,
-    });
-    // 热加载：同进程订阅者立即重读；跨进程由 worker 轮询兜底。
-    notifyModelSettingsChanged();
     return result;
   });
 
@@ -345,8 +258,55 @@ export function registerOperationsRoutes(
       });
       if (result.notFound)
         return reply.code(404).send({ error: "model_not_found" });
+      if (result.capabilityMismatch)
+        return reply.code(400).send({ error: "capability_mismatch" });
       notifyModelSettingsChanged();
       return { bound: true };
+    },
+  );
+
+  // 「测试连接」：由 API 服务端对模型端点发一次最小补全（apiKey 是
+  // secret，浏览器不持有，探测必须在服务端做）。结果写进程内健康表，
+  // 设置页徽章据此展示。支持未保存的编辑中表单值（baseUrl/apiKey 覆盖，
+  // apiKey 缺省沿用注册表已存密钥），实现「先测再存」。
+  server.post(
+    "/api/v1/admin/model-gateway/models/:modelId/test-connection",
+    async (request, reply) => {
+      const identity = await requireAdminIdentity(db, request, reply);
+      if (!identity) return;
+      const params = z
+        .object({ modelId: z.string().trim().min(1).max(120) })
+        .safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const body = z
+        .object({
+          baseUrl: z.string().trim().min(1).max(500).optional(),
+          apiKey: z.string().max(1_000).optional(),
+          /** 新建表单尚未落库时展示名/模型名由请求提供 */
+          displayName: z.string().trim().min(1).max(200).optional(),
+        })
+        .strict()
+        .safeParse(request.body ?? {});
+      if (!body.success)
+        return reply.code(400).send({ error: "invalid_request" });
+
+      const endpoint = await resolveModelProbeEndpoint(
+        db,
+        params.data.modelId,
+        {
+          baseUrl: body.data.baseUrl,
+          apiKey: body.data.apiKey,
+          displayName: body.data.displayName,
+        },
+      );
+      if (!endpoint) return reply.code(404).send({ error: "model_not_found" });
+      return await probeModelAndRecord(
+        endpoint.displayName,
+        params.data.modelId,
+        endpoint,
+        endpoint.timeoutMs,
+      );
     },
   );
 

@@ -142,71 +142,27 @@ describe("renderCommandResult", () => {
     return { out, err, output };
   }
 
-  it("prints a success summary line for publish", () => {
-    const { out, output } = humanCapture();
-    renderCommandResult(
-      "publish",
-      {
-        ok: true,
-        data: {
-          tgzPath: "/tmp/weflow.demo-1.0.0.tgz",
-          solutionId: "weflow.demo",
-          version: "1.0.0",
-          manifestDigest: "sha256:aa",
-        },
-      },
-      output,
-      { json: false },
-    );
-    expect(out.text()).toContain("published weflow.demo@1.0.0");
-  });
-
-  it("renders list as a table in human mode", () => {
-    const { out, output } = humanCapture();
-    renderCommandResult(
-      "list",
-      {
-        ok: true,
-        data: {
-          solutions: [
-            {
-              solutionId: "weflow.demo",
-              installedVersions: ["1.0.0", "1.1.0"],
-              activeVersion: "1.1.0",
-            },
-          ],
-        },
-      },
-      output,
-      { json: false },
-    );
-    expect(out.text()).toContain("weflow.demo");
-    expect(out.text()).toContain("1.0.0, 1.1.0");
-  });
-
   it("renders help text as plain info in human mode", () => {
     const { out, output } = humanCapture();
     renderCommandResult(
-      "publish",
-      { ok: true, data: { help: "Usage: weflowctl solution publish ..." } },
+      { ok: true, data: { help: "Usage: weflowctl service status ..." } },
       output,
       { json: false },
     );
-    expect(out.text()).toContain("Usage: weflowctl solution publish");
+    expect(out.text()).toContain("Usage: weflowctl service status ...");
   });
 
   it("emits raw data untouched in json mode", () => {
     const { out, output } = humanCapture();
-    renderCommandResult("list", { ok: true, data: { solutions: [] } }, output, {
+    renderCommandResult({ ok: true, data: { items: [] } }, output, {
       json: true,
     });
-    expect(JSON.parse(out.text())).toEqual({ solutions: [] });
+    expect(JSON.parse(out.text())).toEqual({ items: [] });
   });
 
   it("routes failures to error output with code and hint", () => {
     const { err, output } = humanCapture();
     renderCommandResult(
-      "update",
       {
         ok: false,
         error: "invalid_update_strategy:weekly:expected manual|patch",

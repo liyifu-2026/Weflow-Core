@@ -1,25 +1,26 @@
-# Weflow Solutions
+# Weflow Solutions（`weflow` 仓 `solutions/` 子目录）
 
-Weflow AI 客服产品的业务仓库。**平台核心仓库（Weflow）不包含任何业务代码**，本仓库是唯一业务来源：产品网页端（support-web）、移动端（mobile）、业务插件与业务 BFF 都在这里。
+Weflow AI 客服产品的业务代码。2026-09 起原 **Weflow-Solutions** 仓库整仓并入 `weflow` 仓的 `solutions/` 子目录（历史经 filter-repo 保留），不再是独立仓库。
 
-R3 平台化拆除后插件**不再打包安装**：平台 Core 通过 `WEFLOW_PLUGIN_DIR` 环境变量直读本仓库的插件目录。
+业务来源：产品网页端（support-web）、移动端（mobile）、业务插件与业务 BFF 都在这里；引擎层（`core/`、`apps/`）不承载业务语义。
+
+R3 平台化拆除后插件**不再打包安装**：平台 Core 通过 `WEFLOW_PLUGIN_DIR` 环境变量直读本目录的插件目录。
 
 ## Repository shape
 
 ```text
-weflow-solutions/
-├─ packages/
-│  ├─ contracts/        # vendor: @weflow/contracts（平台契约类型，编译期依赖）
-│  └─ plugin-sdk/       # vendor: @weflow/plugin-sdk（插件注册契约）
-├─ solutions/
-│  └─ customer-support/ # 业务 Solution：backend + plugins + apps
+solutions/
+├─ customer-support/            # 业务 Solution：backend + plugins + apps
+│  ├─ apps/support-web/         # 产品唯一网页端（Vue SPA）
+│  ├─ apps/mobile/              # 移动端（junction → C:\dev\mobile）
+│  ├─ plugins/                  # 业务插件（Skill / Execution Strategy）
+│  └─ backend/customer-support/ # 业务 BFF（Core 直读注册）
+├─ weknora-connector/           # WeKnora 连接器（settings 页）
 ├─ scripts/
 │  └─ e2e-gate.mjs
-├─ package.json
+├─ package.json                 # 业务侧 install:all / build / e2e:gate
 └─ README.md
 ```
-
-> `packages/*` 是从平台核心复制的 vendor 副本（SDK 版本与平台声明对齐）。SDK 升级时同步复制并重新构建。
 
 ## 插件开发契约（平台加载器约定）
 
@@ -38,11 +39,12 @@ Core API 进程从 `WEFLOW_PLUGIN_DIR/backend/<key>/index.js` 直读 BFF，导�
 ## 构建
 
 ```bash
-pnpm install:all          # 安装 vendor SDK 与全部插件依赖
-pnpm build                # 按序构建：contracts → plugin-sdk → 插件 → support-web
+pnpm install:all          # 安装全部插件与 support-web 依赖
+pnpm build                # 按序构建：插件 → support-web
 ```
 
-构建顺序有依赖：插件 `tsconfig.json` 的 `paths` 指向 `packages/*/dist/index.d.ts`，因此 vendor SDK 必须先构建。
+插件 `tsconfig.json` 的 `paths` 指向同级平台仓的
+`weflow/packages/contracts/dist/index.d.ts`，类型检查前需平台仓已构建 contracts。
 
 ## 平台接入与 e2e 门禁
 

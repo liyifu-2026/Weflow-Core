@@ -1,61 +1,77 @@
 <script setup lang="ts">
 /**
- * 白名单配置页（admin only）
+ * 联系人策略页（admin only）：自动回复 / 仅人工 / 已拉黑。
  *
- * - 列表来源：GET /api/v1/contacts（已支持 q + agentEnabled + 游标分页）
- * - 切换开关：PATCH /api/v1/conversations/:conversationId/contact-profile
- *   （后端已支持 agentEnabled 字段；走 conversationId 是为了保持与
- *   现有 contact-profile 端点契约一致，Core 会以 contact 为单位更新）
+ * - 列表来源：GET /api/v1/contacts（q + agentEnabled + blocked + 游标分页），
+ *   分页/去重/搜索由 use-contact-list 提供（与工作台共用同一实现）
+ * - 切换策略：PATCH /api/v1/conversations/:conversationId/contact-profile
+ *   （Core 以 contact 为单位更新）
+ *
+ * 黑名单制（0078 起）：新联系人默认由 AI 接待（agentEnabled=true）；
+ * 拉黑（blocked=true）比「仅人工」更强——不进会话列表、不推通知。
  *
  * 设计原则：
  * - 搜索匹配：channelDisplayName / channelNickname / channelRemark / sharedAlias
- * - 乐观更新：开关点击后立即本地翻转，失败再回滚并提示
+ * - 乐观更新：选择后立即本地翻转，失败再回滚并提示
  * - 审计：所有变更调用 Core 走 audit 通道，不在客户端伪造
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { Loader2, RefreshCw, Search, X } from "lucide-vue-next";
 import { api } from "../api";
 import AvatarImage from "../components/AvatarImage.vue";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Skeleton } from "../components/ui/skeleton";
-import { Switch } from "../components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs";
+import { useContactList } from "../composables/use-contact-list";
+import type { ContactListFilter, ContactSummary } from "../composables/use-contact-list";
 
-type ContactItem = {
-  contactId: string;
-  conversationId: string;
-  channelDisplayName: string | null;
-  channelNickname: string | null;
-  channelRemark: string | null;
-  sharedAlias: string | null;
-  avatarUrl: string | null;
-  latestMessageAt: string | null;
-  latestMessageText: string;
-  agentEnabled: boolean;
-};
+/** 联系人策略：三态互斥（AI 自动回复 / 仅人工 / 已拉黑） */
+type ContactPolicy = "agent" | "manual" | "blocked";
 
-const items = ref<ContactItem[]>([]);
-const loading = ref(false);
-const loadingMore = ref(false);
-const error = ref("");
-const nextCursor = ref<string | null>(null);
 const searchInput = ref("");
 const searchApplied = ref("");
 // 切换中：保存 contactId，避免同一条并发翻转
 const toggling = ref<Set<string>>(new Set());
-// 视图筛选：whitelist = 仅白名单；others = 仅非白名单；all = 全部
-const viewFilter = ref<"all" | "whitelist" | "others">("all");
+// 视图筛选：与服务端过滤一致（all = 不过滤）
+const viewFilter = ref<"all" | ContactPolicy>("all");
 
-const filteredItems = computed<ContactItem[]>(() => {
-  if (viewFilter.value === "whitelist")
-    return items.value.filter((item) => item.agentEnabled);
-  if (viewFilter.value === "others")
-    return items.value.filter((item) => !item.agentEnabled);
-  return items.value;
+const {
+  contacts: items,
+  loading,
+  loadingMore,
+  error,
+  nextCursor,
+  load: loadContacts,
+} = useContactList({
+  getQuery: () => searchApplied.value,
+  getFilter: () => filterOf(viewFilter.value),
 });
 
-function displayName(item: ContactItem): string {
+function filterOf(view: "all" | ContactPolicy): ContactListFilter {
+  if (view === "agent") return { agentEnabled: true, blocked: false };
+  if (view === "manual") return { agentEnabled: false, blocked: false };
+  if (view === "blocked") return { blocked: true };
+  return {};
+}
+
+function policyOf(item: ContactSummary): ContactPolicy {
+  if (item.blocked) return "blocked";
+  return item.agentEnabled ? "agent" : "manual";
+}
+
+function matchesFilter(item: ContactSummary, view: "all" | ContactPolicy): boolean {
+  if (view === "all") return true;
+  return policyOf(item) === view;
+}
+
+const policyLabels: Record<ContactPolicy, string> = {
+  agent: "AI 自动回复",
+  manual: "仅人工",
+  blocked: "已拉黑",
+};
+
+function displayName(item: ContactSummary): string {
   return (
     item.sharedAlias ||
     item.channelRemark ||
@@ -65,97 +81,68 @@ function displayName(item: ContactItem): string {
   );
 }
 
-/**
- * 最近消息展示兜底（ISS-003）：上游消息原文可能含 HTML 片段或以内部
- * user_id 开头/整条就是内部 id（ISS C-1），列表里只做纯文本摘要——
- * 剥标签、隐藏内部 id、超长截断。原文以详情/会话页为准。
- */
-function latestMessageSummary(text: string): string {
-  const stripped = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-  if (/^user_[A-Za-z0-9]+/.test(stripped)) return "消息内容暂不可见";
-  return stripped.length > 60 ? `${stripped.slice(0, 60)}…` : stripped;
-}
-
-async function load(reset = true) {
-  if (reset) {
-    loading.value = true;
-    items.value = [];
-    nextCursor.value = null;
-  } else {
-    if (loadingMore.value || !nextCursor.value) return;
-    loadingMore.value = true;
-  }
-  error.value = "";
-  try {
-    const params = new URLSearchParams();
-    params.set("limit", "50");
-    if (searchApplied.value) params.set("q", searchApplied.value);
-    if (!reset && nextCursor.value) params.set("before", nextCursor.value);
-    const result = await api<{
-      contacts: ContactItem[];
-      nextCursor: string | null;
-    }>(`/api/v1/contacts?${params.toString()}`);
-    if (reset) {
-      items.value = result.contacts ?? [];
-    } else {
-      const seen = new Set(items.value.map((item) => item.contactId));
-      items.value = [
-        ...items.value,
-        ...(result.contacts ?? []).filter((c) => !seen.has(c.contactId)),
-      ];
-    }
-    nextCursor.value = result.nextCursor ?? null;
-  } catch (reason) {
-    error.value =
-      reason instanceof Error ? reason.message : "联系人加载失败";
-  } finally {
-    if (reset) loading.value = false;
-    else loadingMore.value = false;
-  }
-}
-
 function applySearch() {
   searchApplied.value = searchInput.value.trim();
-  void load(true);
+  void loadContacts(false);
 }
 function clearSearch() {
   searchInput.value = "";
   searchApplied.value = "";
-  void load(true);
+  void loadContacts(false);
 }
 
-async function toggleAgentEnabled(item: ContactItem) {
+// 切 Tab 走服务端过滤（此前是客户端过滤，翻页后计数与成员会错位）
+watch(viewFilter, () => {
+  void loadContacts(false);
+});
+
+async function setPolicy(item: ContactSummary, policy: ContactPolicy) {
   if (toggling.value.has(item.contactId)) return;
+  if (policyOf(item) === policy) return;
   // 乐观更新
-  const previous = item.agentEnabled;
-  item.agentEnabled = !previous;
+  const previousEnabled = item.agentEnabled;
+  const previousBlocked = item.blocked;
+  item.blocked = policy === "blocked";
+  item.agentEnabled = policy === "agent";
   toggling.value.add(item.contactId);
   try {
+    const body =
+      policy === "blocked"
+        ? { blocked: true }
+        : { agentEnabled: policy === "agent", blocked: false };
     await api(
       `/api/v1/conversations/${encodeURIComponent(item.conversationId)}/contact-profile`,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ agentEnabled: item.agentEnabled }),
-      },
+      { method: "PATCH", body: JSON.stringify(body) },
     );
+    // 变更后若不再符合当前筛选（如「已拉黑」页里改为自动回复），从列表移除
+    if (!matchesFilter(item, viewFilter.value)) {
+      items.value = items.value.filter((row) => row.contactId !== item.contactId);
+    }
   } catch (reason) {
     // 回滚
-    item.agentEnabled = previous;
-    error.value =
-      reason instanceof Error ? reason.message : "白名单状态切换失败";
+    item.agentEnabled = previousEnabled;
+    item.blocked = previousBlocked;
+    error.value = reason instanceof Error ? reason.message : "联系人策略切换失败";
   } finally {
     toggling.value.delete(item.contactId);
   }
 }
 
+const activeTab = computed({
+  get: () => viewFilter.value,
+  set: (value: string) => {
+    viewFilter.value = value as "all" | ContactPolicy;
+  },
+});
+
 onMounted(() => {
-  void load(true);
+  void loadContacts(false);
 });
 </script>
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
-    <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+    <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
       <div class="relative min-w-0 flex-1">
         <Search
           class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
@@ -183,22 +170,23 @@ onMounted(() => {
         size="icon"
         title="刷新"
         aria-label="刷新"
-        @click="load(true)"
+        @click="loadContacts(false)"
       >
         <RefreshCw class="size-4" />
       </Button>
-      <Tabs v-model="viewFilter">
+      <Tabs v-model="activeTab">
         <TabsList>
           <TabsTrigger value="all">全部</TabsTrigger>
-          <TabsTrigger value="whitelist">白名单</TabsTrigger>
-          <TabsTrigger value="others">仅人工</TabsTrigger>
+          <TabsTrigger value="agent">自动回复</TabsTrigger>
+          <TabsTrigger value="manual">仅人工</TabsTrigger>
+          <TabsTrigger value="blocked">已拉黑</TabsTrigger>
         </TabsList>
       </Tabs>
     </div>
 
     <div v-if="error" class="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
       <p class="text-sm text-destructive" role="alert">{{ error }}</p>
-      <Button variant="outline" size="sm" @click="load(true)">重试</Button>
+      <Button variant="outline" size="sm" @click="loadContacts(false)">重试</Button>
     </div>
 
     <div v-if="loading && !items.length" class="space-y-2 p-4">
@@ -211,16 +199,15 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-else-if="filteredItems.length" class="min-h-0 flex-1 overflow-auto">
-      <div class="sticky top-0 z-10 grid grid-cols-[minmax(160px,240px)_minmax(0,1fr)_140px] items-center gap-3 border-b border-border bg-muted/60 px-4 py-2 text-xs font-medium text-muted-foreground">
+    <div v-else-if="items.length" class="min-h-0 flex-1 overflow-auto">
+      <div class="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_168px] items-center gap-3 border-b border-border bg-muted/60 px-4 py-2 text-xs font-medium text-muted-foreground">
         <span>联系人</span>
-        <span>最近消息</span>
-        <span class="text-right">白名单</span>
+        <span class="text-right">策略</span>
       </div>
       <div
-        v-for="item in filteredItems"
+        v-for="item in items"
         :key="item.contactId"
-        class="grid grid-cols-[minmax(160px,240px)_minmax(0,1fr)_140px] items-center gap-3 border-b border-border px-4 py-2 transition-colors last:border-b-0 hover:bg-muted/50"
+        class="grid grid-cols-[minmax(0,1fr)_168px] items-center gap-3 border-b border-border px-4 py-2 transition-colors last:border-b-0 hover:bg-muted/50"
       >
         <div class="flex min-w-0 items-center gap-2.5">
           <AvatarImage
@@ -238,32 +225,26 @@ onMounted(() => {
             </p>
           </div>
         </div>
-        <div class="flex min-w-0 items-center gap-2">
-          <span class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-            {{ item.latestMessageText ? latestMessageSummary(item.latestMessageText) : "暂无消息" }}
-          </span>
-          <span v-if="item.latestMessageAt" class="shrink-0 text-xs text-muted-foreground">
-            {{ new Date(item.latestMessageAt).toLocaleString() }}
-          </span>
-        </div>
         <div class="flex items-center justify-end gap-2">
-          <Switch
-            :model-value="item.agentEnabled"
-            :disabled="toggling.has(item.contactId)"
-            :aria-label="`白名单开关：${displayName(item)}`"
-            @update:model-value="toggleAgentEnabled(item)"
-          />
           <Loader2
             v-if="toggling.has(item.contactId)"
             class="size-3.5 animate-spin text-muted-foreground"
           />
-          <span v-else class="w-14 text-right text-xs" :class="item.agentEnabled ? 'font-medium' : 'text-muted-foreground'">
-            {{ item.agentEnabled ? "白名单" : "仅人工" }}
-          </span>
+          <select
+            :value="policyOf(item)"
+            :disabled="toggling.has(item.contactId)"
+            :aria-label="`联系人策略：${displayName(item)}`"
+            class="h-9 rounded-md border border-input bg-background px-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:opacity-60"
+            @change="setPolicy(item, ($event.target as HTMLSelectElement).value as ContactPolicy)"
+          >
+            <option value="agent">{{ policyLabels.agent }}</option>
+            <option value="manual">{{ policyLabels.manual }}</option>
+            <option value="blocked">{{ policyLabels.blocked }}</option>
+          </select>
         </div>
       </div>
       <div v-if="nextCursor" class="flex justify-center py-4">
-        <Button variant="outline" size="sm" :disabled="loadingMore" @click="load(false)">
+        <Button variant="outline" size="sm" :disabled="loadingMore" @click="loadContacts(true)">
           {{ loadingMore ? "正在加载…" : "加载更多" }}
         </Button>
       </div>
@@ -274,9 +255,11 @@ onMounted(() => {
       class="flex flex-1 flex-col items-center justify-center gap-1 p-12 text-muted-foreground"
     >
       <p class="text-sm font-medium text-foreground">
-        {{ searchApplied ? "没有符合条件的联系人" : "暂无联系人" }}
+        {{ searchApplied || viewFilter !== "all" ? "没有符合条件的联系人" : "暂无联系人" }}
       </p>
-      <p v-if="!searchApplied" class="text-sm">客户首次发消息后将出现在此处。</p>
+      <p v-if="!searchApplied && viewFilter === 'all'" class="text-sm">
+        客户首次发消息后将出现在此处。
+      </p>
     </div>
   </div>
 </template>

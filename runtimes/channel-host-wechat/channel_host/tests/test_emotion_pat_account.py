@@ -108,7 +108,7 @@ class EmotionTextTests(unittest.TestCase):
             event = store.pull().events[0]
             self.assertEqual(event["kind"], "emotion")
             self.assertEqual(event["content"], "[表情包]偷笑")
-            self.assertTrue(str(event["mediaRef"]).startswith("wechat-media:v1:"))
+            self.assertIsNone(event["mediaRef"])
             store.close()
 
     def test_emotion_name_is_normalized_through_mapping_table(self):

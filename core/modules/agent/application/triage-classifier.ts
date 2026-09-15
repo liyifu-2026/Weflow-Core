@@ -19,6 +19,12 @@ export type TriagePolicy = {
   enabled: boolean;
   /** 高危关键词：命中即转人工（大小写不敏感子串匹配） */
   riskKeywords: string[];
+  /**
+   * LLM 二级分类的 system prompt（ADR-0011 业务缺省出引擎）：原为引擎
+   * 硬编码的客服预判话术，现由扩展设置 pipeline.triage.systemPrompt 下发。
+   * 空 = LLM 层不可用（fail-open 放行），引擎不再自备任何业务话术。
+   */
+  systemPrompt: string;
   /** 是否使用 LLM 做二级分类（false 时仅规则层生效） */
   llmClassifyEnabled: boolean;
   /** LLM 判定超时（毫秒），超时视为分类不可用 */
@@ -31,6 +37,7 @@ export type TriagePolicy = {
 export const DEFAULT_TRIAGE_POLICY: TriagePolicy = {
   enabled: false,
   riskKeywords: [],
+  systemPrompt: "",
   llmClassifyEnabled: true,
   timeoutMs: 3_000,
   allowDirectReply: false,
@@ -75,6 +82,10 @@ export function extractTriagePolicy(raw: unknown): TriagePolicy {
             typeof keyword === "string" && keyword.trim() !== "",
         )
       : [],
+    systemPrompt:
+      typeof t.systemPrompt === "string" && t.systemPrompt.trim() !== ""
+        ? t.systemPrompt.trim()
+        : DEFAULT_TRIAGE_POLICY.systemPrompt,
     llmClassifyEnabled:
       typeof t.llmClassifyEnabled === "boolean"
         ? t.llmClassifyEnabled
@@ -93,15 +104,8 @@ export function extractTriagePolicy(raw: unknown): TriagePolicy {
   };
 }
 
-const TRIAGE_SYSTEM_PROMPT =
-  "你是客服消息预判器。根据最新一条客户消息判断它应如何路由，只输出一个 JSON 对象：" +
-  '{"route":"auto","tier":"simple","reason":"不超过20字"} 。' +
-  "判定规则：" +
-  'route=human 表示建议转人工：客户情绪激烈、问题明显超出自动客服能力、或明确要求人工；' +
-  "route=auto 表示可以自动回复。" +
-  "tier=simple 仅当消息只是寒暄问候、简单确认或纯情绪安抚，不需要任何业务知识即可得体回复；" +
-  "其余一律 tier=standard。" +
-  '除该 JSON 外不要输出任何其他内容。';
+const TRIAGE_OUTPUT_CONTRACT =
+  '只输出一个 JSON 对象：{"route":"auto"|"human","tier":"simple"|"standard","reason":"不超过20字"} 。除该 JSON 外不要输出任何其他内容。';
 
 /** 单次预判分类入口。永不抛错：内部兜底降级为放行判定。 */
 export async function classifyForTriage(input: {
@@ -129,11 +133,18 @@ export async function classifyForTriage(input: {
     };
   }
 
-  if (!policy.llmClassifyEnabled || !input.client || !input.model) {
+  if (
+    !policy.llmClassifyEnabled ||
+    !input.client ||
+    !input.model ||
+    policy.systemPrompt === ""
+  ) {
     return {
       route: "auto",
       tier: "standard",
-      reason: "llm_classify_unavailable",
+      reason: policy.systemPrompt === ""
+        ? "triage_prompt_unconfigured"
+        : "llm_classify_unavailable",
       degraded: false,
     };
   }
@@ -144,7 +155,12 @@ export async function classifyForTriage(input: {
       .map((text) => `- ${text.slice(0, 120)}`);
     const response = await withTimeout(
       completeAgentDecision(input.client, [
-        { role: "system", content: TRIAGE_SYSTEM_PROMPT },
+        {
+          role: "system",
+          // 业务判定规则由设置下发（ADR-0011）；JSON 输出契约是解析器的
+          // 机制前提，由引擎追加——业务话术与机制格式在此拼合。
+          content: `${policy.systemPrompt}\n${TRIAGE_OUTPUT_CONTRACT}`,
+        },
         {
           role: "user",
           content: [

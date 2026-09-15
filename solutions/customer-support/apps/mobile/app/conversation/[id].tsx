@@ -35,7 +35,6 @@ import { ActivityIndicator, Alert, Animated, AppState, FlatList, KeyboardAvoidin
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { LoadState } from "@/ui/load-state";
 import { ApiError } from "@/api/client";
-import { actionErrorCopy } from "@/api/action-error-copy";
 
 import { loadSession, type MobileSession } from "@/auth/session";
 import { acceptHandoff, getContactProfile, getHandoff, getManualReplyOutcome, getTranscript, getHandoffOperationOutcome, markConversationRead, rejectTransfer, sendManualReply, takeOverHandoff, pokeConversation, type HandoffDetail } from "@/conversations/api";
@@ -135,7 +134,6 @@ export default function ConversationScreen() {
     useState<CollaborationRequest>();
   const [responseText, setResponseText] = useState("");
   const [acting, setActing] = useState(false);
-  const [responsibilityNotice, setResponsibilityNotice] = useState<string>();
   const [briefDefaultMode, setBriefDefaultMode] = useState<BriefMode>("compact");
   const [transcriptScrolled, setTranscriptScrolled] = useState(false);
   const composerAppear = useRef(new Animated.Value(0)).current;
@@ -724,7 +722,6 @@ export default function ConversationScreen() {
     ) return;
     const clientRequestId = claimRequestIdRef.current ?? Crypto.randomUUID();
     claimRequestIdRef.current = clientRequestId;
-    setResponsibilityNotice(undefined);
     setActing(true);
     try {
       const state = await acceptHandoff(
@@ -772,19 +769,12 @@ export default function ConversationScreen() {
         activeTransferNote: current?.activeTransferNote ?? null,
             }));
             claimRequestIdRef.current = undefined;
-          } else {
-            setResponsibilityNotice("正在确认接手结果，请不要重复操作。");
           }
         } catch {
-          setResponsibilityNotice("暂时无法确认接手结果，网络恢复后请刷新。");
+          // 结果未知时保持当前面板，可再次点击接手
         }
       } else {
-        const copy = actionErrorCopy(
-          reason instanceof ApiError
-            ? { code: reason.code, status: reason.status }
-            : undefined,
-        );
-        setResponsibilityNotice([copy.title, copy.message].filter(Boolean).join("·"));
+        showActionError(reason);
       }
     } finally {
       setActing(false);
@@ -803,7 +793,6 @@ export default function ConversationScreen() {
     if (handoff && handoff.state.status !== "HUMAN_FINISHED") return;
     const clientRequestId = takeoverRequestIdRef.current ?? Crypto.randomUUID();
     takeoverRequestIdRef.current = clientRequestId;
-    setResponsibilityNotice(undefined);
     setActing(true);
     try {
       await takeOverHandoff(session, id, clientRequestId);
@@ -838,19 +827,12 @@ export default function ConversationScreen() {
             if (current) setHandoff(current);
             else setHandoffUnavailable(true);
             takeoverRequestIdRef.current = undefined;
-          } else {
-            setResponsibilityNotice("正在确认接管结果，请不要重复操作。");
           }
         } catch {
-          setResponsibilityNotice("暂时无法确认接管结果，网络恢复后请刷新。");
+          // 结果未知时保持当前面板，可再次点击接管
         }
       } else {
-        const copy = actionErrorCopy(
-          reason instanceof ApiError
-            ? { code: reason.code, status: reason.status }
-            : undefined,
-        );
-        setResponsibilityNotice([copy.title, copy.message].filter(Boolean).join("·"));
+        showActionError(reason);
       }
     } finally {
       setActing(false);
@@ -862,7 +844,6 @@ export default function ConversationScreen() {
     const clientRequestId = rejectRequestIdRef.current ?? Crypto.randomUUID();
     rejectRequestIdRef.current = clientRequestId;
     setActing(true);
-    setResponsibilityNotice(undefined);
     try {
       const state = await rejectTransfer(session, id, {
         expectedHandoffRevision: handoff.state.handoffRevision,
@@ -900,20 +881,13 @@ export default function ConversationScreen() {
             outcome.status === "not_found" ||
             outcome.status === "failed"
           ) {
-            setResponsibilityNotice("已确认操作未完成，可以再次点击“无法接手”。");
-          } else {
-            setResponsibilityNotice("正在确认拒绝结果，请不要重复操作。");
+            showActionError(new ApiError("reject_not_completed", 0));
           }
         } catch {
-          setResponsibilityNotice("暂时无法确认拒绝结果，网络恢复后请刷新。");
+          // 结果未知时保持当前面板，可再次点击无法接手
         }
       } else {
-        const copy = actionErrorCopy(
-          reason instanceof ApiError
-            ? { code: reason.code, status: reason.status }
-            : undefined,
-        );
-        setResponsibilityNotice([copy.title, copy.message].filter(Boolean).join("·"));
+        showActionError(reason);
       }
     } finally {
       setActing(false);
@@ -1748,7 +1722,6 @@ export default function ConversationScreen() {
         ) : uiState.mode === "transfer_offer" ? (
           <ActionPanel
             title="等待你接手"
-            details={responsibilityNotice ? [responsibilityNotice] : undefined}
             action={acting ? "接手处理中…" : "接手处理"}
             tone="primary"
             onPress={() => void claim()}
@@ -1767,7 +1740,6 @@ export default function ConversationScreen() {
         ) : uiState.mode === "claim" ? (
           <ActionPanel
             title="Agent 需要人工继续处理"
-            details={responsibilityNotice ? [responsibilityNotice] : undefined}
             action={acting ? "接手处理中…" : "接手处理"}
             tone="primary"
             onPress={() => void claim()}
@@ -1816,7 +1788,6 @@ export default function ConversationScreen() {
         ) : uiState.mode === "takeover" ? (
           <ActionPanel
             title="Agent 正在自动处理"
-            details={responsibilityNotice ? [responsibilityNotice] : undefined}
             action={acting ? "接管中…" : "接管处理"}
             tone="primary"
             onPress={() => void takeOver()}
@@ -1825,18 +1796,10 @@ export default function ConversationScreen() {
         ) : handoff?.state?.status === "HUMAN_FINISHED" ? (
           <ActionPanel
             title="本次人工处理已结束"
-            details={
-              capabilities.mobileManualTakeover
-                ? ["点击下方按钮重新接管，由你继续人工处理。"]
-                : undefined
-            }
             action={acting ? "重新接管中…" : "重新接管"}
             tone="primary"
             disabled={acting || !capabilities.mobileManualTakeover}
-            onPress={() => {
-              setResponsibilityNotice(undefined);
-              void takeOver();
-            }}
+            onPress={() => void takeOver()}
           />
         ) : !handoff ? (
           <ActionPanel title="当前由 Agent 处理" tone="muted" />

@@ -53,7 +53,7 @@ integration("runtime settings（Operator Control Plane 数据层）", () => {
     await postgres.close();
   });
 
-  it("默认值为全部开启 + 允许模型", async () => {
+  it("默认值为全部开启（合并窗口除外）+ 允许模型", async () => {
     const settings = await readRuntimeSettings(postgres.db, logger, {
       fresh: true,
     });
@@ -93,18 +93,14 @@ integration("runtime settings（Operator Control Plane 数据层）", () => {
     expect(event.metadata.operationId).toBeTruthy();
   });
 
-  it("非 allowlist 模型名被拒绝，DB 值不变", async () => {
+  it("textModel 已从 runtime settings 收敛删除：PATCH 拒绝未知字段", async () => {
     await expect(
       updateRuntimeSettings(postgres.db, logger, {
         actorUserId: actor,
         sourceIp: "127.0.0.1",
-        patch: { textModel: "gpt-4" as never },
+        patch: { textModel: "gpt-4" } as never,
       }),
-    ).rejects.toThrow(/not in allowlist/);
-    const fresh = await readRuntimeSettings(postgres.db, logger, {
-      fresh: true,
-    });
-    expect(fresh.textModel).toBe("deepseek-v4-flash");
+    ).rejects.toThrow();
   });
 
   it("回滚恢复上一份配置并重新校验 + 新审计", async () => {

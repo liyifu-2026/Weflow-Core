@@ -17,8 +17,6 @@ const defaults = {
     baseUrl: "https://env.test",
     apiKey: "env-key",
   },
-  visionModel: { name: "mimo-v2.5", baseUrl: "https://env.test" },
-  asrModel: { name: "mimo-v2.5", baseUrl: "https://env.test" },
 };
 
 const seed: ModelSettingsRuntime = {
@@ -27,12 +25,7 @@ const seed: ModelSettingsRuntime = {
     baseUrl: "https://db.test",
     apiKey: "db-key",
   },
-  visionModel: {
-    name: "mimo-v2.5",
-    baseUrl: "https://db.test",
-    apiKey: "db-key",
-  },
-  asrModel: { name: "mimo-v2.5", baseUrl: "https://db.test", apiKey: "db-key" },
+  modelGatewayFingerprint: "seedfp",
 };
 
 const changed: ModelSettingsRuntime = {
@@ -42,6 +35,7 @@ const changed: ModelSettingsRuntime = {
     baseUrl: "https://new.test",
     apiKey: "new-key",
   },
+  modelGatewayFingerprint: "changedfp",
 };
 
 function makeDb(): never {
@@ -97,6 +91,32 @@ describe("model settings hot reload", () => {
     notifyModelSettingsChanged();
     await vi.advanceTimersByTimeAsync(0);
     expect(apply).not.toHaveBeenCalled();
+    stop();
+    vi.useRealTimers();
+  });
+
+  // 模型网关注册表变化不影响旧版扁平配置，但必须触发派生客户端
+  // （故障转移链等）重建：指纹单独变化也要 apply。
+  it("applies when only the model gateway fingerprint changes", async () => {
+    vi.useFakeTimers();
+    let next = seed;
+    vi.spyOn(
+      await import("../modules/operations/application/model-settings.js"),
+      "readModelSettingsRuntime",
+    ).mockImplementation(() => Promise.resolve(next));
+    const apply = vi.fn();
+    const stop = startModelSettingsReloader(
+      makeDb(),
+      defaults,
+      seed,
+      apply,
+      3_600_000,
+    );
+    next = { ...seed, modelGatewayFingerprint: "registry-changed" };
+    notifyModelSettingsChanged();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(apply).toHaveBeenCalledWith(next);
     stop();
     vi.useRealTimers();
   });

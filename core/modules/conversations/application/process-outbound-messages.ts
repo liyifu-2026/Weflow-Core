@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { and, asc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lt, ne } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import {
@@ -20,6 +20,27 @@ import type {
 } from "../../channel/contracts/channel-send-operations.js";
 import { ChannelSendRejectedError } from "../../channel/contracts/channel-send-operations.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
+import {
+  DELIVERED_SEND_STATES,
+  IN_FLIGHT_SEND_STATES,
+  OUTBOUND_LOOP_SEND_STATES,
+  SEND_STATE,
+  sendStateFromHost,
+} from "./send-states.js";
+import {
+  interSegmentDelayMs,
+  interjectionGate,
+  priorSegmentGate,
+  shouldHoldForKillSwitch,
+} from "./outbound-step-decision.js";
+import { parseAgentReplyBatchId } from "./message-service.js";
+import { recordAgentTurnEvent } from "../../agent/application/agent-turn-events.js";
+import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
+import type { RuntimeSettings } from "../../operations/application/runtime-settings.js";
+
+// 纯决策核（分段阻塞/打字节拍/kill-switch）收敛在 outbound-step-decision；
+// 此处保持既有导出路径，节奏测试与外消费方不受迁移影响。
+export { interSegmentDelayMs };
 
 /** 出站媒体信息（从 mediaAssets + storedFiles 查询） */
 type OutboundMediaInfo = {
@@ -62,6 +83,8 @@ export async function processOutboundMessages(
       replyToChannelMessageId: schema.messages.replyToChannelMessageId,
       mentionContactRefs: schema.messages.mentionContactRefs,
       contentType: schema.messages.contentType,
+      chatType: schema.conversations.chatType,
+      createdAt: schema.messages.createdAt,
     })
     .from(schema.messages)
     .innerJoin(
@@ -70,11 +93,7 @@ export async function processOutboundMessages(
     )
     .where(
       and(
-        inArray(schema.messages.sendState, [
-          "pending",
-          "submitting",
-          "unknown",
-        ]),
+        inArray(schema.messages.sendState, [...OUTBOUND_LOOP_SEND_STATES]),
         options.conversationId
           ? eq(schema.messages.conversationId, options.conversationId)
           : undefined,
@@ -83,8 +102,17 @@ export async function processOutboundMessages(
     .orderBy(asc(schema.messages.createdAt))
     .limit(20);
 
+  // 插话闸门的批次级 memo（仅本轮询 pass 内有效）：同批分段共享事务
+  // 时间戳（锚点一致），插话查询与触发者解析每批至多一次；reply_interrupted
+  // 每批至多发布一次。
+  const interjectionMemo = new Map<string, { actorId: string | null }[]>();
+  const triggerActorMemo = new Map<string, string | null>();
+  const interruptedPublished = new Set<string>();
+
   for (const message of messages) {
     if (message.replyBatchId && (message.replySequence ?? 1) > 1) {
+      // I/O 只负责装配前序分段事实；阻塞/字节拍判定规则在
+      // outbound-step-decision（纯函数，表驱动可测）。
       const prior = await db
         .select({
           messageId: schema.messages.messageId,
@@ -97,58 +125,177 @@ export async function processOutboundMessages(
             lt(schema.messages.replySequence, message.replySequence ?? 1),
             // 只在前面分段仍「待发送/发送中」时阻塞；unknown/held/failed 等
             // 终态不再挡住后续分段
-            inArray(schema.messages.sendState, ["pending", "submitting"]),
+            inArray(schema.messages.sendState, [...IN_FLIGHT_SEND_STATES]),
           ),
         )
         .limit(1);
       const firstPrior = prior[0];
-      if (firstPrior) {
-        // 即使乐观行仍 pending/submitting，若事件同步已产生 delivered 副本
-        // （消息实际已送达渠道），后续分段不应被永久阻塞。
-        const delivered = await db
-          .select({ messageId: schema.messages.messageId })
-          .from(schema.messages)
-          .where(
-            and(
-              eq(schema.messages.conversationId, message.conversationId),
-              eq(schema.messages.text, firstPrior.text),
-              eq(schema.messages.sendState, "observed"),
-              eq(schema.messages.isSelf, true),
-            ),
-          )
-          .limit(1);
-        if (delivered.length === 0) continue;
-      }
+      // 即使乐观行仍 pending/submitting，若事件同步已产生 delivered 副本
+      // （消息实际已送达渠道），后续分段不应被永久阻塞。
+      const delivered = firstPrior
+        ? await db
+            .select({ messageId: schema.messages.messageId })
+            .from(schema.messages)
+            .where(
+              and(
+                eq(schema.messages.conversationId, message.conversationId),
+                eq(schema.messages.text, firstPrior.text),
+                // delivered = 通道已看到（observed）或已确认（confirmed）
+                inArray(schema.messages.sendState, [...DELIVERED_SEND_STATES]),
+                eq(schema.messages.isSelf, true),
+              ),
+            )
+            .limit(1)
+        : [];
+      const pacingPrior = await db
+        .select({ sendUpdatedAt: schema.messages.sendUpdatedAt })
+        .from(schema.messages)
+        .where(
+          and(
+            eq(schema.messages.replyBatchId, message.replyBatchId),
+            eq(schema.messages.replySequence, (message.replySequence ?? 1) - 1),
+          ),
+        )
+        .limit(1);
+      const verdict = priorSegmentGate({
+        hasUnsentPrior: Boolean(firstPrior),
+        deliveredCopyExists: delivered.length > 0,
+        priorSentAt: pacingPrior[0]?.sendUpdatedAt ?? null,
+        text: message.text ?? "",
+        messageId: message.messageId,
+        now: new Date(),
+      });
+      if (verdict !== "ok") continue;
     }
 
     // AI Kill Switch 最终硬门（代码级，不依赖 Turn 侧判断）：
-    // 按消息来源分类——human/system（含程序化 handoff 确认语）永远允许；
-    // agent 消息在 auto_send_enabled OFF 时绝对禁止发送。
-    // fresh 读真值，即使 Turn 事务在开关翻转前已提交 outbound 也能拦住。
-    // 已 pending 的 AI 出站置为 held（终态，恢复开关后不自动补发，不重复生成）。
-    if (message.actorType === "agent" && message.sendState !== "unknown") {
-      const runtime = await readRuntimeSettings(db, undefined, {
+    // human/system（含程序化 handoff 确认语）永远允许；agent 消息在
+    // auto_send_enabled OFF 时绝对禁止发送。fresh 读真值，即使 Turn 事务
+    // 在开关翻转前已提交 outbound 也能拦住。已 pending 的 AI 出站置为
+    // held（终态，恢复开关后不自动补发，不重复生成）。
+    // 发送期插话闸门共用同一次 fresh 读（同为发送边界安全开关）。
+    let agentRuntime: RuntimeSettings | null = null;
+    if (
+      message.actorType === "agent" &&
+      message.sendState !== SEND_STATE.unknown
+    ) {
+      agentRuntime = await readRuntimeSettings(db, undefined, {
         fresh: true,
       });
-      if (!runtime.autoSendEnabled) {
+      if (
+        shouldHoldForKillSwitch({
+          actorType: message.actorType,
+          sendState: message.sendState,
+          autoSendEnabled: agentRuntime.autoSendEnabled,
+        })
+      ) {
         await db
           .update(schema.messages)
-          .set({ sendState: "held", sendUpdatedAt: new Date() })
+          .set({ sendState: SEND_STATE.held, sendUpdatedAt: new Date() })
           .where(eq(schema.messages.messageId, message.messageId));
         continue;
+      }
+
+      // 发送期插话闸门：每段发送前看一眼批次落库后有没有未处理的新入站。
+      // 锚点 = 分段自身 createdAt（同批共享事务时间戳）；吸收机制保证
+      // 落库前的插话已并入最终决策，此处命中即「话说了一半，世界变了」。
+      // 命中 → 本段及剩余分段置 held，插话消息自然触发的新 turn 在含
+      // 被扣留分段的上下文（agent-context 提示块）上重新决策。
+      const parsedBatch = message.replyBatchId
+        ? parseAgentReplyBatchId(message.replyBatchId)
+        : null;
+      if (parsedBatch && agentRuntime.outboundInterjectGateEnabled) {
+        const memoKey = message.replyBatchId as string;
+        let interjections = interjectionMemo.get(memoKey);
+        if (!interjections) {
+          interjections = await loadBatchInterjections(db, {
+            conversationId: message.conversationId,
+            anchor: message.createdAt,
+          });
+          interjectionMemo.set(memoKey, interjections);
+        }
+        let triggerActorId: string | null = null;
+        if (message.chatType === "group") {
+          const cachedActor = triggerActorMemo.get(parsedBatch.turnId);
+          if (cachedActor === undefined) {
+            triggerActorId = await resolveTriggerActorId(
+              db,
+              parsedBatch.turnId,
+            );
+            triggerActorMemo.set(parsedBatch.turnId, triggerActorId);
+          } else {
+            triggerActorId = cachedActor;
+          }
+        }
+        const verdict = interjectionGate({
+          gateEnabled: agentRuntime.outboundInterjectGateEnabled,
+          chatType: message.chatType,
+          isAgentReplyBatch: true,
+          isToolResultVariant: parsedBatch.variant === "tool_result",
+          triggerActorId,
+          interjections,
+        });
+        if (verdict === "hold") {
+          // 每批至多发布一次：跨 pass 逐段扣留时，同批已存在 held 分段
+          // （前序 pass 已发布过）则不再重复发事件。
+          const siblingHeld = await db
+            .select({ messageId: schema.messages.messageId })
+            .from(schema.messages)
+            .where(
+              and(
+                eq(schema.messages.replyBatchId, memoKey),
+                eq(schema.messages.sendState, SEND_STATE.held),
+              ),
+            )
+            .limit(1);
+          await db
+            .update(schema.messages)
+            .set({
+              sendState: SEND_STATE.held,
+              sendError: "customer_interjection",
+              sendUpdatedAt: new Date(),
+            })
+            .where(eq(schema.messages.messageId, message.messageId));
+          if (siblingHeld.length === 0 && !interruptedPublished.has(memoKey)) {
+            interruptedPublished.add(memoKey);
+            conversationEvents.publish({
+              type: "reply_interrupted",
+              conversationId: message.conversationId,
+              occurredAt: new Date().toISOString(),
+              messageId: message.messageId,
+            });
+            // 总线事件只在进程内瞬时可见，事后查不到「这批为什么没发出去」。
+            // 同一事实再落一条回合事件，排错界面/集成测试才有可查的证据链。
+            // 观测量失败不影响发送语义（回合行可能已被保留策略清理，外键会拒），
+            // 静默降级为「只有总线事件」。
+            await recordAgentTurnEvent(db, {
+              turnId: parsedBatch.turnId,
+              conversationId: message.conversationId,
+              eventType: "reply_held",
+              reasonCode: "customer_interjection",
+              payload: {
+                replyBatchId: memoKey,
+                variant: parsedBatch.variant,
+                heldFromSequence: message.replySequence,
+                interjectionCount: interjections.length,
+              },
+            }).catch(() => undefined);
+          }
+          continue;
+        }
       }
     }
 
     let operationId = message.sendOperationId;
     if (!operationId) {
       // 没有 operationId 的 unknown 无法安全对账；保持原状态，绝不生成替代操作。
-      if (message.sendState === "unknown") continue;
+      if (message.sendState === SEND_STATE.unknown) continue;
       operationId = operationIdForMessage(message.messageId);
       await db
         .update(schema.messages)
         .set({
           sendOperationId: operationId,
-          sendState: "submitting",
+          sendState: SEND_STATE.submitting,
           sendUpdatedAt: new Date(),
         })
         .where(eq(schema.messages.messageId, message.messageId));
@@ -205,7 +352,7 @@ export async function processOutboundMessages(
         await db
           .update(schema.messages)
           .set({
-            sendState: "failed",
+            sendState: SEND_STATE.failed,
             sendError: `channel_rejected_http_${String(error.httpStatus)}`,
             sendUpdatedAt: new Date(),
           })
@@ -218,7 +365,7 @@ export async function processOutboundMessages(
       await db
         .update(schema.messages)
         .set({
-          sendState: "unknown",
+          sendState: SEND_STATE.unknown,
           sendError: reconciliation.error ?? message.sendError,
           sendUpdatedAt: new Date(),
         })
@@ -233,6 +380,52 @@ export async function processOutboundMessages(
       options.fileStorageRoot,
     );
   }
+}
+
+/**
+ * 批次落库后的未处理新入站（插话）。锚点 = 批次落库时刻（分段 createdAt，
+ * 同批共享事务时间戳）：吸收机制保证落库前的插话已并入最终决策，落库后
+ * 的才是「说到一半世界变了」。occurredAt 条件排除历史回填（回填行
+ * createdAt 新但 occurredAt 旧）；isSelf=false 排除本账号 echo（含同账号
+ * 人工代发——那不是客户插话）。
+ */
+async function loadBatchInterjections(
+  db: NodePgDatabase<typeof schema>,
+  input: { conversationId: string; anchor: Date },
+): Promise<{ actorId: string | null }[]> {
+  return db
+    .select({ actorId: schema.messages.actorId })
+    .from(schema.messages)
+    .where(
+      and(
+        eq(schema.messages.conversationId, input.conversationId),
+        eq(schema.messages.direction, "inbound"),
+        eq(schema.messages.isSelf, false),
+        gt(schema.messages.createdAt, input.anchor),
+        gt(schema.messages.occurredAt, input.anchor),
+      ),
+    )
+    .limit(10);
+}
+
+/**
+ * 从 turnId 解析触发消息发送者（群聊「原提问者」判定基准）：
+ * turn:{messageId} → 该消息 actorId；turn:wake:*（等待超时唤醒，无触发
+ * 消息）与查询不到时返回 null（调用方按「群聊不扣」处理）。
+ */
+async function resolveTriggerActorId(
+  db: NodePgDatabase<typeof schema>,
+  turnId: string,
+): Promise<string | null> {
+  if (turnId.startsWith("turn:wake:")) return null;
+  const triggerMessageId = turnId.slice("turn:".length);
+  if (!triggerMessageId) return null;
+  const [row] = await db
+    .select({ actorId: schema.messages.actorId })
+    .from(schema.messages)
+    .where(eq(schema.messages.messageId, triggerMessageId))
+    .limit(1);
+  return row?.actorId ?? null;
 }
 
 type ReconcileSendOperationInput = {
@@ -410,7 +603,7 @@ async function applySendOperation(
       await db
         .update(schema.messages)
         .set({
-          sendState: "unknown",
+          sendState: SEND_STATE.unknown,
           sendError: "send_operation_channel_message_conflict",
           sendUpdatedAt: new Date(),
         })
@@ -418,12 +611,9 @@ async function applySendOperation(
       return;
     }
   }
-  // executing 与 pending 一样属于「仍在途」：Host 已认领并正在 GUI 发送，
-  // 不应把消息标记为已发送，也不应回写为失败。
-  const sendState =
-    operation.state === "pending" || operation.state === "executing"
-      ? "submitting"
-      : operation.state;
+  // host 协议态 → Core 持久态的唯一映射点（executing ≡ pending 属于
+  // 「仍在途」：Host 已认领正在 GUI 发送，不应标记已发送或失败）
+  const sendState = sendStateFromHost(operation.state);
   await db
     .update(schema.messages)
     .set({
@@ -441,7 +631,7 @@ async function applySendOperation(
   // unknown 不清理——操作可能仍在途或待对账，重试路径依赖暂存文件幂等存在。
   if (
     fileStorageRoot &&
-    (sendState === "confirmed" || sendState === "failed")
+    (sendState === SEND_STATE.confirmed || sendState === SEND_STATE.failed)
   ) {
     await tryCleanupOutboundMediaStaging(fileStorageRoot, messageId);
   }

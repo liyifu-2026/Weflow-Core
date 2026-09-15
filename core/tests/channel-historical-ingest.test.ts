@@ -33,8 +33,6 @@ const mocks = vi.hoisted(() => ({
     knowledgeEnabled: true,
     memoryEnabled: true,
     visionEnabled: true,
-    textModel: "deepseek-v4-flash",
-    visionModel: "mimo-v2.5",
   })),
   publish: vi.fn(),
 }));
@@ -53,38 +51,26 @@ vi.mock("pino", () => {
   };
 });
 
-vi.mock(
-  "../modules/memory/application/schedule-memory-capture.js",
-  () => ({
-    scheduleMemoryCaptureInTransaction:
-      mocks.scheduleMemoryCaptureInTransaction,
-  }),
-);
+vi.mock("../modules/memory/application/schedule-memory-capture.js", () => ({
+  scheduleMemoryCaptureInTransaction: mocks.scheduleMemoryCaptureInTransaction,
+}));
 
-vi.mock(
-  "../modules/notifications/application/notification-outbox.js",
-  () => ({
-    enqueueAssigneeInboundNotification:
-      mocks.enqueueAssigneeInboundNotification,
-  }),
-);
+vi.mock("../modules/notifications/application/notification-outbox.js", () => ({
+  enqueueAssigneeInboundNotification: mocks.enqueueAssigneeInboundNotification,
+}));
 
-vi.mock(
-  "../modules/agent/application/execution-profile-service.js",
-  () => ({
-    resolveExecutionProfileForAdmission:
-      mocks.resolveExecutionProfileForAdmission,
-  }),
-);
+vi.mock("../modules/agent/application/execution-profile-service.js", () => ({
+  resolveExecutionProfileForAdmission:
+    mocks.resolveExecutionProfileForAdmission,
+}));
 
 vi.mock("../modules/handoff/application/handoff-service.js", () => ({
   createHandoff: mocks.createHandoff,
 }));
 
-vi.mock(
-  "../modules/operations/application/runtime-settings.js",
-  () => ({ readRuntimeSettings: mocks.readRuntimeSettings }),
-);
+vi.mock("../modules/operations/application/runtime-settings.js", () => ({
+  readRuntimeSettings: mocks.readRuntimeSettings,
+}));
 
 vi.mock("../../../infrastructure/events/conversation-events.js", () => ({
   conversationEvents: { on: vi.fn(), publish: mocks.publish },
@@ -159,80 +145,100 @@ function createStubDb() {
     return { builder, valuesData };
   }
 
-  const transaction = vi.fn(
-    async (callback: (tx: any) => Promise<void>) => {
-      const tx: any = {
-        insert(table: { getSQLName?: () => string } & Record<string, unknown>) {
-          const name = (table as any)?.[Symbol.for("drizzle:Name")] ?? "";
-          const rows = resolveTable(name);
-          const { builder } = makeBuilder(name, rows);
-          return builder;
-        },
-        select(..._args: unknown[]) {
-          const state: { table: string; where: Row } = { table: "", where: {} };
-          const chain: any = {
-            from(table: unknown) {
-              state.table =
-                ((table as any)?.[Symbol.for("drizzle:Name")] as string) ?? "";
+  const transaction = vi.fn(async (callback: (tx: any) => Promise<void>) => {
+    const tx: any = {
+      insert(table: { getSQLName?: () => string } & Record<string, unknown>) {
+        const name = (table as any)?.[Symbol.for("drizzle:Name")] ?? "";
+        const rows = resolveTable(name);
+        const { builder } = makeBuilder(name, rows);
+        return builder;
+      },
+      select(..._args: unknown[]) {
+        const state: { table: string; where: Row } = { table: "", where: {} };
+        const chain: any = {
+          from(table: unknown) {
+            state.table =
+              ((table as any)?.[Symbol.for("drizzle:Name")] as string) ?? "";
+            return chain;
+          },
+          where(_condition: unknown) {
+            return chain;
+          },
+          limit() {
+            return Promise.resolve(resolveTable(state.table));
+          },
+          then(resolve: (v: unknown[]) => void) {
+            resolve(resolveTable(state.table));
+          },
+        };
+        return chain;
+      },
+      // update 仅允许：实时入站对 scheduled_sends 的新事件作废
+      // （SCHEDULED-SEND-PLAN 决策 #5）与对 session_wakes 的等待打断
+      // （wait 循环：对方开口即作废 pending 唤醒）。其余表出现 update
+      // 即失败，防静默绕过。
+      update(table: { getSQLName?: () => string } & Record<string, unknown>) {
+        const name = (table as any)?.[Symbol.for("drizzle:Name")] ?? "";
+        if (name === "scheduled_sends" || name === "session_wakes") {
+          return {
+            set() {
+              const chain: any = {
+                returning() {
+                  return Promise.resolve([]);
+                },
+              };
+              chain.where = () => {
+                return {
+                  returning: chain.returning,
+                  then: (resolve: (v: unknown[]) => void) =>
+                    Promise.resolve([]).then(resolve),
+                };
+              };
               return chain;
-            },
-            where(_condition: unknown) {
-              return chain;
-            },
-            limit() {
-              return Promise.resolve(resolveTable(state.table));
-            },
-            then(resolve: (v: unknown[]) => void) {
-              resolve(resolveTable(state.table));
             },
           };
-          return chain;
-        },
-        // update 仅允许：实时入站对 scheduled_sends 的新事件作废
-        // （SCHEDULED-SEND-PLAN 决策 #5）。其余表出现 update 即失败，防静默绕过。
-        update(table: { getSQLName?: () => string } & Record<string, unknown>) {
-          const name = (table as any)?.[Symbol.for("drizzle:Name")] ?? "";
-          if (name === "scheduled_sends") {
-            return {
-              set() {
-                const chain: any = {
-                  returning() {
-                    return Promise.resolve([]);
-                  },
-                };
-                chain.where = () => {
-                  return {
-                    returning: chain.returning,
-                    then: (resolve: (v: unknown[]) => void) =>
-                      Promise.resolve([]).then(resolve),
-                  };
-                };
-                return chain;
-              },
-            };
-          }
-          throw new Error(`stub: update not expected on ${name || "unknown table"}`);
-        },
-        delete() {
-          throw new Error("stub: delete not expected");
-        },
-        // 捕获副作用行，供断言
-        __rows: { conversations, contacts, messages, turns, media, notifications, memoryStates },
-      };
-      return callback(tx);
-    },
-  );
+        }
+        throw new Error(
+          `stub: update not expected on ${name || "unknown table"}`,
+        );
+      },
+      delete() {
+        throw new Error("stub: delete not expected");
+      },
+      // 捕获副作用行，供断言
+      __rows: {
+        conversations,
+        contacts,
+        messages,
+        turns,
+        media,
+        notifications,
+        memoryStates,
+      },
+    };
+    return callback(tx);
+  });
 
   return {
     transaction,
-    __rows: { conversations, contacts, messages, turns, media, notifications, memoryStates },
+    __rows: {
+      conversations,
+      contacts,
+      messages,
+      turns,
+      media,
+      notifications,
+      memoryStates,
+    },
   };
 }
 
 import { ingestChannelEvents } from "../modules/conversations/application/ingest-channel-events.js";
 
 function baseEvent(overrides: Record<string, unknown> = {}) {
-  return {
+  // 毒事件（kind 不在协议目录）也走此构造器，断言 ingest 层纵深防御——
+  // 提供方 zod（协议 v6 枚举）之上仍保留归一化层拒收。
+  return ({
     cursor: "1",
     eventId: "hist:wxid_demo:101",
     conversationRef: "wxid_demo",
@@ -246,7 +252,7 @@ function baseEvent(overrides: Record<string, unknown> = {}) {
     isSelf: false,
     historical: true,
     ...overrides,
-  };
+  }) as Parameters<typeof ingestChannelEvents>[1][number];
 }
 
 function liveEvent(overrides: Record<string, unknown> = {}) {
@@ -264,12 +270,11 @@ describe("historical 事件摄取（空库 Backfill）", () => {
 
   it("historical=true：消息入库，三个副作用点均未调用", async () => {
     const db = createStubDb();
-    await ingestChannelEvents(
-      db as never,
-      [baseEvent()],
-      "1",
-      { info: () => {}, warn: () => {}, error: () => {} } as never,
-    );
+    await ingestChannelEvents(db as never, [baseEvent()], "1", {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    } as never);
 
     // 消息照常入库（内存桩捕获）
     expect(db.__rows.messages).toHaveLength(1);
@@ -279,19 +284,13 @@ describe("historical 事件摄取（空库 Backfill）", () => {
     });
 
     // 1) Agent Turn：准入解析与 Turn 插入均未发生
-    expect(
-      mocks.resolveExecutionProfileForAdmission,
-    ).not.toHaveBeenCalled();
+    expect(mocks.resolveExecutionProfileForAdmission).not.toHaveBeenCalled();
 
     // 2) 记忆捕获：未调度
-    expect(
-      mocks.scheduleMemoryCaptureInTransaction,
-    ).not.toHaveBeenCalled();
+    expect(mocks.scheduleMemoryCaptureInTransaction).not.toHaveBeenCalled();
 
     // 3) 通知 outbox：未入队
-    expect(
-      mocks.enqueueAssigneeInboundNotification,
-    ).not.toHaveBeenCalled();
+    expect(mocks.enqueueAssigneeInboundNotification).not.toHaveBeenCalled();
 
     // global-pause 人工路径：不创建 Handoff
     expect(mocks.createHandoff).not.toHaveBeenCalled();
@@ -299,19 +298,14 @@ describe("historical 事件摄取（空库 Backfill）", () => {
 
   it("historical 缺省（实时事件）：三个副作用点被调用（对照组）", async () => {
     const db = createStubDb();
-    await ingestChannelEvents(
-      db as never,
-      [liveEvent()],
-      "1",
-      { info: () => {}, warn: () => {}, error: () => {} } as never,
-    );
+    await ingestChannelEvents(db as never, [liveEvent()], "1", {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    } as never);
 
-    expect(
-      mocks.resolveExecutionProfileForAdmission,
-    ).toHaveBeenCalledTimes(1);
-    expect(
-      mocks.scheduleMemoryCaptureInTransaction,
-    ).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveExecutionProfileForAdmission).toHaveBeenCalledTimes(1);
+    expect(mocks.scheduleMemoryCaptureInTransaction).toHaveBeenCalledTimes(1);
     // 文本事件不建媒体资产 → 无媒体副作用；通知因无 in_progress handoff 不入队
     expect(mocks.createHandoff).not.toHaveBeenCalled();
   });
@@ -332,9 +326,7 @@ describe("historical 事件摄取（空库 Backfill）", () => {
       { info: () => {}, warn: () => {}, error: () => {} } as never,
     );
     expect(db.__rows.media).toHaveLength(0);
-    expect(
-      mocks.resolveExecutionProfileForAdmission,
-    ).not.toHaveBeenCalled();
+    expect(mocks.resolveExecutionProfileForAdmission).not.toHaveBeenCalled();
   });
 
   it("historical 字段缺省/null/false 均视为实时事件（协议向后兼容）", async () => {
@@ -343,8 +335,16 @@ describe("historical 事件摄取（空库 Backfill）", () => {
       db as never,
       [
         liveEvent({ eventId: "wechat:wxid_demo:201", channelMessageId: "201" }),
-        baseEvent({ historical: false, eventId: "hist:wxid_demo:202", channelMessageId: "202" }),
-        baseEvent({ historical: null, eventId: "hist:wxid_demo:203", channelMessageId: "203" }),
+        baseEvent({
+          historical: false,
+          eventId: "hist:wxid_demo:202",
+          channelMessageId: "202",
+        }),
+        baseEvent({
+          historical: null,
+          eventId: "hist:wxid_demo:203",
+          channelMessageId: "203",
+        }),
       ],
       "1",
       { info: () => {}, warn: () => {}, error: () => {} } as never,
@@ -352,9 +352,7 @@ describe("historical 事件摄取（空库 Backfill）", () => {
     // 三条消息都入库
     expect(db.__rows.messages).toHaveLength(3);
     // historical 缺省/false/null 的消息照常触发副作用
-    expect(
-      mocks.scheduleMemoryCaptureInTransaction,
-    ).toHaveBeenCalledTimes(3);
+    expect(mocks.scheduleMemoryCaptureInTransaction).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -385,12 +383,11 @@ describe("毒事件单条隔离（管道不冻结）", () => {
     });
 
     await expect(
-      ingestChannelEvents(
-        db as never,
-        [good1, poison, good2],
-        "3",
-        { info: () => {}, warn: () => {}, error } as never,
-      ),
+      ingestChannelEvents(db as never, [good1, poison, good2], "3", {
+        info: () => {},
+        warn: () => {},
+        error,
+      } as never),
     ).resolves.toBeUndefined();
 
     // 毒事件前后的两个好事件都入库
@@ -419,12 +416,11 @@ describe("毒事件单条隔离（管道不冻结）", () => {
     });
 
     await expect(
-      ingestChannelEvents(
-        db as never,
-        [poisonA, poisonB],
-        "2",
-        { info: () => {}, warn: () => {}, error: () => {} } as never,
-      ),
+      ingestChannelEvents(db as never, [poisonA, poisonB], "2", {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+      } as never),
     ).resolves.toBeUndefined();
 
     expect(db.__rows.messages).toHaveLength(0);

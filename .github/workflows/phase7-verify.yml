@@ -1,4 +1,4 @@
-name: Phase 7 Verify
+name: Platform Verify
 
 on:
   push:
@@ -58,5 +58,23 @@ jobs:
         env:
           TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
 
-      - name: Solution verify
-        run: pnpm solution:verify
+  business:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install business packages (solutions/)
+        run: pnpm install:all
+        working-directory: solutions
+
+      - name: Build business packages (support-web + plugins)
+        run: pnpm build
+        working-directory: solutions

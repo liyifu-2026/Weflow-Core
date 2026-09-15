@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 import {
+  MAX_REPLY_SEGMENTS,
   NEXT_ACTION_VALUES,
   NO_ACTION_REASONS,
   WAIT_MS_RANGE,
@@ -23,7 +24,7 @@ const decisionInputSchema = z
     reply_segments: z
       .array(z.string().trim().min(1).max(500))
       .min(1)
-      .max(3)
+      .max(MAX_REPLY_SEGMENTS)
       .optional(),
     next_action: z.enum(NEXT_ACTION_VALUES),
     no_action_reason: z.enum(NO_ACTION_REASONS).optional(),
@@ -44,7 +45,12 @@ const decisionInputSchema = z
         arguments: z.record(z.string(), z.string()).default({}),
       })
       .optional(),
-    wait_ms: z.number().int().min(WAIT_MS_RANGE.min).max(WAIT_MS_RANGE.max).optional(),
+    wait_ms: z
+      .number()
+      .int()
+      .min(WAIT_MS_RANGE.min)
+      .max(WAIT_MS_RANGE.max)
+      .optional(),
     nudge_text: z.string().trim().min(1).max(500).optional(),
     scheduled_message: z
       .string()
@@ -54,12 +60,26 @@ const decisionInputSchema = z
       .optional(),
     scheduled_send_at: z.string().trim().min(1).max(40).optional(),
     closure_summary: z.string().trim().min(1).max(1_000).optional(),
+    // 会话事实卡（私聊批）：模型对持久工作状态的全量更新；咨询性数据，
+    // 处置层经 sanitize 收敛后落 agent.fact_cards，下回合开头注入。
+    facts_card: z
+      .object({
+        problem: z.string().max(500).optional(),
+        confirmed_facts: z.array(z.string().max(200)).max(20).optional(),
+        attempted: z.array(z.string().max(200)).max(20).optional(),
+        promises: z.array(z.string().max(200)).max(20).optional(),
+        open_questions: z.array(z.string().max(200)).max(20).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, context) => {
     // 根据 next_action 类型校验必需字段
     const replyRequired = ![
       "retrieve_knowledge",
+      // call_tool 可选附带 ≤2 条过程短讯（说+做同发），不强制
+      "call_tool",
       "handoff",
       "no_action",
       "wait",
@@ -114,14 +134,16 @@ const decisionInputSchema = z
         context.addIssue({
           code: "custom",
           path: ["scheduled_message"],
-          message: "scheduled_message is required when next_action is schedule_send",
+          message:
+            "scheduled_message is required when next_action is schedule_send",
         });
       }
       if (!value.scheduled_send_at) {
         context.addIssue({
           code: "custom",
           path: ["scheduled_send_at"],
-          message: "scheduled_send_at is required when next_action is schedule_send",
+          message:
+            "scheduled_send_at is required when next_action is schedule_send",
         });
       } else {
         const sendAt = Date.parse(value.scheduled_send_at);
@@ -161,8 +183,12 @@ const decisionSchema = decisionInputSchema.transform((value) => ({
   waitMs: value.wait_ms,
   nudgeText: value.nudge_text,
   scheduledMessage: value.scheduled_message,
-  scheduledSendAt: value.scheduled_send_at ? new Date(value.scheduled_send_at) : undefined,
+  scheduledSendAt: value.scheduled_send_at
+    ? new Date(value.scheduled_send_at)
+    : undefined,
   closureSummary: value.closure_summary,
+  // 放宽为 Record：策略路径经 meta 透传（unknown），处置层统一 sanitize
+  factsCard: value.facts_card as Record<string, unknown> | undefined,
   handoffBriefing: value.handoff_briefing
     ? {
         problemSummary: value.handoff_briefing.problem_summary,

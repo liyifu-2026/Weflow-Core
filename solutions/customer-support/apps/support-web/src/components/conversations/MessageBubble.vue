@@ -9,6 +9,7 @@ import { useWeflowAuthStore } from "../../auth-store";
 import MediaImage from "../MediaImage.vue";
 import MediaFile from "../MediaFile.vue";
 import VoiceMessage from "../VoiceMessage.vue";
+import VideoMessage from "../VideoMessage.vue";
 import AvatarImage from "../AvatarImage.vue";
 import StaffAvatar from "../StaffAvatar.vue";
 import {
@@ -20,6 +21,7 @@ import {
   isImageMessage,
   isNonDefaultSendState,
   isPatMessage,
+  isVideoMsg,
   isVoiceMsg,
   mentionSegments,
   messageTime,
@@ -68,15 +70,31 @@ function bubbleMetaLabel(message: Message): string {
     ? (auth.user?.username ?? "我")
     : "其他客服";
 }
+
+// 出站人工头像按发送者绑定：本人消息复用 auth 缓存的 avatarUrl（省一次
+// 请求）；他人消息不传 avatarUrl，StaffAvatar 按 actorId 走
+// GET /users/:id/avatar 取该客服自己的头像（上传图/预设/按用户名哈希的
+// 默认图，登录即可读），保证不同客服的气泡头像互不相同。
+const isOwnStaffMessage = computed(
+  () => !props.message.actorId || props.message.actorId === auth.user?.userId,
+);
+const staffAvatarUrl = computed(() =>
+  isOwnStaffMessage.value ? (auth.user?.avatarUrl ?? null) : null,
+);
+const staffAvatarFallback = computed(() =>
+  isOwnStaffMessage.value
+    ? (auth.user?.displayName || auth.user?.username || "我")
+    : "客服",
+);
 </script>
 
 <template>
   <div
     :id="`message-${message.messageId}`"
-    class="flex flex-col"
+    class="flex flex-col rounded-xl transition-colors"
     :class="[
       message.direction === 'outbound' ? 'items-end' : 'items-start',
-      { 'scroll-mt-4': highlighted },
+      { 'scroll-mt-4 bg-primary/5': highlighted },
     ]"
     @contextmenu="emit('contextmenu', $event, message)"
   >
@@ -117,8 +135,9 @@ function bubbleMetaLabel(message: Message): string {
         <StaffAvatar
           v-else-if="message.direction === 'outbound'"
           :user-id="message.actorId || auth.user?.userId"
-          :avatar-url="auth.user?.avatarUrl"
-          :fallback-text="auth.user?.displayName || auth.user?.username || '我'"
+          :avatar-url="staffAvatarUrl"
+          :fallback-text="staffAvatarFallback"
+          :seed="isOwnStaffMessage ? null : message.actorId"
           :size="28"
           class="mt-0.5 shrink-0"
         />
@@ -137,6 +156,7 @@ function bubbleMetaLabel(message: Message): string {
               (isImageMessage(message) && message.mediaId) ||
               (isFileMessage(message) && message.mediaId) ||
               (isVoiceMsg(message) && message.mediaId) ||
+              (isVideoMsg(message) && message.mediaId) ||
               isEmotionSticker(message)
                 ? ''
                 : message.direction === 'outbound'
@@ -175,6 +195,11 @@ function bubbleMetaLabel(message: Message): string {
               v-else-if="isVoiceMsg(message) && message.mediaId"
               :media-id="message.mediaId"
               :alt="`${actorLabel(message)} 发送的语音`"
+            />
+            <VideoMessage
+              v-else-if="isVideoMsg(message) && message.mediaId"
+              :media-id="message.mediaId"
+              :alt="`${actorLabel(message)} 发送的视频`"
             />
             <template v-else>
               <!-- 引用回复卡片 -->
@@ -220,10 +245,10 @@ function bubbleMetaLabel(message: Message): string {
             <button
               v-else-if="message.actorType !== 'agent' && message.direction === 'outbound' && message.sendState === 'unknown'"
               class="text-primary hover:underline"
-              :disabled="outcomeBusy"
-              @click="emit('check-outcome', message)"
+              :disabled="retryBusy"
+              @click="emit('retry', message)"
             >
-              查询结果
+              重新发送
             </button>
           </div>
         </div>

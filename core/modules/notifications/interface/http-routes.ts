@@ -17,9 +17,29 @@ const deviceBody = z
     pushToken: z.string().min(20).max(300),
     platform: z.enum(["ios", "android"]),
     showPreview: z.boolean().default(false),
+    /** 订阅的通知类型；缺省 = 全部订阅（不改动既有偏好语义） */
+    notifyKinds: z
+      .array(
+        z.enum(["handoff_pending", "handoff_assigned", "assignee_inbound"]),
+      )
+      .max(8)
+      .optional(),
   })
   .strict();
-const preferenceBody = z.object({ showPreview: z.boolean() }).strict();
+const preferenceBody = z
+  .object({
+    showPreview: z.boolean().optional(),
+    notifyKinds: z
+      .array(
+        z.enum(["handoff_pending", "handoff_assigned", "assignee_inbound"]),
+      )
+      .max(8)
+      .optional(),
+  })
+  .refine(
+    (value) => value.showPreview !== undefined || value.notifyKinds !== undefined,
+    { message: "nothing_to_update" },
+  );
 
 /** 注册通知模块的所有 HTTP 路由 */
 export function registerNotificationRoutes(
@@ -34,13 +54,28 @@ export function registerNotificationRoutes(
     const deviceId = randomUUID();
     const devices = await db
       .insert(schema.notificationDevices)
-      .values({ deviceId, userId: identity.user.userId, ...body.data })
+      .values({
+        deviceId,
+        userId: identity.user.userId,
+        pushToken: body.data.pushToken,
+        platform: body.data.platform,
+        showPreview: body.data.showPreview,
+        // 未传 = 全部订阅（NULL 语义），传空数组也按全部订阅处理
+        notifyKinds:
+          body.data.notifyKinds && body.data.notifyKinds.length > 0
+            ? body.data.notifyKinds
+            : null,
+      })
       .onConflictDoUpdate({
         target: schema.notificationDevices.pushToken,
         set: {
           userId: identity.user.userId,
           platform: body.data.platform,
           showPreview: body.data.showPreview,
+          notifyKinds:
+            body.data.notifyKinds && body.data.notifyKinds.length > 0
+              ? body.data.notifyKinds
+              : null,
           revokedAt: null,
           updatedAt: new Date(),
         },
@@ -78,16 +113,23 @@ export function registerNotificationRoutes(
       const body = preferenceBody.safeParse(request.body);
       if (!identity || !body.success)
         return reply.code(400).send({ error: "invalid_request" });
+      const updates: Record<string, unknown> = { updatedAt: new Date() };
+      if (body.data.showPreview !== undefined)
+        updates.showPreview = body.data.showPreview;
+      if (body.data.notifyKinds !== undefined)
+        // 空数组 = 全部订阅（NULL 语义），与注册接口一致
+        updates.notifyKinds =
+          body.data.notifyKinds.length > 0 ? body.data.notifyKinds : null;
       await db
         .update(schema.notificationDevices)
-        .set({ showPreview: body.data.showPreview, updatedAt: new Date() })
+        .set(updates)
         .where(
           and(
             eq(schema.notificationDevices.userId, identity.user.userId),
             isNull(schema.notificationDevices.revokedAt),
           ),
         );
-      return { showPreview: body.data.showPreview };
+      return { showPreview: body.data.showPreview ?? null };
     },
   );
 }

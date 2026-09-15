@@ -47,13 +47,14 @@ export function readModelHealth(): ModelHealth[] {
 }
 
 function recordHealth(
-  link: FailoverLink,
+  modelId: string,
+  displayName: string,
   success: boolean,
   reason?: string,
 ): void {
-  const existing = healthTable.get(link.modelId) ?? {
-    modelId: link.modelId,
-    displayName: link.displayName,
+  const existing = healthTable.get(modelId) ?? {
+    modelId,
+    displayName,
     lastSuccess: null,
     lastFailureReason: null,
     lastCheckedAt: null,
@@ -69,7 +70,7 @@ function recordHealth(
     existing.failureCount += 1;
     existing.lastFailureReason = reason ?? "unknown";
   }
-  healthTable.set(link.modelId, existing);
+  healthTable.set(modelId, existing);
 }
 
 /** 测试钩子：清空健康表（vitest 隔离用） */
@@ -97,12 +98,13 @@ export class FailoverTextModel implements TextModel {
     for (const link of this.#links) {
       try {
         const result = await link.client.generate(request);
-        recordHealth(link, true);
+        recordHealth(link.modelId, link.displayName, true);
         return result;
       } catch (error) {
         lastError = error;
         recordHealth(
-          link,
+          link.modelId,
+          link.displayName,
           false,
           error instanceof Error ? error.message : String(error),
         );
@@ -112,4 +114,197 @@ export class FailoverTextModel implements TextModel {
       ? lastError
       : new Error("failover_chain_exhausted");
   }
+}
+
+/** 探测用最小静音 WAV（8kHz/16bit/单声道，100ms）；两端点协议通吃 */
+function tinySilentWav(): Buffer {
+  const sampleRate = 8_000;
+  const samples = 800;
+  const data = Buffer.alloc(samples * 2);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
+
+/**
+ * ASR 端点探测：文本补全探针对语音模型必然 400（MiMo 要求 input_audio、
+ * 硅基流动 chat/completions 上无该模型），必须按注册条目协议发音频。
+ * 只验证可达/认证/模型存在——空转写文本同样算探测成功。
+ */
+async function probeAsrConnection(
+  endpoint: {
+    baseUrl: string;
+    apiKey?: string | undefined;
+    displayName: string;
+    protocol: "chat_inline" | "audio_transcriptions";
+  },
+  timeoutMs: number,
+): Promise<{ ok: true; latencyMs: number } | { ok: false; error: string }> {
+  const startedAt = Date.now();
+  const fail = (error: unknown) => ({
+    ok: false as const,
+    error: error instanceof Error ? error.message : String(error),
+  });
+  try {
+    const wav = tinySilentWav();
+    let response: Response;
+    if (endpoint.protocol === "audio_transcriptions") {
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "probe.wav");
+      form.append("model", endpoint.displayName);
+      response = await fetch(
+        `${endpoint.baseUrl.replace(/\/$/, "")}/audio/transcriptions`,
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${endpoint.apiKey ?? ""}` },
+          body: form,
+          signal: AbortSignal.timeout(timeoutMs),
+        },
+      );
+    } else {
+      response = await fetch(
+        `${endpoint.baseUrl.replace(/\/$/, "")}/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${endpoint.apiKey ?? ""}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: endpoint.displayName,
+            stream: false,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "input_audio",
+                    input_audio: {
+                      data: `data:audio/wav;base64,${wav.toString("base64")}`,
+                    },
+                  },
+                ],
+              },
+            ],
+            max_tokens: 16,
+            temperature: 0.2,
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        },
+      );
+    }
+    if (!response.ok) {
+      const body = await response.text();
+      return fail(
+        new Error(
+          `audio API returned ${String(response.status)}: ${body.slice(0, 500)}`,
+        ),
+      );
+    }
+    return { ok: true, latencyMs: Date.now() - startedAt };
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+/** 探测单模型的连接性：文本/视觉模型发一次最小 chat 补全，ASR 模型按协议发音频；只验证可达与认证。 */
+export async function probeModelConnection(
+  endpoint: {
+    baseUrl: string;
+    apiKey?: string | undefined;
+    displayName: string;
+    capabilities?: string[] | undefined;
+    protocol?: "chat_inline" | "audio_transcriptions" | undefined;
+  },
+  timeoutMs: number,
+): Promise<{ ok: true; latencyMs: number } | { ok: false; error: string }> {
+  const isAsr =
+    endpoint.protocol === "audio_transcriptions" ||
+    (endpoint.protocol === "chat_inline" &&
+      (endpoint.capabilities ?? []).includes("asr"));
+  if (isAsr) {
+    return probeAsrConnection(
+      {
+        baseUrl: endpoint.baseUrl,
+        apiKey: endpoint.apiKey,
+        displayName: endpoint.displayName,
+        protocol: endpoint.protocol === "audio_transcriptions"
+          ? "audio_transcriptions"
+          : "chat_inline",
+      },
+      timeoutMs,
+    );
+  }
+  const { OpenAiCompatibleClient } = await import(
+    "../../../infrastructure/model_runtime/openai-compatible-client.js"
+  );
+  const client = new OpenAiCompatibleClient({
+    baseUrl: endpoint.baseUrl,
+    apiKey: endpoint.apiKey ?? "",
+    model: endpoint.displayName,
+    timeoutMs,
+    maxTokens: 2_000,
+  });
+  const startedAt = Date.now();
+  try {
+    await client.complete(
+      [{ role: "user", content: "ping" }],
+      { maxTokens: 2_000 },
+    );
+    return { ok: true, latencyMs: Date.now() - startedAt };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * 记录一次人工探测结果（API 进程的「测试连接」端点调用）：
+ * 与 worker 的自动健康记录写同一张进程内表，设置页徽章据此展示。
+ * @returns 探测前的状态，便于 UI 提示「首次探测」
+ */
+export function probeModelAndRecord(
+  displayName: string,
+  modelId: string,
+  endpoint: {
+    baseUrl: string;
+    apiKey?: string | undefined;
+    displayName: string;
+    capabilities?: string[] | undefined;
+    protocol?: "chat_inline" | "audio_transcriptions" | undefined;
+  },
+  timeoutMs: number,
+): Promise<{
+  ok: boolean;
+  latencyMs?: number;
+  error?: string;
+  firstProbe: boolean;
+}> {
+  const existing = healthTable.get(modelId);
+  const firstProbe = !existing || existing.lastSuccess === null;
+  return probeModelConnection(endpoint, timeoutMs).then((result) => {
+    recordHealth(
+      modelId,
+      displayName,
+      result.ok,
+      result.ok ? undefined : result.error,
+    );
+    return result.ok
+      ? { ok: true, latencyMs: result.latencyMs, firstProbe }
+      : { ok: false, error: result.error, firstProbe };
+  });
 }

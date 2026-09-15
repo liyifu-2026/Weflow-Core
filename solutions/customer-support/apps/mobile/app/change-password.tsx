@@ -79,7 +79,9 @@ export default function ChangePasswordScreen() {
 
   async function abandon() {
     await clearSession();
-    router.replace("/");
+    // 主动放弃改密 = 主动退出：带 manual 参数，登录页跳过静默自动登录
+    // （记住的密码还在，放行会直接登回同一个账号、又被拦回改密页）
+    router.replace({ pathname: "/", params: { manual: "1" } } as never);
   }
   if (!session)
     return (

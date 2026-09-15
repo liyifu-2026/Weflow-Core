@@ -25,7 +25,9 @@ export type ConversationEventType =
   | "handoff_finished"
   | "ownership_changed"
   | "brief_updated"
-  | "conversation_updated";
+  | "conversation_updated"
+  /** 发送期插话闸门：agent 回复分段因客户插话被扣留（剩余分段置 held） */
+  | "reply_interrupted";
 
 export type ConversationEvent = {
   type: ConversationEventType;

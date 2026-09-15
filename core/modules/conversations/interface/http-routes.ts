@@ -26,12 +26,11 @@ import {
   searchSharedConversations,
   setConversationHidden,
 } from "../application/query-conversations.js";
-
-/** Channel Host 连接配置（拍一拍端点需要） */
-export type ChannelHostConfig = {
-  baseUrl: string;
-  token: string;
-};
+import { ChannelSendRejectedError } from "../../channel/contracts/channel-send-operations.js";
+import {
+  ChannelProviderError,
+  HttpChannelProvider,
+} from "../../../infrastructure/channel/http-channel-provider.js";
 
 const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -103,11 +102,13 @@ const readBody = z
   .strict();
 const visibilityBody = z.object({ hidden: z.boolean() }).strict();
 
-/** 注册会话相关的 HTTP 路由 */
+/** 注册会话相关的 HTTP 路由。
+ *  channelProvider：Channel Host 适配器（可选）。拍一拍/历史重扫统一走
+ *  此接缝——认证、协议校验与错误翻译不再被路由层裸 fetch 绕过。 */
 export function registerConversationRoutes(
   server: FastifyInstance,
   db: NodePgDatabase<typeof schema>,
-  channelHost?: ChannelHostConfig,
+  channelProvider?: HttpChannelProvider,
 ): void {
   server.get("/api/v1/conversations", async (request, reply) => {
     const identity = await requireBusinessIdentity(db, request, reply);
@@ -337,36 +338,24 @@ export function registerConversationRoutes(
   server.post("/api/v1/admin/channel/sync", async (request, reply) => {
     const identity = await requireAdminIdentity(db, request, reply);
     if (!identity) return;
-    if (!channelHost) {
+    if (!channelProvider) {
       return reply.code(503).send({ error: "channel_host_not_configured" });
     }
+    // 走 provider 接缝：认证/超时/传输错误翻译集中一处（曾为裸 fetch）。
     try {
-      const response = await fetch(
-        `${channelHost.baseUrl}/api/v1/channel/sync`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${channelHost.token}`,
-          },
-          signal: AbortSignal.timeout(10_000),
-        },
-      );
-      if (!response.ok) {
-        return reply.code(response.status).send({
-          error: "channel_sync_failed",
-          message: response.statusText,
-        });
-      }
-      const result = (await response.json()) as { started?: boolean };
+      const result = await channelProvider.requestBackfillSync();
       return reply.send({
         synced: true,
-        started: result.started ?? false,
+        started: result.started,
       });
     } catch (error) {
-      return reply.code(502).send({
-        error: "channel_host_error",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      if (error instanceof ChannelProviderError) {
+        return reply.code(error.httpStatus ?? 502).send({
+          error: "channel_sync_failed",
+          message: error.message,
+        });
+      }
+      throw error;
     }
   });
 
@@ -380,7 +369,7 @@ export function registerConversationRoutes(
     async (request, reply) => {
       const identity = await requireBusinessIdentity(db, request, reply);
       if (!identity) return;
-      if (!channelHost) {
+      if (!channelProvider) {
         return reply.code(503).send({ error: "channel_host_not_configured" });
       }
       const params = transcriptParams.safeParse(request.params);
@@ -416,42 +405,39 @@ export function registerConversationRoutes(
       ) {
         return reply.code(403).send({ error: "handoff_not_assignee" });
       }
-      // 生成确定性 operationId 并调用 Channel Host
+      // 走 Channel Send 接缝（provider.create）：协议校验、认证与错误翻译
+      // 与出站链路同源（曾为路由层裸 fetch，绕过全部护栏）。
       const operationId = `poke:${randomUUID()}`;
       const channelConversationId = conversation[0].channelConversationId;
       const account = conversation[0].channelAccount;
       try {
-        const response = await fetch(
-          `${channelHost.baseUrl}/api/v1/channel/send`,
-          {
-            method: "POST",
-            headers: {
-              "content-type": "application/json",
-              authorization: `Bearer ${channelHost.token}`,
-            },
-            body: JSON.stringify({
-              operationId,
-              conversationRef: channelConversationId,
-              payload: { kind: "poke" },
-              ...(account ? { account } : {}),
-            }),
-            signal: AbortSignal.timeout(10_000),
+        const operation = await channelProvider.create({
+          operationId,
+          conversationRef: channelConversationId,
+          ...(account ? { account } : {}),
+          payload: { kind: "poke" },
+        });
+        return reply.code(202).send({
+          poke: {
+            operationId: operation.operationId,
+            state: operation.state,
+            channelMessageId: operation.channelMessageId ?? null,
           },
-        );
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({}));
-          return reply.code(response.status).send({
+        });
+      } catch (error) {
+        if (error instanceof ChannelSendRejectedError) {
+          return reply.code(error.httpStatus).send({
             error: "poke_failed",
-            message: (error as { error?: string }).error ?? response.statusText,
+            message: error.message,
           });
         }
-        const result = await response.json();
-        return reply.code(202).send({ poke: result });
-      } catch (error) {
-        return reply.code(502).send({
-          error: "channel_host_error",
-          message: error instanceof Error ? error.message : String(error),
-        });
+        if (error instanceof ChannelProviderError) {
+          return reply.code(error.httpStatus ?? 502).send({
+            error: "channel_host_error",
+            message: error.message,
+          });
+        }
+        throw error;
       }
     },
   );

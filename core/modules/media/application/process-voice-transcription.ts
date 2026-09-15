@@ -65,6 +65,14 @@ export async function processVoiceTranscription(
   const row = rows[0];
   if (!row) throw new Error(`media ${mediaId} does not have a source file`);
   if (row.media.status === "ready") return;
+  // 回声护栏：outbound/unknown 方向的语音（自消息回声）转写完成后
+  // 绝不建 Turn，与 ingest 的 inbound 闸门对齐。
+  const directionRows = await db
+    .select({ direction: schema.messages.direction })
+    .from(schema.messages)
+    .where(eq(schema.messages.messageId, row.media.messageId))
+    .limit(1);
+  if (directionRows[0]?.direction !== "inbound") return;
 
   const claimed = await db
     .update(schema.mediaAssets)

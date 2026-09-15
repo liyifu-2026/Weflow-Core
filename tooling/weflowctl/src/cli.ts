@@ -120,7 +120,7 @@ if (argv.includes("--version")) {
         if (jsonMode) output.json(result.data);
         else output.table(rows);
       } else {
-        renderCommandResult(commandName, result, output, { json: jsonMode });
+        renderCommandResult(result, output, { json: jsonMode });
       }
       if (!result.ok) process.exitCode = 1;
     }
@@ -131,7 +131,7 @@ if (argv.includes("--version")) {
     } else {
       const result = await runDevCommand(commandArgs);
       if (!result.ok) {
-        renderCommandResult(commandName, result, output, { json: jsonMode });
+        renderCommandResult(result, output, { json: jsonMode });
         process.exitCode = 1;
       } else if (jsonMode) {
         output.json(result.data);
@@ -147,7 +147,7 @@ if (argv.includes("--version")) {
     } else {
       const result = await runServiceCommand(commandArgs);
       if (!result.ok) {
-        renderCommandResult(commandName, result, output, { json: jsonMode });
+        renderCommandResult(result, output, { json: jsonMode });
         process.exitCode = 1;
       } else if (jsonMode) {
         output.json(result.data);

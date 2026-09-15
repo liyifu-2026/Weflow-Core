@@ -28,4 +28,13 @@ describe("action error copy", () => {
       message: "请重新选择",
     });
   });
+
+  it("explains when the upload policy rejects an executable", () => {
+    expect(
+      actionErrorCopy({ code: "upload_type_blocked", status: 415 }),
+    ).toEqual({
+      title: "不支持发送可执行文件或脚本",
+      message: "可压缩为 zip 后发送，或改用其他格式",
+    });
+  });
 });

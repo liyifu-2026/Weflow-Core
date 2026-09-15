@@ -18,9 +18,15 @@ export type ChannelEvent = {
   readonly conversationRef: string;
   /** 账号维度（多微信账号隔离，ADR-0005）。缺省/null = 平台默认账号 "default"。 */
   readonly account?: string | null;
+  /**
+   * 会话类型（协议 v6，ADR-0010）：Host 上报的 Channel 事实，Core ingest
+   * 时定一次落 conversations.chat_type。缺省/null = 旧 Host，Core 在 ingest
+   * 单点按通道约定回退推导（微信即 @chatroom 后缀）。
+   */
+  readonly conversationKind?: ChannelConversationKind | null;
   readonly channelMessageId?: string | null;
   readonly senderRef?: string | null;
-  readonly kind: string;
+  readonly kind: ChannelEventKind;
   readonly content: string;
   readonly mediaRef?: string | null;
   /** Provider-neutral 文件名（kind=file 时由 Channel Host 提供） */
@@ -206,12 +212,21 @@ export interface ChannelContactSource {
 
 /**
  * Channel 协议快照 —— 跨语言（Core TS / Host Python）对齐的单一权威。
- * 由 weflow/scripts/sync-channel-protocol.mjs 生成 host 侧 channel_protocol.py，
+ * 由 weflow/scripts/sync-channel-protocol.ts 生成 host 侧 channel_protocol.py，
  * 禁止在 Python 侧手抄本快照中的任何字面量。
+ *
+ * 行为绑定（ADR-0010）：Core zod 校验与 Host 校验/存储都从本快照（或其生成
+ * 文件）派生——消费方一律 import 常量，禁止手抄枚举。
  */
 export const CHANNEL_PROTOCOL = {
   /**
    * 协议版本：任何枚举/错误码变更都必须递增。
+   * v6：errorCodes 补全为真实全集（HTTP 层 8 码 + 发送层 payload/对账码）；
+   *      新增 eventKinds（入站事件 kind 全集，原为无权威的隐式契约）；
+   *      ChannelEvent 新增可选 conversationKind（Host 上报会话类型，
+   *      Core 落库为 chat_type 事实，@chatroom 后缀知识收敛至 Host 与
+   *      Core ingest 回退单点）；新增 inFlightSendOperationStates
+   *      （终态 = 补集的派生依据）。
    * v5：移除出站受限 `voice` 转发（PC 微信无语音条转发入口，.silk 以文件发送
    *      接收方无法播放，功能裁剪）；入站 kind=voice SILK 事件与 media 拉取不变。
    * v4：出站新增 `recall`（撤回最后一条己方消息，2 分钟窗口）；
@@ -219,7 +234,7 @@ export const CHANNEL_PROTOCOL = {
    * v3：移除未实现的出站 `voice` 发送能力（仅保留入站 `kind=voice` SILK 语音事件与 audio/x-silk 媒体拉取）。
    * v2：ChannelEvent 新增可选 `historical` 标记（空库 Backfill 回溯事件）。
    */
-  protocolVersion: 5,
+  protocolVersion: 6,
   sendOperationStates: [
     "pending",
     "executing",
@@ -227,6 +242,8 @@ export const CHANNEL_PROTOCOL = {
     "unknown",
     "failed",
   ] as const,
+  /** 在途（非终态）send operation 状态；终态 = sendOperationStates 补集 */
+  inFlightSendOperationStates: ["pending", "executing"] as const,
   sendKinds: [
     "text",
     "file",
@@ -236,9 +253,22 @@ export const CHANNEL_PROTOCOL = {
     "poke",
     "recall",
   ] as const,
+  /** 入站事件 kind 全集（Host 产出，Core 校验消费；v6 起成为权威词汇） */
+  eventKinds: [
+    "text",
+    "image",
+    "file",
+    "voice",
+    "emotion",
+    "pat",
+    "video",
+  ] as const,
+  /** 会话类型词汇（v6；Host 上报 conversationKind，Core 落库 chat_type） */
+  conversationKinds: ["private", "group"] as const,
   mediaStates: ["ready", "pending", "not_found", "failed"] as const,
   /** Host 侧可能返回的错误码全集（HTTP 层与发送层） */
   errorCodes: [
+    // HTTP 层
     "send_operation_identity_conflict",
     "media_pending",
     "media_not_found",
@@ -246,6 +276,15 @@ export const CHANNEL_PROTOCOL = {
     "channel_contacts_unavailable",
     "invalid_request",
     "channel_host_error",
+    "account_mismatch",
+    "unauthorized",
+    "media_too_large",
+    "media_unreadable",
+    "media_key_refresh_unavailable",
+    "backfill_unavailable",
+    "backfill_already_running",
+    "store_not_empty",
+    // 发送层（SendAttempt / 对账）
     "wechat_send_not_confirmed",
     "at_requires_at_least_one_member",
     "recall_window_expired",
@@ -254,8 +293,30 @@ export const CHANNEL_PROTOCOL = {
     "video_not_found",
     "reply_target_not_latest",
     "mention_member_not_found",
+    "text_payload_empty",
+    "image_path_required",
+    "file_path_required",
+    "reply_text_required",
+    "mention_text_required",
+    "mention_members_required",
+    "invalid_sender_result",
+    "malformed_send_operation",
+    "malformed_text_payload_for_reconciliation",
+    "missing_payload",
+    "missing_send_baseline_for_reconciliation",
+    "non_text_send_not_reconcilable",
+    "send_not_confirmed_after_crash",
+    "tickle_not_confirmed",
+    "uia_driver_unavailable_for_tickle",
   ] as const,
 } as const;
+
+/** 入站事件 kind（CHANNEL_PROTOCOL.eventKinds 的成员类型） */
+export type ChannelEventKind = (typeof CHANNEL_PROTOCOL)["eventKinds"][number];
+
+/** 会话类型（Channel 事实；Core 落库为 conversations.chat_type） */
+export type ChannelConversationKind =
+  (typeof CHANNEL_PROTOCOL)["conversationKinds"][number];
 
 export type ChannelProtocol = typeof CHANNEL_PROTOCOL;
 

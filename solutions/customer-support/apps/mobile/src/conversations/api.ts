@@ -111,7 +111,7 @@ export type ServerMessage = {
 
 /** 手动回复的执行结果查询响应 */
 export type ManualReplyOutcome = {
-  status: "pending" | "accepted" | "sent" | "failed" | "not_found";
+  status: "pending" | "accepted" | "sent" | "failed" | "unknown" | "not_found";
   message?: ServerMessage;
 };
 
@@ -873,7 +873,7 @@ export type ContactListRow = {
   conversationId: string;
   latestMessageAt: string | null;
   latestMessageText: string;
-  /** 联系人白名单：true = 由 Agent 负责 */
+  /** 自动回复开关：true = 由 Agent 负责 */
   agentEnabled: boolean;
   /** 黑名单：true = 不进会话列表、不建 Turn、不推通知 */
   blocked: boolean;

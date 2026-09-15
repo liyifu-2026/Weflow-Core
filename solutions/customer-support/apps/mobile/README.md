@@ -2,7 +2,7 @@
 
 Mobile 是 Agent → Human → Agent Handoff Console：Agent 无法继续可靠处理时，内部客服在手机上理解上下文、承担责任、处理或转交，并最终把控制权交还 Agent。
 
-本地验证：`npm run test` 运行关键本地状态安全测试；提交前同时运行 `npm run typecheck`、`npm run lint` 和 `npx expo export --platform web`。
+本地验证：`pnpm run test` 运行关键本地状态安全测试；提交前同时运行 `pnpm run typecheck`、`pnpm run lint` 和 `pnpm exec expo export --platform web`。
 
 Core 是唯一业务入口和事实来源；Mobile 不连接 Channel Host、数据库、Redis、模型或 WeKnora。
 
@@ -150,7 +150,9 @@ apps/mobile/            # Customer Support Solution 内的 Mobile 应用
 │   ├── media/           # 受鉴权 Media 加载
 │   └── ui/              # 无业务副作用的通用组件
 ├── docs/
-│   └── acceptance.md
+│   ├── dev-debug.md        # 日常开发/调试/OTA 速查（先读这个）
+│   ├── mobile-spec.md / mobile-ui-spec.md / versioning.md
+│   └── archive/            # 历史版本验收记录（如 0.7.0 acceptance）
 └── README.md
 ```
 

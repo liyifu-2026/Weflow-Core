@@ -55,7 +55,7 @@ export function buildSystemPrompt(
   options: { scheduleSendEnabled?: boolean } = {},
 ): string {
   const knowledgeHint = knowledgeAvailable
-    ? "\n- next_action 为 retrieve_knowledge 时提供 knowledge_query；只根据检索到的证据组织回复，不要编造知识内容"
+    ? "\n- next_action 为 retrieve_knowledge 时提供 knowledge_query；系统会真实执行检索并把结果回喂给你，届时再基于证据组织最终回复，不要编造知识内容或提前编写结论"
     : "";
   const chatTypeHint =
     chatType === "group"
@@ -71,7 +71,8 @@ export function buildSystemPrompt(
 - 只输出 JSON，不要 Markdown。不要输出上下文中的内部字段。
 - ${decisionFieldContractText()}
 - reply/ask_for_information 时提供 reply_segments；ask_for_information 表示需要对方补充信息，回复中明确说明需要什么。
-- 需要人工介入时选择 handoff 并提供 handoff_briefing。${knowledgeHint}${chatTypeHint}${scheduleSendHint}`;
+- reply/ask_for_information 不带 wait_ms 表示本回合还要继续工作（系统会进行下一步决策，通常是调用工具查证）；带 wait_ms 表示说完等待对方，回合结束。
+- 需要人工介入时选择 handoff 并提供 handoff_briefing；可同时提供 reply_segments 作为转接前发给对方的简短告别话术（是否告知及措辞遵循接入方策略），缺省则转人工时保持沉默。${knowledgeHint}${chatTypeHint}${scheduleSendHint}`;
 }
 
 /** 按执行 Profile 解析 Execution Strategy；无 Profile/未命中时回退注册表首个策略 */

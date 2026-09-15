@@ -4,13 +4,17 @@
  * 提供媒体资产元数据查询、原始内容下载以及出站媒体上传（人工回复携带）。
  * 内容下载接口通过文件存储服务返回流式响应。
  */
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne, or } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
 import { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
+import {
+  assertUploadAllowed,
+  UploadTypeBlockedError,
+} from "../../../infrastructure/file_storage/upload-policy.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 
@@ -53,6 +57,11 @@ export function registerMediaRoutes(
     try {
       const mimeType = (file.mimetype || "").toLowerCase();
       const kind = MIME_KIND[mimeType] ?? "file";
+      // 底线策略：拒绝可执行文件/脚本（黑名单，非白名单）
+      assertUploadAllowed({
+        originalName: file.filename || "upload.bin",
+        mimeType,
+      });
       const written = await storage.write(
         file.file,
         file.filename || "upload.bin",
@@ -84,6 +93,9 @@ export function registerMediaRoutes(
         },
       });
     } catch (error) {
+      if (error instanceof UploadTypeBlockedError) {
+        return reply.code(415).send({ error: "upload_type_blocked" });
+      }
       return reply.code(500).send({
         error: "media_upload_failed",
         message: error instanceof Error ? error.message : String(error),
@@ -187,11 +199,15 @@ export function registerMediaRoutes(
         status: schema.mediaAssets.status,
         mimeType: schema.storedFiles.mimeType,
         storageKey: schema.storedFiles.storageKey,
+        size: schema.storedFiles.size,
+        checksum: schema.storedFiles.checksum,
         // 原始文件名（出站=暂存原名；入站=Host 上报），Content-Disposition 用
         originalName: schema.storedFiles.originalName,
         // 语音派生播放文件（SILK→MP3）：存在时优先返回（浏览器/移动端可播）
         derivedMimeType: derivedFiles.mimeType,
         derivedStorageKey: derivedFiles.storageKey,
+        derivedSize: derivedFiles.size,
+        derivedChecksum: derivedFiles.checksum,
       })
       .from(schema.mediaAssets)
       .innerJoin(
@@ -205,10 +221,14 @@ export function registerMediaRoutes(
         schema.storedFiles,
         and(
           eq(schema.mediaAssets.originalFileId, schema.storedFiles.fileId),
-          // 文件已下载即出图（ready=有视觉描述；failed=描述失败但原图可用）。
-          // 设计承诺"人工仍可查看图片文件"（media-processing-dispatcher），
-          // queued/processing* 期间文件尚未落盘，仍返回 media_not_ready。
-          inArray(schema.mediaAssets.status, ["ready", "failed"]),
+          // 文件落盘即出图（ready=有视觉描述；failed=描述失败但原图可用）。
+          // 图片不再等视觉描述：processing* 期间原文件已在盘上，早出图可省
+          // 掉一次云端 vision 往返的首屏等待。语音仍保留门槛——转码派生 MP3
+          // 前只能拿到不可播放的 SILK。
+          or(
+            inArray(schema.mediaAssets.status, ["ready", "failed"]),
+            ne(schema.mediaAssets.kind, "voice"),
+          ),
         ),
       )
       .leftJoin(
@@ -221,13 +241,31 @@ export function registerMediaRoutes(
     if (!media) return reply.code(404).send({ error: "media_not_ready" });
     // 语音已转码出 MP3：优先返回可播放的派生文件
     const playable =
-      media.derivedStorageKey && (await storage.exists(media.derivedStorageKey))
-        ? { mimeType: media.derivedMimeType, storageKey: media.derivedStorageKey }
-        : { mimeType: media.mimeType, storageKey: media.storageKey };
+      media.derivedStorageKey &&
+      media.derivedChecksum &&
+      (await storage.exists(media.derivedStorageKey))
+        ? {
+            mimeType: media.derivedMimeType,
+            storageKey: media.derivedStorageKey,
+            size: media.derivedSize,
+            checksum: media.derivedChecksum,
+          }
+        : {
+            mimeType: media.mimeType,
+            storageKey: media.storageKey,
+            size: media.size,
+            checksum: media.checksum,
+          };
     if (!(await storage.exists(playable.storageKey)))
       return reply.code(404).send({ error: "media_not_found" });
+    // 内容按 mediaId 不可变（sha256 即 ETag）：允许客户端缓存并带校验重验，
+    // 命中 304 时不再重传字节（此前 no-store 让每次重挂都全量下载）。
+    const etag = `"${playable.checksum}"`;
+    reply.header("etag", etag);
+    reply.header("cache-control", "private, no-cache");
+    if (request.headers["if-none-match"] === etag) return reply.code(304).send();
     reply.header("content-type", playable.mimeType);
-    reply.header("cache-control", "private, no-store");
+    reply.header("content-length", String(playable.size));
     reply.header("x-content-type-options", "nosniff");
     // RFC 5987 filename*：非 ASCII 文件名（中文等）在浏览器下载/移动端
     // 分享时保留原名；filename= 为 ASCII 回退。
@@ -252,6 +290,8 @@ export function registerMediaRoutes(
           status: schema.mediaAssets.status,
           mimeType: originalFiles.mimeType,
           storageKey: originalFiles.storageKey,
+          size: originalFiles.size,
+          checksum: originalFiles.checksum,
           originalName: originalFiles.originalName,
         })
         .from(schema.mediaAssets)
@@ -270,8 +310,11 @@ export function registerMediaRoutes(
         .where(
           and(
             eq(schema.mediaAssets.mediaId, params.data.mediaId),
-            // 与缩略图一致：文件已落盘即出图
-            inArray(schema.mediaAssets.status, ["ready", "failed"]),
+            // 与缩略图一致：文件落盘即出图（语音仍等派生 MP3）
+            or(
+              inArray(schema.mediaAssets.status, ["ready", "failed"]),
+              ne(schema.mediaAssets.kind, "voice"),
+            ),
           ),
         )
         .limit(1);
@@ -280,8 +323,13 @@ export function registerMediaRoutes(
         return reply.code(404).send({ error: "media_original_not_found" });
       if (!(await storage.exists(media.storageKey)))
         return reply.code(404).send({ error: "media_not_found" });
+      const etag = `"${media.checksum}"`;
+      reply.header("etag", etag);
+      reply.header("cache-control", "private, no-cache");
+      if (request.headers["if-none-match"] === etag)
+        return reply.code(304).send();
       reply.header("content-type", media.mimeType);
-      reply.header("cache-control", "private, no-store");
+      reply.header("content-length", String(media.size));
       reply.header("x-content-type-options", "nosniff");
       const originalName = media.originalName ?? "attachment";
       reply.header(

@@ -1,0 +1,185 @@
+{
+  "probedAt": "2026-09-06T14:07:23.022Z",
+  "baseUrl": "https://api.deepseek.com",
+  "model": "deepseek-v4-flash",
+  "purpose": "原生 function calling + thinking 组合验证（FC 迁移前置探针）",
+  "results": [
+    {
+      "label": "1-baseline-json-protocol",
+      "ok": true,
+      "latencyMs": 245,
+      "finishReason": "stop",
+      "contentLength": 92,
+      "contentPreview": "{\n  \"next_action\": \"retrieve_knowledge\",\n  \"knowledge_query\": \"错误码12535 加密狗灯亮 软件打开报错 处理方法\"\n}",
+      "hasReasoning": true,
+      "reasoningLength": 616,
+      "toolCalls": [],
+      "usage": {
+        "prompt_tokens": 167,
+        "completion_tokens": 303,
+        "total_tokens": 470,
+        "prompt_tokens_details": {
+          "cached_tokens": 128
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 265
+        },
+        "prompt_cache_hit_tokens": 128,
+        "prompt_cache_miss_tokens": 39
+      }
+    },
+    {
+      "label": "2-fc+thinking-enabled",
+      "ok": true,
+      "latencyMs": 156,
+      "finishReason": "tool_calls",
+      "contentLength": 0,
+      "contentPreview": "",
+      "hasReasoning": true,
+      "reasoningLength": 239,
+      "toolCalls": [
+        {
+          "name": "retrieve_knowledge",
+          "argumentsPreview": "{\"query\": \"错误码 12535 加密狗\"}"
+        },
+        {
+          "name": "query_contact_profile",
+          "argumentsPreview": "{}"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 510,
+        "completion_tokens": 122,
+        "total_tokens": 632,
+        "prompt_tokens_details": {
+          "cached_tokens": 384
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 52
+        },
+        "prompt_cache_hit_tokens": 384,
+        "prompt_cache_miss_tokens": 126
+      }
+    },
+    {
+      "label": "3-fc-tool-result-roundtrip",
+      "ok": true,
+      "latencyMs": 102,
+      "finishReason": "stop",
+      "contentLength": 407,
+      "contentPreview": "您好！根据产品知识库，**错误码 12535 表示加密狗通讯异常**。虽然您的加密狗灯是亮的（说明供电正常），但通讯链路可能存在问题，请按以下步骤依次排查：\n\n**第一步：重新插拔 + 换 USB 口**\n- 安全弹出后拔出加密狗，稍等几秒再重新插入\n- 建议换一个 **USB 口**（尤其避开 USB 集线器，优先插",
+      "hasReasoning": true,
+      "reasoningLength": 406,
+      "toolCalls": [],
+      "usage": {
+        "prompt_tokens": 735,
+        "completion_tokens": 348,
+        "total_tokens": 1083,
+        "prompt_tokens_details": {
+          "cached_tokens": 512
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 95
+        },
+        "prompt_cache_hit_tokens": 512,
+        "prompt_cache_miss_tokens": 223
+      }
+    },
+    {
+      "label": "4-fc+thinking-disabled",
+      "ok": true,
+      "latencyMs": 100,
+      "finishReason": "tool_calls",
+      "contentLength": 35,
+      "contentPreview": "我来帮您查询这个错误码的相关信息。让我先检索知识库并查询您的档案资料。",
+      "hasReasoning": false,
+      "reasoningLength": 0,
+      "toolCalls": [
+        {
+          "name": "retrieve_knowledge",
+          "argumentsPreview": "{\"query\": \"错误码 12535\"}"
+        },
+        {
+          "name": "query_contact_profile",
+          "argumentsPreview": "{}"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 431,
+        "completion_tokens": 87,
+        "total_tokens": 518,
+        "prompt_tokens_details": {
+          "cached_tokens": 384
+        },
+        "prompt_cache_hit_tokens": 384,
+        "prompt_cache_miss_tokens": 47
+      }
+    },
+    {
+      "label": "5-fc+json-object-conflict",
+      "ok": true,
+      "latencyMs": 103,
+      "finishReason": "tool_calls",
+      "contentLength": 0,
+      "contentPreview": "",
+      "hasReasoning": true,
+      "reasoningLength": 259,
+      "toolCalls": [
+        {
+          "name": "retrieve_knowledge",
+          "argumentsPreview": "{\"query\": \"错误码 12535\"}"
+        },
+        {
+          "name": "query_contact_profile",
+          "argumentsPreview": "{}"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 539,
+        "completion_tokens": 125,
+        "total_tokens": 664,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 58
+        },
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 539
+      }
+    },
+    {
+      "label": "6-fc-parallel-multi-tools",
+      "ok": true,
+      "latencyMs": 111,
+      "finishReason": "tool_calls",
+      "contentLength": 0,
+      "contentPreview": "",
+      "hasReasoning": true,
+      "reasoningLength": 257,
+      "toolCalls": [
+        {
+          "name": "retrieve_knowledge",
+          "argumentsPreview": "{\"query\": \"错误码 12535\"}"
+        },
+        {
+          "name": "query_contact_profile",
+          "argumentsPreview": "{}"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 518,
+        "completion_tokens": 126,
+        "total_tokens": 644,
+        "prompt_tokens_details": {
+          "cached_tokens": 512
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 59
+        },
+        "prompt_cache_hit_tokens": 512,
+        "prompt_cache_miss_tokens": 6
+      }
+    }
+  ]
+}

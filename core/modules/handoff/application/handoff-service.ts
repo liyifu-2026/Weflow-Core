@@ -1,7 +1,8 @@
 /**
  * 人工接管服务模块
  * 管理会话的人工接管生命周期：创建、认领、接管、转交、释放和解决。
- * 每次状态转换支持幂等性校验，创建接管时自动暂停 Agent 并发送确认消息。
+ * 每次状态转换支持幂等性校验，创建接管时自动暂停 Agent；可附带发起方
+ * 自带的告别话术，缺省静默转接（平台不持有任何业务文案）。
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -10,10 +11,12 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { lockConversationOwnership } from "../../../infrastructure/postgres/ownership-lock.js";
 import { AgentTurnService } from "../../agent/application/agent-turn-service.js";
+import { MAX_REPLY_SEGMENTS } from "../../agent/application/decision-contract.js";
 import {
   enqueueHandoffTransferNotification,
   enqueuePendingHandoffNotifications,
 } from "../../notifications/application/notification-outbox.js";
+import { cancelPendingAgentOutbound } from "../../conversations/application/send-states.js";
 
 type TransitionType =
   "created" | "accepted" | "manual_taken_over" | "released" | "resolved";
@@ -50,6 +53,11 @@ type TransitionInput = {
   assignedQueueId?: string | null;
   /** Agent 发起 Handoff 时排除该 Turn，由调用方写入具体 terminal reason。 */
   agentTurnId?: string;
+  /**
+   * 仅 created：转接前发给客户的告别话术（模型自带，最后一条 agent 消息）。
+   * 缺省/净化后为空 = 静默转接，不向客户发送任何固定文案。
+   */
+  farewellSegments?: string[];
 };
 
 type HandoffTransaction = Parameters<
@@ -751,42 +759,38 @@ async function transitionInTransaction(
       "handoff_active",
       input.agentTurnId,
     );
-    await transaction
-      .update(schema.messages)
-      .set({
-        sendState: "cancelled_handoff",
-        sendError: "handoff_active",
-        sendUpdatedAt: now,
-      })
-      .where(
-        and(
-          eq(schema.messages.conversationId, input.conversationId),
-          eq(schema.messages.actorType, "agent"),
-          eq(schema.messages.sendState, "pending"),
-        ),
-      );
+    await cancelPendingAgentOutbound(transaction, input.conversationId, "handoff_active");
     if (type === "created") {
-      await transaction
-        .insert(schema.messages)
-        .values({
-          messageId: `handoff-message:${eventId}`,
-          conversationId: input.conversationId,
-          channelEventId: null,
-          channelMessageId: null,
-          direction: "outbound",
-          actorType: "system",
-          actorId: "system-agent",
-          contentType: "text",
-          channelType: 1,
-          text: handoffConfirmation(),
-          isSelf: true,
-          processingState: "not_applicable",
-          sendState: "pending",
-          idempotencyKey: `handoff-message:${eventId}`,
-          occurredAt: now,
-          traceId: `handoff:${eventId}`,
-        })
-        .onConflictDoNothing();
+      // 告别话术由发起方自带（平台不持有任何业务文案）；插在 pending
+      // agent 消息取消之后，保证它自身不被一起取消。缺省 = 静默转接。
+      const farewell = sanitizeFarewellSegments(input.farewellSegments);
+      if (farewell.length > 0) {
+        await transaction
+          .insert(schema.messages)
+          .values(
+            farewell.map((text, index) => ({
+              messageId: `handoff-farewell:${eventId}:${String(index + 1)}`,
+              conversationId: input.conversationId,
+              channelEventId: null,
+              channelMessageId: null,
+              direction: "outbound" as const,
+              actorType: "agent" as const,
+              actorId: input.actorUserId,
+              contentType: "text" as const,
+              channelType: 1,
+              text,
+              isSelf: true,
+              processingState: "not_applicable" as const,
+              sendState: "pending" as const,
+              replyBatchId: `handoff-farewell:${eventId}`,
+              replySequence: index + 1,
+              idempotencyKey: `handoff-farewell:${eventId}:${String(index + 1)}`,
+              occurredAt: now,
+              traceId: `handoff:${eventId}`,
+            })),
+          )
+          .onConflictDoNothing();
+      }
       // 定向路由时通知只发给队列成员/持标签客服；通用创建则全员可见
       await enqueuePendingHandoffNotifications(
         transaction,
@@ -840,9 +844,20 @@ async function transitionInTransaction(
   return { status: "ok", replayed: false, handoff };
 }
 
-/** 人工接管确认话术：平台固定文案（不允许模型自由措辞） */
-function handoffConfirmation(): string {
-  return "已收到您的情况，已转交专人跟进。";
+/**
+ * 告别话术净化：trim/去空、条数与单条长度封顶；超限内容静默丢弃。
+ * 告别语是锦上添花，任何非法输入都不允许让转人工本身失败。
+ */
+export function sanitizeFarewellSegments(
+  segments: string[] | undefined,
+): string[] {
+  if (!segments || segments.length === 0) return [];
+  const cleaned = segments
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .slice(0, MAX_REPLY_SEGMENTS)
+    .map((segment) => segment.slice(0, 500));
+  return cleaned;
 }
 
 /** 基于客户端请求ID生成确定性事件ID */

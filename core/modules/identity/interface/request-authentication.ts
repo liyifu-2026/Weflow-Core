@@ -77,23 +77,6 @@ export async function requireAdminIdentity(
 }
 
 /**
- * Runner 机器身份。
- * Runner 只能通过 RUNNER_TOKEN 访问专用 runner 端点，不能访问 Console 管理接口。
- */
-export async function requireRunnerIdentity(
-  request: FastifyRequest,
-  reply: FastifyReply,
-): Promise<{ runnerId: string } | undefined> {
-  const expected = process.env.RUNNER_TOKEN;
-  const token = bearerToken(request.headers.authorization);
-  if (!expected || !token || token !== expected) {
-    await reply.code(401).send({ error: "runner_authentication_required" });
-    return undefined;
-  }
-  return { runnerId: process.env.RUNNER_ID ?? "runner" };
-}
-
-/**
  * 会话 Cookie 是否带 Secure：production 默认 true（HTTPS only），
  * 可用 SESSION_COOKIE_SECURE 显式覆盖（局域网 HTTP 部署必须为 false，
  * 否则浏览器不回传 Cookie 导致无法登录）。与 config schema 的枚举对齐。

@@ -16,17 +16,15 @@ import { and, desc, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { TextModel } from "../../model/contracts/text-model.js";
-import type {
-  KnowledgeSearch,
-} from "../../knowledge/contracts/knowledge-search.js";
+import type { KnowledgeSearch } from "../../knowledge/contracts/knowledge-search.js";
 import type { SkillRegistry } from "../contracts/agent-skill.js";
 import type { ExecutionStrategyRegistry } from "../contracts/execution-strategy.js";
 import { AgentTurnService } from "./agent-turn-service.js";
 import { recordAgentTurnEvent } from "./agent-turn-events.js";
 import { processAgentTurn, processPlannedToolTurn } from "./turn-runner.js";
-import {
-  commitAgentTurnHandoff,
-} from "./agent-turn-outcome-command.js";
+import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
+import type { imageToContentPart } from "./image-content.js";
+import { commitAgentTurnHandoff } from "./agent-turn-outcome-command.js";
 import type { TriageVerdict } from "./triage-classifier.js";
 import type { BehaviorSettings } from "./behavior-settings.js";
 import { isTerminal, normalizeStatus } from "./turn-utils.js";
@@ -106,6 +104,10 @@ export class AgentTurnExecutor {
       behaviorSettings?: (() => Promise<BehaviorSettings>) | undefined;
       /** Agent 决策调用专用超时（THINKING-PIPELINE-PLAN B3，默认 180s） */
       decisionTimeoutMs?: number | undefined;
+      /** Phase 4 视觉直读：文件存储句柄（媒体根目录）。注入后允许把最新入站图片喂给主模型。 */
+      imageStorage?: FileStorage;
+      /** 可覆写的图片→image_url 构造器（测试注入用）。 */
+      readImage?: typeof imageToContentPart;
     } = {},
   ) {}
 
@@ -155,15 +157,16 @@ export class AgentTurnExecutor {
         turnId: before.turnId,
         conversationId: before.conversationId,
         eventType: "execution_resumed",
-        payload: { sourceStatus: before.status },
+        payload: { sourceStatus: "tool_planned" },
       });
-      await processPlannedToolTurn(
+      const first = await processPlannedToolTurn(
         this.db,
         this.modelClient,
         this.model,
         { turnId: input.turnId, traceId: input.traceId },
         this.dependencies,
       );
+      await this.runStepLoop(input, turnService, first.continueLoop);
     } else if (before.status === "queued") {
       const claimed = await turnService.claim(input.turnId, this.model, [
         "queued",
@@ -185,24 +188,23 @@ export class AgentTurnExecutor {
           eventType: "execution_resumed",
           payload: { sourceStatus: before.status },
         });
-        await processPlannedToolTurn(
+        const first = await processPlannedToolTurn(
           this.db,
           this.modelClient,
           this.model,
           { turnId: input.turnId, traceId: input.traceId },
           this.dependencies,
         );
+        await this.runStepLoop(input, turnService, first.continueLoop);
       } else {
         // 预判分流：规则 + 极速 LLM 分类，高危转人工 / simple 走直答档。
         // classify 内部 fail-open 永不抛错；未注入 triage 时零行为变化。
         let decisionClient = this.modelClient;
         let decisionModel = this.model;
+        let fastDirectReply = false;
         if (this.dependencies.triage) {
           const verdict = await this.dependencies.triage.classify(
-            await this.loadTriageContext(
-              input.turnId,
-              before.conversationId,
-            ),
+            await this.loadTriageContext(input.turnId, before.conversationId),
           );
           await recordAgentTurnEvent(this.db, {
             turnId: before.turnId,
@@ -232,54 +234,23 @@ export class AgentTurnExecutor {
           ) {
             // 直答：同一 processAgentTurn 全套闸门，仅替换模型档位；
             // 若直答决策仍要求工具，下方恢复路径回到主力档执行。
+            // 直答回复不续步（简单消息没有"还没干完"）——续步会把下一步
+            // 决策升回主力档，违背直答的成本语义。
             decisionClient = this.dependencies.triage.fastClient;
             decisionModel = this.dependencies.triage.fastModel;
+            fastDirectReply = true;
           }
         }
-        await processAgentTurn(this.db, decisionClient, decisionModel, input, {
-          ...(this.dependencies.knowledgeSearch
-            ? { knowledgeSearch: this.dependencies.knowledgeSearch }
-            : {}),
-          ...(this.dependencies.skillRegistry
-            ? { skillRegistry: this.dependencies.skillRegistry }
-            : {}),
-          ...(this.dependencies.strategyRegistry
-            ? { strategyRegistry: this.dependencies.strategyRegistry }
-            : {}),
-          ...(this.dependencies.preResolveAiEmployeePrompt
-            ? { preResolveAiEmployeePrompt: this.dependencies.preResolveAiEmployeePrompt }
-            : {}),
-          ...(this.dependencies.resolveAiEmployeeId
-            ? { resolveAiEmployeeId: this.dependencies.resolveAiEmployeeId }
-            : {}),
-          ...(this.dependencies.behaviorSettings
-            ? { behaviorSettings: this.dependencies.behaviorSettings }
-            : {}),
-        });
-
-        const afterDecision = await this.loadTurn(input.turnId);
-        if (afterDecision?.status === "tool_planned") {
-          const toolStageClaim = await turnService.claim(
-            input.turnId,
-            this.model,
-            ["tool_planned"],
-          );
-          if (toolStageClaim.applied) {
-            await recordAgentTurnEvent(this.db, {
-              turnId: before.turnId,
-              conversationId: before.conversationId,
-              eventType: "execution_resumed",
-              payload: { sourceStatus: "tool_planned" },
-            });
-            await processPlannedToolTurn(
-              this.db,
-              this.modelClient,
-              this.model,
-              { turnId: input.turnId, traceId: input.traceId },
-              this.dependencies,
-            );
-          }
-        }
+        const first = await processAgentTurn(
+          this.db,
+          decisionClient,
+          decisionModel,
+          input,
+          { ...this.freshDependencies(), allowReplyContinuation: !fastDirectReply },
+        );
+        // 真 ReAct 统一步进循环：首轮决策后，tool_planned → 工具恢复，
+        // running + continue 信号（reply 不带 wait_ms 续步）→ 下一步决策。
+        await this.runStepLoop(input, turnService, first.continueLoop);
       }
     }
 
@@ -290,6 +261,84 @@ export class AgentTurnExecutor {
     const turn = await this.loadTurn(turnId);
     if (!turn) throw new Error(`agent turn ${turnId} does not exist`);
     return turn.conversationId;
+  }
+
+  /** fresh 决策路径的依赖子集（triage 直答档只在首轮生效，续步回主力档）。 */
+  private freshDependencies() {
+    return {
+      ...(this.dependencies.knowledgeSearch
+        ? { knowledgeSearch: this.dependencies.knowledgeSearch }
+        : {}),
+      ...(this.dependencies.skillRegistry
+        ? { skillRegistry: this.dependencies.skillRegistry }
+        : {}),
+      ...(this.dependencies.strategyRegistry
+        ? { strategyRegistry: this.dependencies.strategyRegistry }
+        : {}),
+      ...(this.dependencies.preResolveAiEmployeePrompt
+        ? {
+            preResolveAiEmployeePrompt:
+              this.dependencies.preResolveAiEmployeePrompt,
+          }
+        : {}),
+      ...(this.dependencies.resolveAiEmployeeId
+        ? { resolveAiEmployeeId: this.dependencies.resolveAiEmployeeId }
+        : {}),
+      ...(this.dependencies.behaviorSettings
+        ? { behaviorSettings: this.dependencies.behaviorSettings }
+        : {}),
+    };
+  }
+
+  /**
+   * 真 ReAct 统一步进循环（调用方已完成首步并传入 continue 信号）：
+   * - tool_planned → CAS 认领 → processPlannedToolTurn（工具恢复路径）；
+   * - running 且上步 continue（reply/ask 不带 wait_ms 的续步）→
+   *   processAgentTurn 走下一步决策（上下文含刚发出的消息）；
+   * - 终态 / 认领失败 / 无 continue 信号 → 结束。
+   * 这里的 MAX_IN_PROCESS_STEPS 只是失控防御；真实预算由 disposition
+   * 代码持有（decisionStepBudget / toolStepBudget / replyStepBudget）。
+   */
+  private async runStepLoop(
+    input: AgentTurnExecutionInput,
+    turnService: AgentTurnService,
+    continueLoop: boolean,
+  ): Promise<void> {
+    const MAX_IN_PROCESS_STEPS = 24;
+    for (let step = 0; step < MAX_IN_PROCESS_STEPS; step += 1) {
+      const current = await this.loadTurn(input.turnId);
+      if (!current || isTerminal(current.status)) return;
+      if (current.status === "tool_planned") {
+        const claimed = await turnService.claim(input.turnId, this.model, [
+          "tool_planned",
+        ]);
+        if (!claimed.applied) return;
+        await recordAgentTurnEvent(this.db, {
+          turnId: input.turnId,
+          conversationId: current.conversationId,
+          eventType: "execution_resumed",
+          payload: { sourceStatus: "tool_planned" },
+        });
+        const result = await processPlannedToolTurn(
+          this.db,
+          this.modelClient,
+          this.model,
+          input,
+          this.dependencies,
+        );
+        continueLoop = result.continueLoop;
+        continue;
+      }
+      if (current.status !== "running" || !continueLoop) return;
+      const result = await processAgentTurn(
+        this.db,
+        this.modelClient,
+        this.model,
+        input,
+        this.freshDependencies(),
+      );
+      continueLoop = result.continueLoop;
+    }
   }
 
   private async loadTurn(turnId: string) {
@@ -314,6 +363,11 @@ export class AgentTurnExecutor {
       })
       .from(schema.toolExecutions)
       .where(eq(schema.toolExecutions.turnId, turnId))
+      // 多步 ReAct 同 turn 多条计划；租约判断取最新一条
+      .orderBy(
+        desc(schema.toolExecutions.createdAt),
+        desc(schema.toolExecutions.executionId),
+      )
       .limit(1);
     return rows[0];
   }

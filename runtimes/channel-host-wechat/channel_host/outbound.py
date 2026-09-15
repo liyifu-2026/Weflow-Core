@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import time
 from typing import Callable, Optional, Protocol
 
+from .channel_protocol import SEND_KINDS
 from .event_store import EventStore
 from .protocol_normalize import mention_contact_refs, reply_target_id
 
@@ -107,7 +108,7 @@ class WeChatChannelSender:
                 self._gui = self._gui_factory()
             result = self._gui.send_msg(text, target_name, verify=True)
         except Exception as error:
-            return SendAttempt("unknown", _error_text(error))
+            return self._fail_with_gui_reset(error)
         if _is_verified_success(result):
             return SendAttempt("confirmed")
         if not isinstance(result, dict):
@@ -130,7 +131,7 @@ class WeChatChannelSender:
                 self._gui = self._gui_factory()
             result = self._gui.send_image(path, target_name, verify=True)
         except Exception as error:
-            return SendAttempt("unknown", _error_text(error))
+            return self._fail_with_gui_reset(error)
         return _gui_result_to_attempt(result)
 
     def send_file(self, conversation_ref: str, path: str) -> SendAttempt:
@@ -143,7 +144,7 @@ class WeChatChannelSender:
                 self._gui = self._gui_factory()
             result = self._gui.send_file(path, target_name, verify=True)
         except Exception as error:
-            return SendAttempt("unknown", _error_text(error))
+            return self._fail_with_gui_reset(error)
         return _gui_result_to_attempt(result)
 
     def send_reply(
@@ -167,7 +168,7 @@ class WeChatChannelSender:
                 self._gui = self._gui_factory()
             result = self._gui.reply_msg(text, target_name, verify=True)
         except Exception as error:
-            return SendAttempt("unknown", _error_text(error))
+            return self._fail_with_gui_reset(error)
         return _gui_result_to_attempt(result)
 
     def send_at(
@@ -211,7 +212,7 @@ class WeChatChannelSender:
                     return _gui_result_to_attempt(last_result)
             return _gui_result_to_attempt(last_result) if last_result is not None else SendAttempt("failed", "mention_member_not_found")
         except Exception as error:
-            return SendAttempt("unknown", _error_text(error))
+            return self._fail_with_gui_reset(error)
 
     def send_tickle(self, conversation_ref: str) -> SendAttempt:
         try:
@@ -228,7 +229,7 @@ class WeChatChannelSender:
                 return SendAttempt("failed", "uia_driver_unavailable_for_tickle")
             ok = uia.poke(target_name)
         except Exception as error:
-            return SendAttempt("unknown", _error_text(error))
+            return self._fail_with_gui_reset(error)
         if ok:
             return SendAttempt("confirmed")
         return SendAttempt("failed", "tickle_not_confirmed")
@@ -246,10 +247,21 @@ class WeChatChannelSender:
                 return SendAttempt("failed", "recall_unsupported")
             ok = uia.recall_last_message(target_name)
         except Exception as error:
-            return SendAttempt("unknown", _error_text(error))
+            return self._fail_with_gui_reset(error)
         if ok:
             return SendAttempt("confirmed")
         return SendAttempt("failed", "recall_window_expired")
+
+    def _fail_with_gui_reset(self, error: Exception) -> SendAttempt:
+        """Send-path exception: drop the cached GUI session.
+
+        WeChat restarts / window closes invalidate the UIA handles the cached
+        WeChatGUI holds (e.g. COM ``事件无法调用任何订户``). Rebuilding lazily
+        on the next send keeps the host self-healing instead of failing every
+        send until a manual restart.
+        """
+        self._gui = None
+        return SendAttempt("unknown", _error_text(error))
 
     def _resolve_gui_target(self, conversation_ref: str) -> str:
         """Map an opaque conversation ref to the name visible in WeChat UI.
@@ -610,9 +622,8 @@ def _gui_result_to_attempt(result: object) -> SendAttempt:
     return SendAttempt("failed", error)
 
 
-_SUPPORTED_SEND_KINDS = frozenset(
-    {"text", "image", "file", "reply", "mention", "poke", "recall", "voice"}
-)
+# 协议 v3 已移除出站 voice；此处从协议常量派生（ADR-0010），不再手抄。
+_SUPPORTED_SEND_KINDS = frozenset(SEND_KINDS)
 
 
 def _dispatch_send(

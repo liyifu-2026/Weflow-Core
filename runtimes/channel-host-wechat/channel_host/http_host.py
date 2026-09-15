@@ -488,6 +488,9 @@ def _validate_send_payload(kind: object, payload: dict) -> dict[str, object]:
     """
     if not isinstance(kind, str):
         raise ValueError("payload.kind is required")
+    # 词汇权威（ADR-0010）：send kind 全集来自协议常量，越界一律拒收
+    if kind not in _protocol.SEND_KINDS:
+        raise ValueError(f"unsupported payload kind: {kind}")
     if kind == "text":
         text = payload.get("text")
         if not isinstance(text, str) or not text.strip():

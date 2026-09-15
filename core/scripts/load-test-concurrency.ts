@@ -49,7 +49,7 @@ function eventFor(index: number) {
     localId: String(index),
     senderId: `wxid_load_${String(index)}`,
     type: 1,
-    kind: "text",
+    kind: "text" as const,
     content: `并发压测消息 ${String(index)}`,
     occurredAt: new Date((1_700_000_000 + index) * 1000).toISOString(),
     observedAt: new Date((1_700_000_000 + index) * 1000).toISOString(),

@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, ilike, isNull, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
+import { assertUploadAllowed } from "../../../infrastructure/file_storage/upload-policy.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 
 /** 出站媒体 kind 由 MIME 推导（与 media 模块 MIME_KIND 约定一致） */
@@ -73,6 +74,11 @@ export async function uploadAsset(
 ): Promise<{ projection: AssetProjection }> {
   const mimeType =
     (input.mimeType || "").toLowerCase() || "application/octet-stream";
+  // 底线策略：拒绝可执行文件/脚本（黑名单，非白名单）
+  assertUploadAllowed({
+    originalName: input.originalName,
+    mimeType,
+  });
   const category = assetCategoryFromMime(mimeType);
   const written = await storage.write(
     input.stream,

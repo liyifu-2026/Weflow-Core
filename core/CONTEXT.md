@@ -15,7 +15,7 @@ Weflow 的无界面业务核心，拥有除通道原始事实之外的全部业�
 _Avoid_: 客户端、单个 Agent 进程
 
 **Console（平台壳，R1 退役）**:  
-退役中的平台壳，仅保留登录/改密/审计/用户/系统状态等平台页面；产品唯一网页端是 support-web（weflow-solutions 仓库）。  
+退役中的平台壳，仅保留登录/改密/审计/用户/系统状态等平台页面；产品唯一网页端是 support-web（本仓 solutions/ 子目录）。  
 _Avoid_: Core、旧 CocoCat Console、在 Console 承载业务页面
 
 **用户**:  
@@ -33,7 +33,7 @@ _Avoid_: 多租户、每用户独立空间
 ### 对话与知识
 
 **Channel**:  
-Core 通过 Channel Host 对接的消息通道。Core 只依赖通道中立的事实（入站事件、发送操作、媒体、游标），不绑定具体通道实现或通道登录账号。  
+Core 通过 Channel Host 对接的消息通道。Core 只依赖通道中立的事实（入站事件、发送操作、媒体、游标、会话类型 chatType），不绑定具体通道实现或通道登录账号。  
 _Avoid_: 具体通道的原始消息库、通道登录账号
 
 **Conversation**:  
@@ -69,7 +69,7 @@ _Avoid_: Conversation 中的 Base64、知识文档
 _Avoid_: 一次性 manual-upload 文件（ownerModule=manual-upload）、知识文档
 
 **Agent Turn**:  
-针对一次触发，由 Execution Strategy 决策、上下文组装、模型推理和工具执行组成的编排过程。AgentDecision 只包含通用字段：`reply_segments`、`next_action`（reply / ask_for_information / retrieve_knowledge / call_tool / handoff / no_action）、`no_action_reason`、`requires_human`、`risk_level`、`handoff_briefing`、`knowledge_query`、`tool`。  
+针对一次触发，由 Execution Strategy 决策、上下文组装、模型推理和工具执行组成的编排过程。AgentDecision 的字段与动作枚举由决策契约（`decision-contract.ts`）单点定义，正式动作集为 reply / ask_for_information / retrieve_knowledge / call_tool / handoff / no_action / wait / end_session / schedule_send。  
 _Avoid_: 常驻聊天会话、模型调用本身
 
 **Agent Turn Execution**:  
@@ -79,6 +79,32 @@ _Avoid_: 单次模型调用、常驻聊天会话、队列 Job 本身
 **Execution Profile**:  
 决定会话是否及如何运行 Agent 的执行配置，由业务插件注册提供；Core 通过 ExecutionStrategyRegistry 按 strategy 选择 Execution Strategy。  
 _Avoid_: 内置业务策略、硬编码 Prompt
+
+### 回合与线程
+
+**回合（Episode）**:  
+从首次触发到机器人自主收口（wait 交权 / end_session / 预算耗尽）的一段连续服务过程；客户插话是回合内部事件，不是回合边界。  
+_Avoid_: Conversation、单次 Agent Turn、模型调用
+
+**回合吸收（Absorbed Input）**:  
+回合运行中到达的客户补充消息被并入当前回合而非另起新回合的机制；排队的旧轮标记 superseded（absorbed_into），当前回合作废过时决策或在含插话的新鲜上下文上重决策。  
+_Avoid_: 消息排队重放、旧 supersede 抢占语义、简单重试
+
+**会话事实卡（Fact Card）**:  
+每会话一份的结构化当前状态（当前问题 / 已确认事实 / 已尝试方案 / 未兑现承诺 / 待确认问题），随决策全量更新、回合开头注入上下文。  
+_Avoid_: Memory、Conversation 摘要、Contact Profile
+
+**轮窗（Round Window）**:  
+原文窗口之外的更早回合的摘要化上下文（最多 4 行、72h 窗）；回合从精确落库的轮次重建，不在回合中间截断。  
+_Avoid_: Memory、完整转录
+
+**群聊线程（Group Thread）**:  
+群聊中由 @ 命中开启的话题单元（`session:group-thread:` 前缀的 agent session）；线程存活期内群成员消息免 @ 建轮，由 end_session 或 TTL 收线。  
+_Avoid_: 群 Conversation、私聊回合
+
+**Session Wake（自唤醒）**:  
+wait 决策挂起的等待计时器到期后由系统投递的唤醒，让回合在客户未回复时继续推进。  
+_Avoid_: 定时轮询、cron 任务
 
 ## Relationships
 
@@ -94,6 +120,8 @@ _Avoid_: 内置业务策略、硬编码 Prompt
 - **Knowledge** 可被 **Contact Profile** 关联，并在 **Agent Turn** 中按需检索
 - **Handoff** 由策略或用户触发，只能通过客户端处理，不通过通道指令处理
 - 一个 **Execution Profile** 由业务插件注册提供，引用一个 **Execution Strategy** 与一组 **Skill**（见 Platform vocabulary）
+- 一个 **回合（Episode）** 由若干 **Agent Turn** 组成，以机器人自主收口结束
+- 一个 **Conversation** 至多有一份 **会话事实卡**；群聊 **Conversation** 可并存多个 **群聊线程**
 
 ## Example dialogue
 
@@ -111,6 +139,9 @@ _Avoid_: 内置业务策略、硬编码 Prompt
 - “模块”容易被理解为独立进程——本文中的模块默认只是代码职责分区，只有运行拓扑文档明确列出的才是进程
 - 旧项目的“Console 唯一入口”不再成立——Core 的唯一外部入口是 Core Gateway，各客户端均为独立客户端
 - 客服业务词汇（intent、stage、case-facts、reply policy、coach 评测等）已随平台化重构迁出 Core——Agent 流程由 Execution Strategy / Skill 插件承载，不再作为 Core 领域语言保留
+- `@chatroom` 后缀是微信 wire 细节，不是 Core 领域语言——协议 v6 起 Host 经 `conversationKind` 上报会话类型，Core 仅在 ingest 回退处认识后缀（ADR-0010）；群聊机器人昵称等业务缺省由产品仓部署种子提供（ADR-0011），引擎缺省一律中立
+- `no_action` 原因码有两个口径：契约枚举 10 值（含 `session_closed`），面向模型的提示词仅列 9 值——`session_closed` 由系统在 end_session 无收尾话术等场景自行申报；该差异是否纯属有意，待确认
+- 决策动作存在分层：Core 决策契约为 9 值全集（`schedule_send` 受联系人级开关控制、缺省关闭），业务策略提示词协议为其 8 值子集——差异是分层设计，不是漂移
 
 ## Compatibility vocabulary
 

@@ -191,10 +191,11 @@ integration("agent automatic handoff", () => {
         ),
       );
     expect(outbound).toHaveLength(1);
+    // 固定系统文案已退役：模型自带的告别语作为最后一条 agent 消息直发
     expect(outbound[0]).toMatchObject({
-      actorType: "system",
+      actorType: "agent",
       sendState: "pending",
-      text: "已收到您的情况，已转交专人跟进。",
+      text: "我先为您转人工处理。",
     });
 
     const detail = await server.inject({
@@ -226,5 +227,112 @@ integration("agent automatic handoff", () => {
     expect(detailBody.handoff.briefing?.generatedAt).toMatch(
       /^\d{4}-\d{2}-\d{2}T/,
     );
+  });
+
+  it("stays silent when the model hands off without farewell text", async () => {
+    const silentSuffix = `${suffix}-silent`;
+    const silentConversationId = `channel:handoff-silent-${silentSuffix}`;
+    const silentContactId = `contact:channel:handoff-silent-${silentSuffix}`;
+    const silentMessageId = `handoff-silent-message-${silentSuffix}`;
+    const silentTurnId = `handoff-silent-turn-${silentSuffix}`;
+    try {
+      await postgres.db.insert(schema.contactProfiles).values({
+        contactId: silentContactId,
+        channel: "channel",
+        channelContactId: `handoff-silent-${silentSuffix}`,
+        agentEnabled: true,
+      });
+      await postgres.db.insert(schema.conversations).values({
+        conversationId: silentConversationId,
+        contactId: silentContactId,
+        channel: "channel",
+        channelConversationId: `handoff-silent-${silentSuffix}`,
+      });
+      await postgres.db.insert(schema.messages).values({
+        messageId: silentMessageId,
+        conversationId: silentConversationId,
+        direction: "inbound",
+        actorType: "contact",
+        contentType: "text",
+        channelType: 1,
+        text: "这个我搞不定，转人工吧",
+        processingState: "received",
+        idempotencyKey: silentMessageId,
+        occurredAt: new Date(),
+        traceId: silentMessageId,
+      });
+      await postgres.db.insert(schema.agentTurns).values({
+        turnId: silentTurnId,
+        triggerMessageId: silentMessageId,
+        conversationId: silentConversationId,
+        status: "queued",
+        traceId: silentTurnId,
+      });
+
+      const response = JSON.stringify({
+        next_action: "handoff",
+        requires_human: true,
+        risk_level: "medium",
+        handoff_briefing: {
+          problem_summary: "客户主动要求人工跟进。",
+          unresolved_items: [],
+          suggested_first_reply: "你好，我来继续处理。",
+        },
+      });
+      const client = new OpenAiCompatibleClient({
+        baseUrl: "https://model.invalid",
+        apiKey: "test-only",
+        model: "test",
+        timeoutMs: 1_000,
+        fetch: () =>
+          Promise.resolve(
+            Response.json({ choices: [{ message: { content: response } }] }),
+          ),
+      });
+      const executor = new AgentTurnExecutor(postgres.db, client, "test");
+      await executor.execute({ turnId: silentTurnId, traceId: silentTurnId });
+
+      const handoff = await postgres.db
+        .select()
+        .from(schema.handoffStates)
+        .where(eq(schema.handoffStates.conversationId, silentConversationId));
+      expect(handoff[0]).toMatchObject({ status: "pending", agentPaused: true });
+      // 模型未给告别语：转人工不发送任何客户可见文案（静默转接）
+      const outbound = await postgres.db
+        .select()
+        .from(schema.messages)
+        .where(
+          and(
+            eq(schema.messages.conversationId, silentConversationId),
+            eq(schema.messages.direction, "outbound"),
+          ),
+        );
+      expect(outbound).toHaveLength(0);
+    } finally {
+      await postgres.db
+        .delete(schema.notificationOutbox)
+        .where(eq(schema.notificationOutbox.conversationId, silentConversationId));
+      await postgres.db
+        .delete(schema.handoffEvents)
+        .where(eq(schema.handoffEvents.conversationId, silentConversationId));
+      await postgres.db
+        .delete(schema.handoffStates)
+        .where(eq(schema.handoffStates.conversationId, silentConversationId));
+      await postgres.db
+        .delete(schema.handoffCycles)
+        .where(eq(schema.handoffCycles.conversationId, silentConversationId));
+      await postgres.db
+        .delete(schema.agentTurns)
+        .where(eq(schema.agentTurns.turnId, silentTurnId));
+      await postgres.db
+        .delete(schema.messages)
+        .where(eq(schema.messages.conversationId, silentConversationId));
+      await postgres.db
+        .delete(schema.conversations)
+        .where(eq(schema.conversations.conversationId, silentConversationId));
+      await postgres.db
+        .delete(schema.contactProfiles)
+        .where(eq(schema.contactProfiles.contactId, silentContactId));
+    }
   });
 });

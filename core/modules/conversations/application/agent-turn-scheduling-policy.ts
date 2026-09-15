@@ -8,7 +8,7 @@
  */
 
 /** 静默窗口时间（毫秒），在此窗口内的多个轮次会被合并 */
-export const AGENT_TURN_QUIET_WINDOW_MS = 3_000;
+export const AGENT_TURN_QUIET_WINDOW_MS = 1_500;
 
 /**
  * 待发送 Agent 回复的排除窗口（毫秒）。
@@ -18,15 +18,17 @@ export const AGENT_TURN_QUIET_WINDOW_MS = 3_000;
  */
 export const AGENT_PENDING_REPLY_WINDOW_MS = 10 * 60_000;
 
-/** 运行中或工具待执行轮次被视为崩溃失效的时长阈值（毫秒）。 */
-export const STALE_RUNNING_TURN_MS = 5 * 60_000;
+/**
+ * 运行中或工具待执行轮次被视为崩溃失效的时长阈值（毫秒）。
+ * 90s：worker 内每一步都有独立超时（决策 decisionTimeoutMs、工具 15s），
+ * 且每次续步都会刷新 startedAt——正常长循环不会误伤；而 2026-09-07
+ * 实测 5min 阈值下 turn 假死要陪葬整整 5 分钟才被回收，客户侧不可接受。
+ */
+export const STALE_RUNNING_TURN_MS = 90 * 1_000;
 
-/** 视为"待确认回复"的出站发送状态；处于这些状态的回复阻塞新轮次。 */
-export const PENDING_AGENT_REPLY_SEND_STATES = [
-  "pending",
-  "submitting",
-  "unknown",
-] as const;
+/** 视为"待确认回复"的出站发送状态；处于这些状态的回复阻塞新轮次。
+ *  与出站循环扫描集同源定义（send-states），漂移在此处即编译失败。 */
+export { OUTBOUND_LOOP_SEND_STATES as PENDING_AGENT_REPLY_SEND_STATES } from "./send-states.js";
 
 /** 排队中的 Agent 轮次 */
 export type QueuedAgentTurn = {
@@ -34,6 +36,11 @@ export type QueuedAgentTurn = {
   conversationId: string;
   traceId: string;
   createdAt: Date;
+  /**
+   * 触发消息的发送时间（dispatcher join messages 提供；wake 轮无触发消息为 null）。
+   * 「谁是最新轮次」以它为准——与 worker 侧 findNewerActiveTurnIds 同一把尺子。
+   */
+  triggerOccurredAt?: Date | null;
 };
 
 /**
@@ -79,6 +86,16 @@ export function pendingReplyWindowStart(now: Date): Date {
 }
 
 function compareTurns(left: QueuedAgentTurn, right: QueuedAgentTurn): number {
+  // 「最新」以触发消息时间为准（与 findNewerActiveTurnIds 同尺）；turn 行创建时间
+  // 只作 tiebreak。两者在摄取乱序时会相反：曾实测同会话双消息，合并按行创建
+  // 时间留下的幸存者恰被 superseded 闸门按消息时间处决——双双 superseded，
+  // 客户收不到任何回复。无触发消息的 wake 轮排最旧（新消息进来时让位）。
+  const leftTrigger = left.triggerOccurredAt?.getTime();
+  const rightTrigger = right.triggerOccurredAt?.getTime();
+  const trigger =
+    (leftTrigger ?? Number.NEGATIVE_INFINITY) -
+    (rightTrigger ?? Number.NEGATIVE_INFINITY);
+  if (trigger !== 0) return trigger;
   const createdAt = left.createdAt.getTime() - right.createdAt.getTime();
   return createdAt === 0 ? left.turnId.localeCompare(right.turnId) : createdAt;
 }

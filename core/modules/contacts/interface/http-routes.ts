@@ -36,9 +36,14 @@ const contactListQuerySchema = z.object({
    */
   q: z.string().trim().max(120).optional(),
   /**
-   * 联系人白名单过滤：true=仅白名单 / false=仅非白名单 / 不传=全部
+   * 自动回复过滤：true=仅自动回复 / false=仅「仅人工」/ 不传=全部
    */
   agentEnabled: z
+    .union([z.literal("true"), z.literal("false")])
+    .transform((value) => value === "true")
+    .optional(),
+  /** 黑名单过滤：true=仅已拉黑 / false=仅未拉黑 / 不传=全部 */
+  blocked: z
     .union([z.literal("true"), z.literal("false")])
     .transform((value) => value === "true")
     .optional(),
@@ -83,6 +88,9 @@ export function registerContactProfileRoutes(
         : {}),
       ...(query.data.agentEnabled !== undefined
         ? { agentEnabled: query.data.agentEnabled }
+        : {}),
+      ...(query.data.blocked !== undefined
+        ? { blocked: query.data.blocked }
         : {}),
     });
     return { contacts: page.items, nextCursor: page.nextCursor };

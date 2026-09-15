@@ -5,7 +5,7 @@
  * 搜索合一（UX-DECISIONS §1）：单一搜索框——
  * - 空态：三区工作区（等待处理 / 我处理的 / 其他对话）或兜底单列；
  * - 输入：同时搜索会话与全部联系人，分组展示；点击联系人即打开其会话。
- * 白名单配置入口在「管理」页（此处不再重复）。
+ * 联系人策略（自动回复 / 仅人工 / 已拉黑）入口在「管理」页（此处不再重复）。
  */
 import { ref, watch } from "vue";
 import { RefreshCw, Search, X } from "lucide-vue-next";
@@ -193,10 +193,15 @@ function contactItemDisplayName(item: Record<string, any>): string {
             <span class="flex items-center justify-between gap-2">
               <span class="truncate text-sm font-medium">{{ contactItemDisplayName(item) }}</span>
               <span
-                v-if="item.agentEnabled"
+                v-if="item.blocked"
+                class="shrink-0 rounded-sm bg-destructive/10 px-1 text-[10px] font-medium text-destructive"
+                title="已拉黑：不进会话列表、不推通知"
+              >已拉黑</span>
+              <span
+                v-else-if="item.agentEnabled"
                 class="shrink-0 rounded-sm bg-secondary px-1 text-[10px] font-medium text-secondary-foreground"
                 title="Agent 自动回复已开启"
-              >白名单</span>
+              >自动回复</span>
               <span v-else class="shrink-0 text-xs text-muted-foreground">仅人工</span>
             </span>
             <span class="mt-0.5 flex items-center justify-between gap-2">

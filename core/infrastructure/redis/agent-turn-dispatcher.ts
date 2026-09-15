@@ -99,8 +99,14 @@ export function startAgentTurnDispatcher(
             conversationId: schema.agentTurns.conversationId,
             traceId: schema.agentTurns.traceId,
             createdAt: schema.agentTurns.createdAt,
+            // 合并排序与 superseded 闸门同尺：按触发消息时间判「最新」
+            triggerOccurredAt: schema.messages.occurredAt,
           })
           .from(schema.agentTurns)
+          .leftJoin(
+            schema.messages,
+            eq(schema.messages.messageId, schema.agentTurns.triggerMessageId),
+          )
           .where(
             and(
               eq(schema.agentTurns.status, "queued"),
@@ -180,7 +186,7 @@ export function startAgentTurnDispatcher(
       } catch (error) {
         options.logger.error({ err: error }, "Agent turn dispatch failed");
       }
-      await wait(options.intervalMs ?? 1_000, abortController.signal);
+      await wait(options.intervalMs ?? 500, abortController.signal);
     }
   };
 

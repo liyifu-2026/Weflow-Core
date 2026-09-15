@@ -10,6 +10,20 @@ import threading
 import uuid
 from typing import Iterable, Mapping, Optional
 
+from .channel_protocol import (
+    IN_FLIGHT_SEND_OPERATION_STATES,
+    SEND_OPERATION_STATES,
+)
+
+# 词汇权威（ADR-0010）：状态词汇来自协议常量，行为绑定——手抄字面量已删除。
+# 「可领取 / 已认领」的角色语义留在 Host；终态 = 协议全集的补集。
+_PENDING_STATE = IN_FLIGHT_SEND_OPERATION_STATES[0]
+_EXECUTING_STATE = IN_FLIGHT_SEND_OPERATION_STATES[1]
+_TERMINAL_STATES = frozenset(
+    set(SEND_OPERATION_STATES) - set(IN_FLIGHT_SEND_OPERATION_STATES)
+)
+_IN_FLIGHT_SQL = ", ".join(f"'{state}'" for state in IN_FLIGHT_SEND_OPERATION_STATES)
+
 
 @dataclass(frozen=True)
 class ChannelObservation:
@@ -31,6 +45,9 @@ class ChannelObservation:
     reply_to_channel_message_id: Optional[str] = None
     # 空库 Backfill 合成的历史回溯事件；Core 摄取时只入库，不触发任何 AI 副作用。
     historical: bool = False
+    # 会话类型（协议 v6，ADR-0010）：Host 上报的 Channel 事实；
+    # Core ingest 落库 chat_type，缺省时由 Core 按通道约定回退推导。
+    conversation_kind: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -89,7 +106,8 @@ class EventStore:
                         file_name TEXT,
                         mime_type TEXT,
                         account TEXT,
-                        source_metadata TEXT
+                        source_metadata TEXT,
+                        conversation_kind TEXT
                     );
 
                     CREATE TABLE IF NOT EXISTS source_checkpoints (
@@ -176,7 +194,8 @@ class EventStore:
                         source_metadata TEXT,
                         mentioned INTEGER,
                         reply_to_channel_message_id TEXT,
-                        historical INTEGER NOT NULL DEFAULT 0
+                        historical INTEGER NOT NULL DEFAULT 0,
+                        conversation_kind TEXT
                     )
                     """
                 )
@@ -233,6 +252,11 @@ class EventStore:
         if "historical" not in columns:
             self._connection.execute(
                 "ALTER TABLE channel_events ADD COLUMN historical INTEGER NOT NULL DEFAULT 0"
+            )
+        # 会话类型（协议 v6，ADR-0010）：Host 上报的 Channel 事实
+        if "conversation_kind" not in columns:
+            self._connection.execute(
+                "ALTER TABLE channel_events ADD COLUMN conversation_kind TEXT"
             )
 
     def _ensure_send_operation_columns(self) -> None:
@@ -434,8 +458,8 @@ class EventStore:
                         sender_ref, kind, content, occurred_at, observed_at,
                         is_self, media_ref, file_name, mime_type, account,
                         source_metadata, mentioned, reply_to_channel_message_id,
-                        historical
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        historical, conversation_kind
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         observation.event_id,
@@ -458,6 +482,7 @@ class EventStore:
                         if observation.mentioned is not None else None,
                         observation.reply_to_channel_message_id,
                         1 if observation.historical else 0,
+                        observation.conversation_kind,
                     ),
                 )
                 self._connection.execute(
@@ -631,7 +656,8 @@ class EventStore:
                 SELECT cursor, event_id, conversation_ref, channel_message_id,
                        sender_ref, kind, content, occurred_at, observed_at,
                        is_self, media_ref, file_name, mime_type, account,
-                       mentioned, reply_to_channel_message_id, historical
+                       mentioned, reply_to_channel_message_id, historical,
+                       conversation_kind
                 FROM channel_events
                 WHERE cursor > ?
                 ORDER BY cursor ASC
@@ -743,10 +769,10 @@ class EventStore:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             rows = self._connection.execute(
-                """
+                f"""
                 SELECT operation_id
                 FROM channel_send_operations
-                WHERE state = 'pending'
+                WHERE state = '{_PENDING_STATE}'
                   AND (lease_until IS NULL OR lease_until <= ?)
                 ORDER BY created_at ASC
                 LIMIT ?
@@ -762,10 +788,10 @@ class EventStore:
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             rows = self._connection.execute(
-                """
+                f"""
                 SELECT operation_id
                 FROM channel_send_operations
-                WHERE state = 'executing'
+                WHERE state = '{_EXECUTING_STATE}'
                   AND (lease_until IS NULL OR lease_until <= ?)
                 ORDER BY created_at ASC
                 LIMIT ?
@@ -778,10 +804,10 @@ class EventStore:
         """Release claims left by a previous Host process before restart."""
         with self._lock:
             updated = self._connection.execute(
-                """
+                f"""
                 UPDATE channel_send_operations
                 SET lease_until = NULL
-                WHERE state IN ('pending', 'executing')
+                WHERE state IN ({_IN_FLIGHT_SQL})
                   AND lease_until IS NOT NULL
                 """
             )
@@ -826,11 +852,11 @@ class EventStore:
         ).isoformat()
         with self._lock:
             row = self._connection.execute(
-                """
+                f"""
                 SELECT baseline_sort_seq
                 FROM channel_send_operations
                 WHERE operation_id = ?
-                  AND state = 'pending'
+                  AND state = '{_PENDING_STATE}'
                   AND (lease_until IS NULL OR lease_until <= ?)
                 """,
                 (operation_id, now_text),
@@ -844,9 +870,9 @@ class EventStore:
                 else int(baseline_sort_seq)
             )
             updated = self._connection.execute(
-                """
+                f"""
                 UPDATE channel_send_operations
-                SET state = 'executing', baseline_sort_seq = ?, attempts = attempts + 1,
+                SET state = '{_EXECUTING_STATE}', baseline_sort_seq = ?, attempts = attempts + 1,
                     lease_until = ?, updated_at = ?
                 WHERE operation_id = ?
                   AND state = 'pending'
@@ -886,7 +912,7 @@ class EventStore:
         error: Optional[str] = None,
         channel_message_id: Optional[str] = None,
     ) -> None:
-        if state not in {"confirmed", "unknown", "failed"}:
+        if state not in _TERMINAL_STATES:
             raise ValueError("invalid terminal send operation state")
         now = datetime.now(timezone.utc).isoformat()
         with self._lock:
@@ -948,6 +974,9 @@ def _event_dict(row: sqlite3.Row) -> dict[str, object]:
     # 协议 v2：历史回溯标记只在 historical=true 时透出（缺省 = 实时事件）
     if row["historical"]:
         event["historical"] = True
+    # 协议 v6：会话类型（Host 上报的 Channel 事实；缺省时不透出）
+    if row["conversation_kind"]:
+        event["conversationKind"] = row["conversation_kind"]
     return event
 
 

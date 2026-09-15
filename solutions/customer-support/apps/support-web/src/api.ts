@@ -6,20 +6,42 @@
  */
 export type ApiError = Error & { status?: number; code?: string };
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
+/**
+ * 请求超时兜底：连接闪断时对端可能不发 RST/FIN，fetch 会永远 pending，
+ * 没有超时界面就会永远转圈。上传（FormData）大文件走公网隧道，给更长窗口。
+ */
+const JSON_TIMEOUT_MS = 30_000;
+const UPLOAD_TIMEOUT_MS = 600_000;
+
+export async function api<T>(
+  path: string,
+  init: RequestInit & { timeoutMs?: number } = {},
+): Promise<T> {
+  const { timeoutMs: timeoutOverride, ...requestInit } = init;
+  const headers = new Headers(requestInit.headers);
+  const isUpload = requestInit.body instanceof FormData;
+  const timeoutMs =
+    timeoutOverride ?? (isUpload ? UPLOAD_TIMEOUT_MS : JSON_TIMEOUT_MS);
   if (
-    init.body &&
-    !(init.body instanceof FormData) &&
+    requestInit.body &&
+    !(requestInit.body instanceof FormData) &&
     !headers.has("content-type")
   ) {
     headers.set("content-type", "application/json");
   }
-  const response = await fetch(path, {
-    ...init,
-    headers,
-    credentials: "include",
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...requestInit,
+      headers,
+      credentials: "include",
+      signal: requestInit.signal ?? AbortSignal.timeout(timeoutMs),
+    });
+  } catch (reason) {
+    if (reason instanceof DOMException && reason.name === "TimeoutError")
+      throw timeoutError();
+    throw reason;
+  }
   if (response.status === 204) return undefined as T;
   const contentType = response.headers.get("content-type") ?? "";
   const payload = contentType.includes("application/json")
@@ -38,8 +60,16 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return payload as T;
 }
 
+/** 超时统一转成带友好文案的 ApiError，走既有错误提示 UI */
+function timeoutError(): ApiError {
+  const error = new Error(errorCopy("request_timeout", 0)) as ApiError;
+  error.code = "request_timeout";
+  return error;
+}
+
 function errorCopy(code: string, status: number): string {
   const copy: Record<string, string> = {
+    request_timeout: "请求超时：网络可能中断或服务未响应，请稍后重试",
     authentication_required: "登录已失效，请重新登录",
     password_change_required: "请先修改初始密码",
     admin_required: "此操作仅管理员可执行",
@@ -48,6 +78,7 @@ function errorCopy(code: string, status: number): string {
     knowledge_provider_rejected: "知识服务拒绝了本次操作，请检查资料或配置",
     knowledge_route_not_allowed: "此知识端点不在迁移白名单中",
     upload_too_large: "文件超出大小限制",
+    upload_type_blocked: "不支持发送可执行文件或脚本",
     operator_or_admin_required: "此操作需要运营或管理员权限",
     ai_employee_key_exists: "这个 AI Employee Key 已存在",
     ai_employee_not_found: "AI Employee 不存在",
@@ -77,6 +108,7 @@ function errorCopy(code: string, status: number): string {
     media_not_ready: "文件仍在处理中，请稍后查看",
     avatar_unsupported_type: "头像仅支持 JPG / PNG / WebP 图片",
     avatar_preset_unknown: "预设头像不存在，请刷新后重试",
+    invalid_display_name: "显示名需为 1-24 个字符",
     thread_not_found: "问答会话不存在，请重新发起",
     generation_in_progress: "已有一次生成进行中，请稍候",
     generation_failed: "内容生成失败，请重试",

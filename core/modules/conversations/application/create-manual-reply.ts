@@ -12,6 +12,10 @@ import { lockConversationOwnership } from "../../../infrastructure/postgres/owne
 import { scheduleMemoryCaptureInTransaction } from "../../memory/application/schedule-memory-capture.js";
 import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
 import { assetOutboundMediaId } from "../../assets/application/asset-service.js";
+import {
+  type ManualReplyDeliveryStatus,
+  projectDeliveryStatus,
+} from "./send-states.js";
 
 /** 人工回复的创建结果 */
 export type ManualReplyResult =
@@ -33,7 +37,7 @@ export type ManualReplyResult =
 export type ManualReplyOutcome =
   | { status: "not_found" }
   | {
-      status: "pending" | "accepted" | "sent" | "failed";
+      status: ManualReplyDeliveryStatus;
       message: typeof schema.messages.$inferSelect;
     };
 
@@ -68,16 +72,7 @@ export async function getManualReplyOutcome(
     .limit(1);
   const message = rows[0];
   if (!message) return { status: "not_found" };
-  const sendState = message.sendState;
-  const status =
-    sendState === "failed"
-      ? "failed"
-      : sendState === "sent" || sendState === "observed"
-        ? "sent"
-        : sendState === "pending"
-          ? "pending"
-          : "accepted";
-  return { status, message };
+  return { status: projectDeliveryStatus(message.sendState), message };
 }
 
 /**

@@ -52,10 +52,13 @@ describe("TextModel capability", () => {
     );
 
     expect(response.text).toBe('{"next_action":"no_action"}');
+    // 决策调用显式关闭思考：结构化选择任务不需要思维链（实测强制思考
+    // 使单次调用达 15~52s）。
     expect(generate).toHaveBeenCalledWith({
       messages: [{ role: "user", content: "hello" }],
       modelId: "agent-model",
       output: "structured",
+      thinking: false,
     });
   });
 

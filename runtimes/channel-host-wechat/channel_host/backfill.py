@@ -317,7 +317,7 @@ class BackfillRunner:
             observation,
             event_id=event_id,
             content=content,
-            # mediaRef 原样保留（emotion 无 mediaRef 会被 Core 拒收）
+            # mediaRef 原样保留（表情包事件已无 mediaRef，按纯文本 kind=emotion 落库）
             media_ref=observation.media_ref,
             # 历史消息不做 @ 提及判定，避免触发群聊响应策略
             mentioned=None,

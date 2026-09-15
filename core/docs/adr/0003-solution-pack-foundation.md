@@ -4,6 +4,10 @@
 
 Accepted — Phase 7
 
+> **Superseded（2026-09-05）**：R3 平台化拆除（单产品化）已整体移除 Solution Pack /
+> Solution Runner / 签名安装 / registry 机制，插件改为 `WEFLOW_PLUGIN_DIR` 目录直读。
+> 本文保留为历史决策记录，不做内容修订；现行架构见工作区根 `AGENTS.md` 的宪法修正。
+
 ## Decision
 
 Weflow 正式分为 **Platform** 与 **Ecosystem** 两层：

@@ -22,6 +22,8 @@ import {
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { groupDisplayName } from "../../contacts/application/group-display-name.js";
+import { chatTypeFromConversationRef } from "./chat-type.js";
+import { maskedSenderLabel } from "./sender-display.js";
 
 /** and()/or() 的 drizzle 返回可能为 undefined（参数含可选时），这里保证得到 SQL */
 function allOf(...conditions: SQLWrapper[]): SQL {
@@ -121,8 +123,8 @@ export function computeConversationPermissions(
  * 不传 scope 时保持原有行为（全部会话，按最近消息时间倒序）。
  *
  * agentEnabled 可选：
- * - true  → 仅返回联系人白名单（agent_enabled=true）的会话
- * - false → 仅返回非白名单会话
+ * - true  → 仅返回自动回复（agent_enabled=true）的会话
+ * - false → 仅返回「仅人工」会话
  * - 不传  → 全部会话（保持向后兼容）
  */
 export async function listSharedConversations(
@@ -179,6 +181,7 @@ export async function listSharedConversations(
       conversationId: schema.conversations.conversationId,
       channel: schema.conversations.channel,
       channelConversationId: schema.conversations.channelConversationId,
+      chatType: schema.conversations.chatType,
       latestMessageAt: max(schema.messages.occurredAt),
       latestMessage: {
         text: sql<string>`(array_agg(${schema.messages.text} order by ${schema.messages.occurredAt} desc, ${schema.messages.messageId} desc))[1]`,
@@ -369,24 +372,23 @@ export async function listSharedConversations(
         ...conversation
       }) => {
         void handoffTargetUserId;
-        // 群聊显示名兜底：未设群名的群 displayName 是裸 @chatroom ID
+        // 群聊显示名兜底：未设群名的群 displayName 是裸通道群 ID
         const contactOut = conversation.contact
           ? {
               ...conversation.contact,
               channelDisplayName: groupDisplayName(
                 conversation.contact.channelDisplayName,
                 conversation.contact.channelContactId,
+                conversation.chatType === "group",
               ),
             }
           : conversation.contact;
         return {
           ...conversation,
           contact: contactOut,
-          // 群聊识别（ADR-0006）：channel 会话 ref 以 @chatroom 结尾即群聊；
-          // 由通道会话 ID 派生，零存储成本。前端据此展示群徽标与群聊约束。
-          chatType: conversation.channelConversationId.endsWith("@chatroom")
-            ? ("group" as const)
-            : ("private" as const),
+          // 群聊识别（ADR-0010）：chatType 是落库 Channel 事实
+          // （ingest 定一次），前端据此展示群徽标与群聊约束。
+          chatType: conversation.chatType,
           // pg 对 count(*)（bigint）返回字符串；投影统一转数字，
           // 避免客户端把 "0" 当 truthy 误显示未读红点。
           unreadCustomerCount: Number(conversation.unreadCustomerCount ?? 0),
@@ -668,13 +670,14 @@ export async function getSharedTranscript(
       revision: schema.conversations.revision,
       channelConversationId: schema.conversations.channelConversationId,
       channelAccount: schema.conversations.channelAccount,
+      chatType: schema.conversations.chatType,
     })
     .from(schema.conversations)
     .where(eq(schema.conversations.conversationId, conversationId))
     .limit(1);
-  const chatType = conversation?.channelConversationId.endsWith("@chatroom")
-    ? ("group" as const)
-    : ("private" as const);
+  // 会话类型（ADR-0010）：落库事实；行缺失的极端场景按通道约定兜底推导。
+  const chatType =
+    conversation?.chatType ?? chatTypeFromConversationRef(conversationId);
   // 群聊消息的发送者昵称解析：actorId（wxid）→ 同账号联系人资料
   // （共享别名 > 显示名 > 昵称）。群成员本身就在联系人同步范围内。
   const senderNames = new Map<string, string>();
@@ -723,6 +726,8 @@ export async function getSharedTranscript(
       text: schema.messages.text,
       processingState: schema.messages.processingState,
       sendState: schema.messages.sendState,
+      // AI 回复批次键（前端回合气泡把「回合完成」钉在该轮最后一条回复后）
+      replyBatchId: schema.messages.replyBatchId,
       occurredAt: schema.messages.occurredAt,
     })
     .from(schema.messages)
@@ -761,14 +766,13 @@ export async function getSharedTranscript(
   const oldest = page[0];
   return {
     messages: page.map((row) => {
-      // 群聊发送者昵称：入站消息 actorId（wxid）解析为可读名；
-      // 未同步的成员回落 wxid 尾号。私聊恒为 null。
+      // 群聊发送者昵称：入站消息 actorId（通道联系人 ID）解析为可读名；
+      // 未同步的成员回落匿名缩写。私聊恒为 null。
       const senderName =
         chatType === "group" &&
         row.direction === "inbound" &&
         row.actorId
-          ? (senderNames.get(row.actorId) ??
-            `wx…${row.actorId.slice(-6)}`)
+          ? (senderNames.get(row.actorId) ?? maskedSenderLabel(row.actorId))
           : null;
       return {
         ...row,
@@ -976,7 +980,7 @@ export type ContactListSummary = {
   conversationId: string;
   latestMessageAt: string | null;
   latestMessageText: string;
-  /** 联系人白名单：true = 由 Agent 负责；false = 仅人工处理 */
+  /** 自动回复开关：true = 由 Agent 负责；false = 仅人工处理 */
   agentEnabled: boolean;
   /** 黑名单：true = 不进会话列表（本列表可见）、不建 Turn、不推通知 */
   blocked: boolean;
@@ -1032,7 +1036,8 @@ export function decodeContactListCursor(
  *
  * 可选参数：
  * - q：按 channelDisplayName / channelNickname / channelRemark / sharedAlias 模糊匹配（ILIKE）
- * - agentEnabled：true=仅白名单、false=仅非白名单、不传=全部
+ * - agentEnabled：true=仅自动回复、false=仅「仅人工」、不传=全部
+ * - blocked：true=仅已拉黑、false=仅未拉黑、不传=全部
  */
 export async function listContactsWithLatestConversation(
   db: NodePgDatabase<typeof schema>,
@@ -1042,6 +1047,7 @@ export async function listContactsWithLatestConversation(
     before?: string | undefined;
     q?: string | undefined;
     agentEnabled?: boolean | undefined;
+    blocked?: boolean | undefined;
   },
 ): Promise<{ items: ContactListSummary[]; nextCursor: string | null }> {
   const limitWithProbe = input.limit + 1;
@@ -1052,6 +1058,7 @@ export async function listContactsWithLatestConversation(
   const searchPattern =
     trimmedQuery.length > 0 ? `%${trimmedQuery.replace(/[%_]/g, "\\$&")}%` : null;
   const agentEnabledFilter = input.agentEnabled;
+  const blockedFilter = input.blocked;
   const rows = await db.execute<{
     contactId: string;
     channelDisplayName: string | null;
@@ -1060,6 +1067,7 @@ export async function listContactsWithLatestConversation(
     sharedAlias: string | null;
     avatarUrl: string | null;
     conversationId: string;
+    chatType: string | null;
     latestMessageAt: Date | string | null;
     latestMessageText: string | null;
     agentEnabled: boolean;
@@ -1077,6 +1085,7 @@ export async function listContactsWithLatestConversation(
       p.shared_alias AS "sharedAlias",
       p.avatar_url AS "avatarUrl",
       lc.conversation_id AS "conversationId",
+      lc.chat_type AS "chatType",
       lc.latest_message_at AS "latestMessageAt",
       lc.latest_message_text AS "latestMessageText",
       p.agent_enabled AS "agentEnabled",
@@ -1090,7 +1099,7 @@ export async function listContactsWithLatestConversation(
       last_human.handled_at AS "lastHandlerAt"
     FROM conversation.contact_profiles p
     JOIN LATERAL (
-      SELECT c.conversation_id, m.occurred_at AS latest_message_at, m.text AS latest_message_text
+      SELECT c.conversation_id, c.chat_type, m.occurred_at AS latest_message_at, m.text AS latest_message_text
       FROM conversation.conversations c
       LEFT JOIN LATERAL (
         SELECT msg.occurred_at, msg.text
@@ -1144,6 +1153,13 @@ export async function listContactsWithLatestConversation(
             ? sql`AND p.agent_enabled = false`
             : sql``
       }
+      ${
+        blockedFilter === true
+          ? sql`AND p.blocked = true`
+          : blockedFilter === false
+            ? sql`AND p.blocked = false`
+            : sql``
+      }
     ORDER BY lc.latest_message_at DESC NULLS LAST, p.contact_id DESC
     LIMIT ${limitWithProbe}
   `);
@@ -1164,9 +1180,13 @@ export async function listContactsWithLatestConversation(
   return {
     items: page.map((row) => ({
       contactId: row.contactId,
-      // 群聊显示名兜底：未设群名的群 displayName 是裸 @chatroom ID，
-      // 读取时兜底为「群聊 xxxxx」（不写库；群名后续同步覆盖自然生效）
-      channelDisplayName: groupDisplayName(row.channelDisplayName, row.contactId),
+      // 群聊显示名兜底（ADR-0010）：isGroup 来自落库 chat_type 事实，
+      // 未设群名时兜底为「群聊 xxxxx」（不写库；群名后续同步覆盖自然生效）
+      channelDisplayName: groupDisplayName(
+        row.channelDisplayName,
+        row.contactId,
+        row.chatType === "group",
+      ),
       channelNickname: row.channelNickname,
       channelRemark: row.channelRemark,
       sharedAlias: row.sharedAlias,

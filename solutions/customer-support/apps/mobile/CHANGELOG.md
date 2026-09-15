@@ -6,6 +6,29 @@
 
 ### Added
 
+- 视频消息可播放：客户发来的视频（contentType/mediaKind=video）此前落到「[文件]」占位，现在走文件卡片 + 应用内 expo-video 预览（与 mp4/mov 附件同一实现，无原始文件名时按 video.mp4 兜底）。
+
+### Changed
+
+- 文件分享的 MIME 映射补齐：docx/xlsx/pptx/zip/rar/7z/gz/csv/md/json/xml/bmp/音频等此前一律 `application/octet-stream`，系统分享面板认不出该用什么打开；现在按扩展名给出正确 MIME。
+- 上传被 Core 拒绝（可执行文件/脚本，`upload_type_blocked`）时给出可读提示，而不是落到「网络连接失败」。
+- 全量替换 App 图标为新版设计（白底深蓝图形）：重生成 `assets/images/` 下 icon、Android adaptive 三层（整图作 background 层、透明 foreground、图形剪影作 monochrome 主题图标层，adaptive 背景色改 `#FFFFFF`）、splash 圆角图与 favicon。移除 `assets/expo.icon`（Expo 模板 plate——此前 iOS 端实际用的是模板默认图标，并非 Weflow 设计；现移除 `ios.icon` 覆盖，iOS 回落使用 `icon.png`）与旧版 `assets/icon.svg`。注意：app.json 配置变更会改变 runtimeVersion 指纹，OTA 对已安装旧包自动失效，需重装一次新 APK 建立基线。
+
+### Fixed
+
+- 修复本地构建 APK 拉不到 EAS Update OTA 的问题：此前 AndroidManifest 缺少 updates channel 头，按频道（production/preview）发布的更新永远匹配不到设备；已在 app.json `updates.requestHeaders` 写入 `expo-channel: production`，随 prebuild 烤进原生工程。发 preview 内测频道时需改此处并重新构建 APK。
+- 补 `android.versionCode: 3`：prebuild 全量重建会使 versionCode 回落（旧基线为 2，回落到 1 的包会被 Android 拒绝覆盖安装）；versionCode 不参与 OTA 指纹计算。
+- 修复「账号与设备 → 切换账号」后无法进入登录页的问题：切换/退出会保留登录卡片与记住的密码（点头像即可回登的设计），但登录页随后按「下次自动登录」静默登回了刚退出的账号，把用户直接顶回工作台，表现为点击无反应。现在「切换账号」「退出并清除本机数据」和改密页「放弃」跳转登录页时均跳过静默自动登录，只展示账号卡片与表单；冷启动免登不受影响。
+- 修复登录页最近登录头像条不显示头像的问题：登录页处于无会话上下文，而 Core 头像端点要求 Bearer 认证，网络取图必然 401，预设头像因此全部渲染为空。现改为将 5 个平台预设头像（DiceBear Blobs，与 Core 种子池同源同版本）打包进 App 本地渲染，登录页零网络依赖；切号时登录卡片同步记录预设 id，自定义上传头像仍显示首字母占位（与端点鉴权语义一致）。
+
+## [0.9.0] - 2026-09-07
+
+### Added
+
+- QQ 式多账号快捷登录：登录页新增最近登录账号头像横滑条（头像 + 名片名，可左右滑动点选；划到最右「+」手动输入新账号）。勾选「下次自动登录」后账密加密保存在设备安全区域，冷启动先静默恢复会话/自动登录（失败自动落回表单，用户中途触屏即取消）；已存账号头像角标表示已记住密码。「账号与设备 → 退出登录」只清会话，登录卡片与记住的密码保留，点头像即可回登；「退出并清除本机数据」才会删除卡片。当前账号头像/名片名在切号时自动刷新进卡片。
+- 通知提醒类型设置（依赖 Core `0072_notification_kinds` 迁移）：「通知与隐私」页新增三个开关——有等待处理的消息 / 有会话转给你 / 我处理的消息用户有新回复；按设备订阅，服务端推送前按类型过滤（全部关闭自动恢复全部订阅，防止静音）。设备注册与设置变更即时同步服务端并本地缓存。
+- 登录成功后立即注册推送设备：此前设备注册只发生在冷启动，"刚登录 → 收不到推送"要等下次重启 App；现在登录当次即注册。
+- 修复 EAS 项目关联：远程 EAS 项目建站时 slug 为 `weflow-client1`，而 `app.json` 曾把 slug 改为 `weflow-mobile`（Expo 规定 projectId 与 slug 一一对应且不可改名），导致所有 eas 命令被 slug 校验拦截、OTA 无法发布。已将 slug 改回 `weflow-client1`（只影响 Expo 云端项目标识，APK 包名仍为 `com.weflow.mobile`）。注意：slug 参与 fingerprint 计算，本次修复后指纹从 `0b8ac0c8…` 变为 `fb7a1afd…`，旧指纹 release/preview 安装拉不到本次及后续 OTA，需重装一次新 APK 建立基线；debug 构建（模拟器日常开发）由 dev server 供包，不受影响。
 - OTA 热更新（expo-updates + EAS Update）：JS 层变更可经 OTA 直接推送到已安装设备，坐席无需重新下载安装 APK。runtimeVersion 采用 fingerprint 策略：涉及原生依赖或原生配置的变更会生成新指纹，OTA 自动对旧安装失效，杜绝版本错配。首次使用需 `eas login`；当前已安装设备需再安装一次包含 expo-updates 的 APK，之后 JS 变更不再需要重装。
 - 素材空间（依赖 Core `asset-space` 能力，平台新端点 `/api/v1/assets`）：会话页「＋」面板新增「素材空间」入口，底部弹层三来源选择——本机文件（相册图片 / 文件，上传即存入空间便于复用）、图片空间、文件空间；空间按名称搜索 + 24 条分页加载（轻量不全量），卡片长按或铅笔入口可重命名/删除整理；选中素材直接发送给客户，服务端复用已存文件转发，无需重新上传文件字节。素材缩略图经认证头直载（expo-image），不缓存到本地。
 
@@ -31,7 +54,7 @@
 - 修复会话列表分组折叠后计数变 0 的问题：折叠只隐藏成员行，折叠条计数始终显示该组完整数量（如"需要处理 3"折叠后仍显示 3）。
 - 修复语音消息无法播放与无法转文字：Core 语音转码工具链（silk-python）缺失导致全部语音转写失败；并新增转码 MP3 落盘（media.assets.derived_file_id），媒体内容端点优先返回可播放的 MP3，而非不可解码的 SILK 原文件。
 - 移动端登录后再次打开需重新输密码的问题随 30 天会话 + 滑动续期一并解决。
-- 「重新接管」面板删除"点击下方按钮重新接管，由你继续人工处理。"说明文字，并收紧按钮上方空白。
+- 移除接手/接管面板上的冗余提示小字：「重新接管」面板的「点击下方按钮重新接管，由你继续人工处理。」固定文案删除；接手处理/接管处理面板上的过程性提示（正在确认/暂时无法确认等）不再常驻，操作失败改为一次性弹窗提示，可再次点击按钮重试。
 
 ### Changed
 

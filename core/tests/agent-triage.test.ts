@@ -48,6 +48,7 @@ function fakeClient(
 const POLICY_BASE: TriagePolicy = {
   enabled: true,
   riskKeywords: [],
+  systemPrompt: "你是客服消息预判器。", // 业务话术现由设置注入（ADR-0011）
   llmClassifyEnabled: true,
   timeoutMs: 3_000,
   allowDirectReply: false,

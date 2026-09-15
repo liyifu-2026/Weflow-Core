@@ -7,7 +7,10 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { TextModel } from "../modules/model/contracts/text-model.js";
-import type { TextGenerationRequest } from "../modules/model/contracts/text-generation-request.js";
+import type {
+  TextGenerationRequest,
+  TextModelMessage,
+} from "../modules/model/contracts/text-generation-request.js";
 import type { TextGenerationResult } from "../modules/model/contracts/text-generation-result.js";
 import { TextModelError } from "../modules/model/contracts/text-model-error.js";
 import { completeAgentDecision } from "../modules/agent/application/complete-agent-decision.js";
@@ -94,5 +97,39 @@ describe("completeAgentDecision — 截断处置（决策 #2）", () => {
     expect(result.finishReason).toBe("completed");
     expect(result.latencyMs).toBe(120);
     expect(result.usage?.totalTokens).toBe(150);
+  });
+});
+
+describe("completeAgentDecision — 视觉直读（Phase 4）", () => {
+  it("消息含 image_url 段时 thinking=true（视觉模型在思考关闭+json 下输出空白）", async () => {
+    const { model, generate } = fakeModel([
+      okResult('{"next_action":"reply"}'),
+    ]);
+    const visionMessages: TextModelMessage[] = [
+      { role: "system" as const, content: "sys" },
+      {
+        role: "user" as const,
+        content: [
+          { type: "text", text: "看图" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        ],
+      },
+    ];
+
+    await completeAgentDecision(model, visionMessages);
+
+    const request = generate.mock.calls[0]?.[0] as TextGenerationRequest;
+    expect(request.thinking).toBe(true);
+  });
+
+  it("无图的纯文本路径保持 thinking=false（零行为变化）", async () => {
+    const { model, generate } = fakeModel([
+      okResult('{"next_action":"reply"}'),
+    ]);
+
+    await completeAgentDecision(model, MESSAGES);
+
+    const request = generate.mock.calls[0]?.[0] as TextGenerationRequest;
+    expect(request.thinking).toBe(false);
   });
 });

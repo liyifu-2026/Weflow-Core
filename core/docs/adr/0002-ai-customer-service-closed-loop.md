@@ -4,6 +4,12 @@
 
 Accepted — Phase 4（Phase 7 平台化重构后更新为平台 Agent 闭环）
 
+> **修订注记（2026-09-09）**：R1/R3 收敛后，本文两处陈述已失效——①「Console 是
+> 完整的管理/运营工作台」：管理 UI 现归 support-web（唯一业务前端），Console 壳退役；
+> ②「Execution Profile 由 Solution 安装提供」：插件改为 `WEFLOW_PLUGIN_DIR` 直读，
+> 不再有安装动作，Profile 作为机制保留。核心决策（策略与技能由插件提供、Core 不内置
+> 业务策略、Core 是闭环事实唯一来源）仍然有效。
+
 ## Decision
 
 Agent 自动回复、自动追问、自动转人工与人工接管构成平台级闭环。闭环的策略与技能不内置在 Core 中，而是由 Solution 插件提供：

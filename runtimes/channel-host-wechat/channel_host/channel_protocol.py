@@ -2,10 +2,13 @@
 Single source of truth: packages/contracts/src/channel.ts (CHANNEL_PROTOCOL).
 """
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 SEND_OPERATION_STATES = ("pending", "executing", "confirmed", "unknown", "failed")
+IN_FLIGHT_SEND_OPERATION_STATES = ("pending", "executing")
 SEND_KINDS = ("text", "file", "image", "reply", "mention", "poke", "recall")
+EVENT_KINDS = ("text", "image", "file", "voice", "emotion", "pat", "video")
+CONVERSATION_KINDS = ("private", "group")
 MEDIA_STATES = ("ready", "pending", "not_found", "failed")
-ERROR_CODES = ("send_operation_identity_conflict", "media_pending", "media_not_found", "not_found", "channel_contacts_unavailable", "invalid_request", "channel_host_error", "wechat_send_not_confirmed", "at_requires_at_least_one_member", "recall_window_expired", "recall_not_found", "recall_unsupported", "video_not_found", "reply_target_not_latest", "mention_member_not_found")
+ERROR_CODES = ("send_operation_identity_conflict", "media_pending", "media_not_found", "not_found", "channel_contacts_unavailable", "invalid_request", "channel_host_error", "account_mismatch", "unauthorized", "media_too_large", "media_unreadable", "media_key_refresh_unavailable", "backfill_unavailable", "backfill_already_running", "store_not_empty", "wechat_send_not_confirmed", "at_requires_at_least_one_member", "recall_window_expired", "recall_not_found", "recall_unsupported", "video_not_found", "reply_target_not_latest", "mention_member_not_found", "text_payload_empty", "image_path_required", "file_path_required", "reply_text_required", "mention_text_required", "mention_members_required", "invalid_sender_result", "malformed_send_operation", "malformed_text_payload_for_reconciliation", "missing_payload", "missing_send_baseline_for_reconciliation", "non_text_send_not_reconcilable", "send_not_confirmed_after_crash", "tickle_not_confirmed", "uia_driver_unavailable_for_tickle")
 

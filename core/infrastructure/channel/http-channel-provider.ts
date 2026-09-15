@@ -53,9 +53,18 @@ const hostEventSchema = z
     conversationRef: z.string().min(1),
     /** 账号维度（ADR-0005 多账号隔离）；缺省回落 "default" */
     account: z.string().nullable().optional(),
+    /**
+     * 会话类型（协议 v6，ADR-0010）：Host 上报，Core ingest 落库为
+     * chat_type 事实；缺省/null = 旧 Host，ingest 按通道约定回退推导。
+     */
+    conversationKind: z
+      .enum(CHANNEL_PROTOCOL.conversationKinds)
+      .nullable()
+      .optional(),
     channelMessageId: z.string().nullable().optional(),
     senderRef: z.string().nullable().optional(),
-    kind: z.string().min(1),
+    /** 入站事件 kind 全集（协议 v6 行为绑定，ADR-0010）：不再接受目录外 kind */
+    kind: z.enum(CHANNEL_PROTOCOL.eventKinds),
     content: z.string(),
     mediaRef: z.string().nullable().optional(),
     fileName: z.string().nullable().optional(),
@@ -113,15 +122,8 @@ const hostSendOperationSchema = z
     conversationRef: z.string().min(1),
     payload: z
       .object({
-        kind: z.enum([
-          "text",
-          "reply",
-          "mention",
-          "poke",
-          "image",
-          "file",
-          "recall",
-        ]),
+        // 枚举从协议权威派生（ADR-0010 行为绑定）——手抄已删除
+        kind: z.enum(CHANNEL_PROTOCOL.sendKinds),
         text: z.string().optional(),
         replyToChannelMessageId: z.string().optional(),
         mentionContactRefs: z.array(z.string()).optional(),
@@ -132,7 +134,8 @@ const hostSendOperationSchema = z
     // executing 是 Channel Host 内部的中间态（已认领、GUI 发送中），
     // 对 Core 语义等价于 pending（仍在途）；缺失会导致 GET 对账时
     // Zod 校验失败并中断整个 outbound cycle。
-    state: z.enum(["pending", "executing", "confirmed", "unknown", "failed"]),
+    // 枚举从协议权威派生（ADR-0010 行为绑定）——手抄已删除。
+    state: z.enum(CHANNEL_PROTOCOL.sendOperationStates),
     error: z.string().nullable(),
     channelMessageId: z.string().nullable(),
     createdAt: z.string().min(1),
@@ -479,6 +482,20 @@ export class HttpChannelProvider
     return response === undefined ? undefined : parseSendOperation(response);
   }
 
+  /**
+   * 管理端：请求 Host 以 historical 回溯通道重扫通道历史（ADR-0007）。
+   * 回溯异步执行，Host 立即返回。此前 admin/sync 路由裸 fetch 绕过
+   * 认证/协议/错误翻译——现统一走 provider 接缝。
+   */
+  public async requestBackfillSync(): Promise<{ started: boolean }> {
+    const response = await this.#request(
+      `${this.#baseUrl}/api/v1/channel/sync`,
+      { method: "POST" },
+    );
+    const payload = (response ?? {}) as { started?: unknown };
+    return { started: payload.started === true };
+  }
+
   async #request(
     url: string,
     init: RequestInit & { allowNotFound?: boolean },
@@ -580,6 +597,7 @@ function toChannelEvent(event: z.infer<typeof hostEventSchema>): ChannelEvent {
     cursor: event.cursor,
     conversationRef: event.conversationRef,
     account: event.account ?? "default",
+    conversationKind: event.conversationKind ?? null,
     channelMessageId: event.channelMessageId ?? null,
     senderRef: event.senderRef ?? null,
     kind: event.kind,

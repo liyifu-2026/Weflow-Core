@@ -2,7 +2,9 @@
 
 > 版本化变更记录。
 
-## Unreleased
+## Unreleased（已作废）
+
+> Console 平台壳已退役（R1 收敛，2026-09-05），以下未发布条目随退役作废，仅作历史记录保留。
 
 - 统一 Console 包名、`/console/` Vite base path、Core 的 `/api/v1/console/*` 路由与 SSE/Provider 代理路径。
 - 删除旧编号兼容路径；Console 只使用 `/api/v1/console/*` 正式入口。

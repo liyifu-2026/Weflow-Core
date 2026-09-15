@@ -16,7 +16,10 @@ import { request } from "@/api/client";
 import type { MobileSession } from "@/auth/session";
 import {
   loadConfirmedNotificationPreference,
+  loadNotifyKinds,
   saveConfirmedNotificationPreference,
+  saveNotifyKinds,
+  type NotifyKind,
 } from "./preferences";
 import { registrationPreviewPreference } from "./policy";
 
@@ -72,6 +75,8 @@ export async function registerPushDevice(
     const confirmed = await loadConfirmedNotificationPreference(
       session.user.userId,
     );
+    // 未配置时省略字段 = 服务端默认全部订阅
+    const notifyKinds = await loadNotifyKinds(session.user.userId);
     const result = await request<{ device: { showPreview: boolean } }>(
       "/api/v1/mobile/notification-device",
       {
@@ -81,6 +86,7 @@ export async function registerPushDevice(
           pushToken,
           platform: Platform.OS,
           showPreview: registrationPreviewPreference(confirmed),
+          ...(notifyKinds ? { notifyKinds } : {}),
         }),
       },
     );
@@ -138,4 +144,26 @@ export async function updateNotificationPreview(
     cachedLocally = false;
   }
   return { showPreview: result.showPreview, cachedLocally };
+}
+
+/**
+ * 更新通知类型订阅（有会话等待处理 / 转交 / 我处理的会话有新回复）。
+ * kinds 传空数组 = 恢复全部订阅；本地缓存失败不影响服务端生效。
+ */
+export async function updateNotificationKinds(
+  session: MobileSession,
+  kinds: NotifyKind[],
+): Promise<{ cachedLocally: boolean }> {
+  await request("/api/v1/mobile/notification-preferences", {
+    method: "PATCH",
+    token: session.sessionToken,
+    body: JSON.stringify({ notifyKinds: kinds }),
+  });
+  let cachedLocally = true;
+  try {
+    await saveNotifyKinds(session.user.userId, kinds);
+  } catch {
+    cachedLocally = false;
+  }
+  return { cachedLocally };
 }

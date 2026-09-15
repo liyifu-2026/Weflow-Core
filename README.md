@@ -2,7 +2,7 @@
 
 Weflow 是一个「**单进程部署、配置集中、可高效热更新的 AI 客服产品**」。它把多入口消息、Agent Runtime、业务事实和人工协作组织成一个可审计、可热更新的系统。本仓库是 Weflow 平台核心：Core（api / agent-worker / ingestion-worker）、Contracts、Plugin SDK、weflowctl 与微信通道参考实现。
 
-产品网页端是 `weflow-solutions` 仓库的 support-web（自带登录 + 应用布局），部署时由 Core API 静态托管。没有方案市场，没有微前端；Console 平台壳已退役。
+产品网页端是仓内 `solutions/customer-support/apps/support-web`（自带登录 + 应用布局），部署时由 Core API 静态托管。没有方案市场，没有微前端；Console 平台壳已退役。
 
 技术文档入口：[docs/technical-documentation.md](docs/technical-documentation.md)；部署与热更新规程：[docs/deployment-guide.md](docs/deployment-guide.md)。
 
@@ -22,16 +22,18 @@ weflow/
 ├─ packages/
 │  ├─ contracts/                 # 稳定公共契约
 │  ├─ plugin-sdk/                # Plugin 注册契约
-│  ├─ admin-sdk/                 # Core Admin 客户端
-│  ├─ ui/                        # 共享 UI 工具
-│  └─ consumer-fixture/          # 消费者契约测试 fixture
+│  └─ ui/                        # 共享 UI 工具（随 Console 退役，存量维护）
 ├─ apps/
 │  └─ desktop/                   # Tauri 桌面端壳（R4）
 ├─ runtimes/
 │  └─ channel-host-wechat/       # 微信通道参考实现（Python）
+├─ solutions/                    # 业务代码（原 Weflow-Solutions 仓，2026-09 并入）
+│  ├─ customer-support/          # support-web / mobile / plugins / backend
+│  └─ weknora-connector/         # WeKnora 连接器（settings 页）
 ├─ tooling/
-│  ├─ weflowctl/                 # CLI：dev（doctor/up/down）、service（Windows 服务）、config、completion
-│  └─ tools/winsw/               # Windows 服务包装（weflowctl service 生成）
+│  └─ weflowctl/                 # CLI：dev（doctor/up/down）、service（Windows 服务）、config、completion
+├─ tools/
+│  └─ winsw/                     # Windows 服务包装（weflowctl service 生成）
 ├─ scripts/                      # 验证脚本
 ├─ contracts/
 │  └─ channel/                   # 跨进程 Channel 协议说明
@@ -46,7 +48,7 @@ weflow/
 - **Channel Host** 是平台级通道入口适配层：负责连接外部入口、可靠事件存储、发送操作与媒体引用解析。Core 通过 `channel.events`、`channel.send`、`channel.media`、`channel.contacts` 四个正式能力契约与 Channel Host 通信，不感知具体通道实现。协议说明见 [contracts/channel/README.md](contracts/channel/README.md)。
 - **Provider** 是可替换的外部能力实现。ZhiNanKB/WeKnora 保持在系统外部；TextModel、Vision 等同理。
 
-业务仓库 **Weflow-Solutions**（`github.com/liyifu-2026/Weflow-Solutions`）承载产品业务：support-web（产品唯一网页端）、客服业务插件与业务 BFF，经 `WEFLOW_PLUGIN_DIR` 目录直读加载。
+业务代码在仓内 **`solutions/`** 子目录（2026-09 由原 Weflow-Solutions 仓库整仓并入，历史保留）：support-web（产品唯一网页端）、mobile、客服业务插件与业务 BFF，经 `WEFLOW_PLUGIN_DIR` 目录直读加载。
 
 ## Development
 
@@ -54,7 +56,7 @@ weflow/
 
 - Core：进入 `core/`，使用 `pnpm check`
 - weflowctl：进入 `tooling/weflowctl/`，使用 `pnpm build && pnpm test`
-- 前端：`weflow-solutions/solutions/customer-support/apps/support-web/`，使用 `pnpm build`
+- 前端与业务：`solutions/`（`pnpm install:all` / `pnpm build`），support-web 在 `solutions/customer-support/apps/support-web/`
 
 ### weflowctl
 

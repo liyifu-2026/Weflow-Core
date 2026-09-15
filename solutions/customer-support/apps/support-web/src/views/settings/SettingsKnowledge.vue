@@ -2,8 +2,9 @@
 const emit = defineEmits<{ saved: [] }>();
 
 /**
- * 设置中心 · ③ 知识库分区：通用 RESTful 连接器。
- * 连接器类型 / 检索端点 / 认证方式 / 请求响应字段映射 JSON / 管理端点可选。
+ * 设置中心 · ③ 知识库分区：知识库连接器（ADR-0008 已接线运行时）。
+ * weknora 预设：检索端点 / 认证 / 知识库范围保存后约 30 秒内热生效，
+ * 字段缺省逐项回落 Core .env（WEKNORA_*）；custom-rest 仅登记预留。
  * WeKnora 为预设模板；配置存扩展设置 knowledgeConnector 键。
  */
 import { onMounted, ref } from "vue";
@@ -23,7 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   readPipelineSettings,
-  writePipelineSettings,
+  writePipelineSettingsSection,
 } from "./common";
 
 type ConnectorConfig = {
@@ -32,6 +33,7 @@ type ConnectorConfig = {
   authMode: "none" | "bearer" | "header";
   authHeader: string;
   authValue: string;
+  knowledgeBaseIds: string;
   requestMapping: string;
   responseMapping: string;
   adminUrl: string;
@@ -40,9 +42,11 @@ type ConnectorConfig = {
 const WEKNORA_TEMPLATE: ConnectorConfig = {
   type: "weknora",
   retrieveUrl: "",
-  authMode: "bearer",
-  authHeader: "Authorization",
+  // WeKnora 实际校验 x-api-key 头（Bearer 会 401）。
+  authMode: "header",
+  authHeader: "X-Api-Key",
   authValue: "",
+  knowledgeBaseIds: "",
   requestMapping: '{"query":"$.query","knowledgeBaseIds":"$.knowledge_base_ids"}',
   responseMapping: '{"evidence":"$.data[*]","chunkId":"$.chunk_id","content":"$.content","score":"$.score"}',
   adminUrl: "",
@@ -54,6 +58,7 @@ const DEFAULTS: ConnectorConfig = {
   authMode: "none",
   authHeader: "",
   authValue: "",
+  knowledgeBaseIds: "",
   requestMapping: "",
   responseMapping: "",
   adminUrl: "",
@@ -66,7 +71,6 @@ const AUTH_MODES: Array<{ value: ConnectorConfig["authMode"]; label: string }> =
 ];
 
 const config = ref<ConnectorConfig>({ ...DEFAULTS });
-const rawSettings = ref<Record<string, unknown>>({});
 const loading = ref(true);
 const saving = ref(false);
 const notice = ref("");
@@ -88,6 +92,7 @@ function apply(raw: unknown) {
         : "none",
     authHeader: str(source.authHeader, DEFAULTS.authHeader),
     authValue: str(source.authValue, DEFAULTS.authValue),
+    knowledgeBaseIds: str(source.knowledgeBaseIds, DEFAULTS.knowledgeBaseIds),
     requestMapping: str(source.requestMapping, DEFAULTS.requestMapping),
     responseMapping: str(source.responseMapping, DEFAULTS.responseMapping),
     adminUrl: str(source.adminUrl, DEFAULTS.adminUrl),
@@ -98,8 +103,7 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    rawSettings.value = await readPipelineSettings();
-    apply(rawSettings.value.knowledgeConnector);
+    apply((await readPipelineSettings()).knowledgeConnector);
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "连接器配置加载失败";
   } finally {
@@ -110,7 +114,7 @@ async function load() {
 function applyTemplate() {
   if (!window.confirm("用 WeKnora 预设模板覆盖当前表单？")) return;
   config.value = { ...WEKNORA_TEMPLATE };
-  notice.value = "已填充 WeKnora 预设模板（保存后生效）";
+  notice.value = "已填充 WeKnora 预设模板（填好端点与凭据后保存）";
 }
 
 async function save() {
@@ -129,11 +133,11 @@ async function save() {
     return;
   }
   try {
-    await writePipelineSettings({
-      ...rawSettings.value,
-      knowledgeConnector: { ...config.value },
+    // 保存前重读整行再合并，避免覆盖其他分区刚保存的内容。
+    await writePipelineSettingsSection("knowledgeConnector", {
+      ...config.value,
     });
-    notice.value = "已保存；30 秒内生效（无需重启）";
+    notice.value = "已保存；约 30 秒内热生效（无需重启服务）";
     emit("saved");
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "保存失败";
@@ -151,7 +155,8 @@ onMounted(load);
       <CardHeader>
         <CardTitle>知识库连接器</CardTitle>
         <CardDescription>
-          通用 RESTful 连接器：AI 检索时按下方端点与字段映射调用外部知识库。
+          AI 检索经此连接外部知识库（weknora 预设已接线运行时，保存后约 30 秒
+          热生效）。字段留空时逐项回落 Core .env 的 WEKNORA_* 配置。
           知识库内容管理（上传/文档/分块）请使用外部知识库原生界面（会话工作台的
           「知识库」页为只读验证视图）。
         </CardDescription>
@@ -185,19 +190,32 @@ onMounted(load);
               <Input
                 id="kb-type"
                 v-model="config.type"
-                placeholder="weknora / custom-rest"
+                placeholder="weknora"
               />
-              <p class="text-xs text-muted-foreground">标识用途；weknora 为预设模板。</p>
+              <p class="text-xs text-muted-foreground">
+                weknora 为已接线预设；custom-rest 仅登记预留、暂不生效。
+              </p>
             </div>
             <div class="space-y-2 sm:col-span-2">
               <Label for="kb-url">检索端点 URL</Label>
               <Input
                 id="kb-url"
                 v-model="config.retrieveUrl"
-                placeholder="https://kb.example.com/api/search"
+                placeholder="http://127.0.0.1:8080/api/v1/knowledge-search"
               />
               <p class="text-xs text-muted-foreground">
-                接收 {query, knowledgeBaseIds} 的 POST 端点；留空 = 不接外部知识库。
+                weknora 预设填 …/api/v1/knowledge-search；留空 = 回落 Core .env 配置。
+              </p>
+            </div>
+            <div class="space-y-2 sm:col-span-2">
+              <Label for="kb-ids">知识库 ID 列表（可选）</Label>
+              <Input
+                id="kb-ids"
+                v-model="config.knowledgeBaseIds"
+                placeholder="留空 = 自动发现全部知识库"
+              />
+              <p class="text-xs text-muted-foreground">
+                逗号分隔；限定 AI 检索范围。可在知识库 URL 或管理界面查看 ID。
               </p>
             </div>
             <div class="space-y-2">
@@ -228,21 +246,23 @@ onMounted(load);
                 id="kb-cred"
                 v-model="config.authValue"
                 type="password"
-                placeholder="留空保持不变"
+                placeholder="留空 = 回落 Core .env 的 API Key"
               />
-              <p class="text-xs text-muted-foreground">保存后不回显；留空保持原值。</p>
-            </div>
-            <div class="space-y-2 sm:col-span-2">
-              <Label for="kb-req">请求字段映射 JSON</Label>
-              <Textarea id="kb-req" v-model="config.requestMapping" rows="2" class="font-mono text-xs" />
               <p class="text-xs text-muted-foreground">
-                本地查询 → 上游请求体（JSONPath 风格声明）。
+                WeKnora 用 API Key（Header 名 X-Api-Key）；保存后不回显。
               </p>
             </div>
             <div class="space-y-2 sm:col-span-2">
-              <Label for="kb-resp">响应字段映射 JSON</Label>
+              <Label for="kb-req">请求字段映射 JSON（weknora 预设不使用）</Label>
+              <Textarea id="kb-req" v-model="config.requestMapping" rows="2" class="font-mono text-xs" />
+              <p class="text-xs text-muted-foreground">
+                weknora 预设由内置客户端直连并处理映射；此字段仅 custom-rest 预留。
+              </p>
+            </div>
+            <div class="space-y-2 sm:col-span-2">
+              <Label for="kb-resp">响应字段映射 JSON（weknora 预设不使用）</Label>
               <Textarea id="kb-resp" v-model="config.responseMapping" rows="2" class="font-mono text-xs" />
-              <p class="text-xs text-muted-foreground">上游响应 → 本地证据结构。</p>
+              <p class="text-xs text-muted-foreground">同上，仅 custom-rest 预留。</p>
             </div>
             <div class="space-y-2 sm:col-span-2">
               <Label for="kb-admin">管理端点 URL（可选）</Label>

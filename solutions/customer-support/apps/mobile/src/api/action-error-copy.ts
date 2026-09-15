@@ -39,9 +39,17 @@ export function actionErrorCopy(
       message: "网络不给力，请重试",
     },
     not_queue_member: { title: "你不在该协作组" },
+    reject_not_completed: {
+      title: "已确认操作未完成",
+      message: "可以再次点击“无法接手”",
+    },
     revision_conflict: {
       title: "会话已有新内容",
       message: "请先查看最新消息",
+    },
+    upload_type_blocked: {
+      title: "不支持发送可执行文件或脚本",
+      message: "可压缩为 zip 后发送，或改用其他格式",
     },
   };
   if (byCode[error.code]) return byCode[error.code];

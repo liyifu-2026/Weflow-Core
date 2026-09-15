@@ -193,7 +193,9 @@ integration("shared conversation query", () => {
     for (const cookie of cookies) {
       const list = await server.inject({
         method: "GET",
-        url: "/api/v1/conversations",
+        // 按 contactId 收窄：共享测试库可能积累大量会话，本用例断言的是
+        // 「两个客服都能看到同一份会话」，不该受分页与库内历史数据影响
+        url: `/api/v1/conversations?contactId=${encodeURIComponent(contactId)}`,
         headers: { cookie },
       });
       expect(list.statusCode).toBe(200);

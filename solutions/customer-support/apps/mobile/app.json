@@ -1,21 +1,19 @@
 {
   "expo": {
     "name": "Weflow",
-    "slug": "weflow-mobile",
-    "version": "0.8.0",
+    "slug": "weflow-client1",
+    "version": "0.9.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "weflow-mobile",
     "userInterfaceStyle": "automatic",
-    "ios": {
-      "icon": "./assets/expo.icon"
-    },
     "android": {
       "package": "com.weflow.mobile",
+      "versionCode": 3,
       "softwareKeyboardLayoutMode": "resize",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#2C6CEB",
+        "backgroundColor": "#FFFFFF",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -35,7 +33,10 @@
       }
     },
     "updates": {
-      "url": "https://u.expo.dev/bf04db66-a706-40eb-aa9c-b0a5dcb4ae13"
+      "url": "https://u.expo.dev/bf04db66-a706-40eb-aa9c-b0a5dcb4ae13",
+      "requestHeaders": {
+        "expo-channel": "production"
+      }
     },
     "runtimeVersion": {
       "policy": "fingerprint"

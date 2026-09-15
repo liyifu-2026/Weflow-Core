@@ -8,13 +8,16 @@
  * - 处理任务失败和重试耗尽场景，触发 Agent Handoff 降级
  */
 import { Worker } from "bullmq";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { pathToFileURL } from "node:url";
 import { runProcess } from "../../infrastructure/runtime/run-process.js";
 import { startConversationEventBus } from "../../infrastructure/events/conversation-events.js";
 import { OpenAiCompatibleClient } from "../../infrastructure/model_runtime/openai-compatible-client.js";
+import { LocalFileStorage } from "../../infrastructure/file_storage/local-file-storage.js";
 import { HotReloadableClient } from "../../infrastructure/model_runtime/hot-reloadable-client.js";
 import {
+  buildTextFailoverChain,
+  resolvePrimaryTextModelName,
   resolveSlotChainRuntime,
 } from "../../modules/operations/application/model-gateway.js";
 import {
@@ -40,12 +43,12 @@ import {
 import { memoryPlugin } from "../../infrastructure/runtime/plugins/memory-plugin.js";
 import { MEMORY_CAPTURE_CAPABILITY } from "../../infrastructure/runtime/capabilities/memory.js";
 import * as schema from "../../infrastructure/postgres/schema.js";
-import { WeKnoraKnowledgeClient } from "../../infrastructure/knowledge/weknora-knowledge-client.js";
 import { RuntimeKernel } from "../../infrastructure/runtime/kernel/index.js";
 import { KNOWLEDGE_SEARCH_CAPABILITY } from "../../infrastructure/runtime/capabilities/knowledge-search.js";
 import { TEXT_MODEL_CAPABILITY } from "../../infrastructure/runtime/capabilities/text-model.js";
 import { weknoraKnowledgePlugin } from "../../infrastructure/knowledge/weknora-knowledge-provider.js";
-import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
+import { createAdaptiveKnowledgeClient } from "../../infrastructure/knowledge/knowledge-connector-settings.js";
+import { createCircuitBreakerKnowledgeSearch } from "../../infrastructure/knowledge/knowledge-circuit-breaker.js";
 import { startModelSettingsReloader } from "../../modules/operations/application/model-settings-hot.js";
 import { discoverAgentPlugins } from "../../infrastructure/solutions/agent-plugin-discovery.js";
 import { readModelSettingsRuntime } from "../../modules/operations/application/model-settings.js";
@@ -91,22 +94,6 @@ await runProcess({
         ...(config.model.apiKey !== undefined
           ? { apiKey: config.model.apiKey }
           : {}),
-      },
-      visionModel: {
-        name: config.vision?.name ?? "mimo-v2.5",
-        baseUrl: config.vision?.baseUrl ?? "",
-        ...(config.vision?.apiKey !== undefined
-          ? { apiKey: config.vision.apiKey }
-          : {}),
-      },
-      asrModel: {
-        name: config.asr?.model ?? config.vision?.asrModel ?? "mimo-v2.5",
-        baseUrl: config.asr?.baseUrl ?? config.vision?.baseUrl ?? "",
-        ...(config.asr?.apiKey !== undefined
-          ? { apiKey: config.asr.apiKey }
-          : config.vision?.apiKey !== undefined
-            ? { apiKey: config.vision.apiKey }
-            : {}),
       },
       ...(config.triage
         ? {
@@ -169,34 +156,27 @@ await runProcess({
       { client: OpenAiCompatibleClient; model: string } | undefined;
     // 记忆提取引用的模型名快照（随热加载刷新，经闭包读取最新值）。
     let memoryModelName = modelSettings.textModel.name;
+    // 旧配置回落名快照：text 槽位未绑定/解析失败时，主模型名回落到
+    // model-settings 组（DB model_name → env MODEL_NAME 引导默认）。
+    // 仅作启动兜底，槽位绑定后此值不参与任何请求。
+    let legacyTextModelName = modelSettings.textModel.name;
 
     /**
      * 模型网关（R2）：按 text 槽位从注册表解析故障转移链。
-     * 绑定了启用模型时返回 [主 → failoverTo] 运行时链（含密钥，
-     * 仅进程内使用）；未绑定/读取失败返回 undefined（回退旧配置）。
+     * 链解析策略在 model-gateway（buildTextFailoverChain，可注入客户端
+     * 工厂单测）；此处仅绑定本进程的客户端构造与日志。
      */
-    const resolveTextChain = async (): Promise<FailoverLink[] | undefined> => {
-      try {
-        const endpoints = await resolveSlotChainRuntime(postgres.db, "text");
-        if (endpoints.length === 0) return undefined;
-        return endpoints.map((endpoint) => ({
-          modelId: endpoint.modelId,
-          displayName: endpoint.displayName,
-          client: new OpenAiCompatibleClient({
+    const resolveTextChain = async (): Promise<FailoverLink[] | undefined> =>
+      buildTextFailoverChain(postgres.db, {
+        clientFactory: (endpoint) =>
+          new OpenAiCompatibleClient({
             baseUrl: endpoint.baseUrl,
             apiKey: endpoint.apiKey ?? "",
             model: endpoint.displayName,
             timeoutMs: endpoint.timeoutMs,
           }),
-        }));
-      } catch (error) {
-        logger.warn(
-          { err: error },
-          "model gateway chain resolution failed; falling back to legacy model settings",
-        );
-        return undefined;
-      }
-    };
+        logger,
+      });
 
     /** 按最新模型设置重建/替换所有派生客户端（热加载核心）。 */
     const applyModelSettings = (settings: typeof modelSettings): void => {
@@ -209,6 +189,7 @@ await runProcess({
         }),
       );
       memoryModelName = settings.textModel.name;
+      legacyTextModelName = settings.textModel.name;
       triageEndpoint = settings.triageModel
         ? {
             client: new OpenAiCompatibleClient({
@@ -246,14 +227,21 @@ await runProcess({
     // 链解析异步，随热加载轮询刷新。
     const applyGatewayChain = async (): Promise<void> => {
       const chain = await resolveTextChain();
-      if (chain) {
+      const primaryLink = chain?.[0];
+      if (chain && primaryLink) {
         try {
           hotTextClient.swap(
             new FailoverTextModel(chain) as unknown as OpenAiCompatibleClient,
           );
+          // 主模型名对齐链主端点：记忆提取与 turn 元数据记录的名字
+          // 必须与实际请求模型一致（配置收敛：槽位是唯一事实源）。
+          memoryModelName = primaryLink.displayName;
           logger.info(
-            { chain: chain.map((l) => l.modelId) },
-            "model gateway failover chain applied",
+            {
+              chain: chain.map((l) => l.modelId),
+              primary: primaryLink.displayName,
+            },
+            "model gateway failover chain applied (primary text model from slot)",
           );
         } catch (error) {
           logger.warn({ err: error }, "failover chain apply failed");
@@ -261,6 +249,59 @@ await runProcess({
       }
     };
     void applyGatewayChain();
+    // triage/fast 槽位接线（配置收敛）：分流/直答端点同 text 槽位一样
+    // 以 model_slot_* 绑定为唯一事实源；applyModelSettings 先落
+    // model-settings 组旧值，槽位绑定在此覆盖。随热加载轮询刷新。
+    const applySlotEndpoints = async (): Promise<void> => {
+      const resolveEndpoint = async (slot: "triage" | "fast") => {
+        try {
+          const chain = await resolveSlotChainRuntime(postgres.db, slot);
+          return chain[0];
+        } catch (error) {
+          logger.warn(
+            { err: error, slot },
+            "model gateway slot endpoint resolution failed; keeping legacy settings",
+          );
+          return undefined;
+        }
+      };
+      const [triageEndpointSlot, fastEndpointSlot] = await Promise.all([
+        resolveEndpoint("triage"),
+        resolveEndpoint("fast"),
+      ]);
+      if (triageEndpointSlot) {
+        triageEndpoint = {
+          client: new OpenAiCompatibleClient({
+            baseUrl: triageEndpointSlot.baseUrl,
+            apiKey: triageEndpointSlot.apiKey ?? "",
+            model: triageEndpointSlot.displayName,
+            timeoutMs: config.triage?.timeoutMs ?? 3_000,
+          }),
+          model: triageEndpointSlot.displayName,
+        };
+      }
+      if (fastEndpointSlot) {
+        fastEndpoint = {
+          client: new OpenAiCompatibleClient({
+            baseUrl: fastEndpointSlot.baseUrl,
+            apiKey: fastEndpointSlot.apiKey ?? "",
+            model: fastEndpointSlot.displayName,
+            timeoutMs: config.fast?.timeoutMs ?? 3_000,
+          }),
+          model: fastEndpointSlot.displayName,
+        };
+      }
+      if (triageEndpointSlot || fastEndpointSlot) {
+        logger.info(
+          {
+            triage: triageEndpointSlot?.displayName ?? "(legacy/none)",
+            fast: fastEndpointSlot?.displayName ?? "(legacy/none)",
+          },
+          "model gateway slot endpoints applied (triage/fast)",
+        );
+      }
+    };
+    void applySlotEndpoints();
     const stopModelSettingsReloader = startModelSettingsReloader(
       postgres.db,
       modelDefaults,
@@ -268,19 +309,22 @@ await runProcess({
       (settings) => {
         applyModelSettings(settings);
         void applyGatewayChain();
+        void applySlotEndpoints();
       },
     );
 
     if (!triageEndpoint) {
       logger.info("Triage classifier disabled (no model endpoint configured)");
     }
-    // 可选的 WeKnora 知识库客户端
-    const weknora = config.weknora
-      ? new WeKnoraKnowledgeClient(config.weknora)
-      : undefined;
+    // 知识库客户端（ADR-0008）：设置中心连接器优先、env 兜底，30s 热加载。
+    // 客户端恒注册；未配置时检索抛 weknora_not_configured（与缺能力同码）。
+    const knowledge = await createAdaptiveKnowledgeClient(
+      postgres.db,
+      config.weknora ?? undefined,
+    );
     const kernel = new RuntimeKernel();
     kernel.register(openAiTextModelPlugin(hotTextClient));
-    if (weknora) kernel.register(weknoraKnowledgePlugin(weknora));
+    kernel.register(weknoraKnowledgePlugin(knowledge.client));
     // 记忆插件（D6 插件化下沉）：capture/recall 能力经 kernel 注册；
     // 模型名经 getter 随热加载刷新（记忆请求同时应用 baseUrl/apiKey/模型名）。
     kernel.register(
@@ -293,9 +337,21 @@ await runProcess({
     await kernel.start();
     const textModel = kernel.get(TEXT_MODEL_CAPABILITY);
     const memoryCapture = kernel.get(MEMORY_CAPTURE_CAPABILITY);
-    const knowledgeSearch = weknora
-      ? kernel.get(KNOWLEDGE_SEARCH_CAPABILITY)
-      : undefined;
+    const knowledgeCapability = kernel.get(KNOWLEDGE_SEARCH_CAPABILITY);
+    // 熔断器（L1 反编造层）：检索连续失败达到阈值后 open——knowledgeSearch
+    // 闭包撤下 retrieve_knowledge，提示词随之切换「知识库不可用」，保持
+    // 能力宣传 = 运行时现实；冷却期满 half-open 放行一次探测自动恢复。
+    const knowledgeBreaker = createCircuitBreakerKnowledgeSearch(
+      knowledgeCapability,
+      logger,
+    );
+    // 未配置时不下发 retrieve_knowledge 工具（提示词/工具列表随 30s 快照联动），
+    // 保持「配置了才可见」的既有语义；配置后生效延迟 ≤ 轮询间隔。
+    // 熔断 open 时同样撤下（每次取用读当下状态，恢复无需重启）。
+    const knowledgeSearch = () =>
+      knowledge.currentOptions() && !knowledgeBreaker.isOpen()
+        ? knowledgeBreaker
+        : undefined;
     // Skill / Execution Strategy registries: populated from Solution plugins.
     // Module contract: `skill` (an AgentSkill), and/or `strategy` (an
     // AgentExecutionStrategy), `createStrategy` (factory receiving { db } so
@@ -308,7 +364,11 @@ await runProcess({
     type AgentPluginModule = {
       skill?: AgentSkill;
       strategy?: AgentExecutionStrategy;
-      createStrategy?: (ctx: { db: unknown }) => AgentExecutionStrategy;
+      createStrategy?: (ctx: {
+        db: unknown;
+        /** drizzle sql 标签：插件执行参数化原生 SQL 用 */
+        sql?: unknown;
+      }) => AgentExecutionStrategy;
       preResolveAiEmployeePrompt?: (
         db: unknown,
         contactId: string,
@@ -336,6 +396,12 @@ await runProcess({
     let resolveAiEmployeeId:
       | ((contactId: string, conversationId: string) => Promise<string | null>)
       | undefined;
+    // 插件数据库句柄：drizzle db + sql 标签打包注入。db.execute 只接受
+    // SQLWrapper | string，插件必须经 sql 标签参数化，不能传 `{ sql, args }`。
+    const pluginDb = {
+      execute: postgres.db.execute.bind(postgres.db),
+      sql,
+    };
     const registerAgentPluginModule = (
       module: AgentPluginModule,
       source: string,
@@ -345,14 +411,14 @@ await runProcess({
       }
       // Prefer factory-created strategy (has database access for AI employee prompts)
       if (module.createStrategy) {
-        strategyRegistry.register(module.createStrategy({ db: postgres.db }));
+        strategyRegistry.register(module.createStrategy({ db: pluginDb, sql }));
       } else if (module.strategy) {
         strategyRegistry.register(module.strategy);
       }
       if (module.preResolveAiEmployeePrompt) {
         preResolveAiEmployeePrompt = (contactId, conversationId, triggerText) =>
           module.preResolveAiEmployeePrompt!(
-            postgres.db,
+            pluginDb,
             contactId,
             conversationId,
             triggerText,
@@ -429,21 +495,45 @@ await runProcess({
         // 进程内锁只是优化；AgentTurnExecutor 内的 CAS/ownership lock
         // 才是跨 Worker、跨实例的最终并发权威。
         await conversationTurns.run(conversationId, async () => {
-          // 运行时模型选择：每次消费读 runtime_settings（10s 缓存），
-          // 切换模型无需重启；实际使用模型写入 agentTurns.model 供核对。
-          // 连接端点（baseUrl/apiKey/槽位）同样热加载：Executor 每次
-          // 构建时快照最新客户端，保存模型设置后无需重启。
-          const runtime = await readRuntimeSettings(postgres.db);
-          const activeModel = runtime.textModel;
+          // 运行时模型选择（配置收敛：text 槽位是唯一事实源）：
+          // 槽位绑定注册表模型时，activeModel 取链主端点 displayName——
+          // 它既是 agentTurns.model 的记录名，也是决策请求的 modelId
+          // （modelId 会覆盖链端点的模型名，两者必须一致）。未绑槽位
+          // 回落 model-settings 引导值（DB model_name → env MODEL_NAME）。
+          // 端点（baseUrl/apiKey）由 hotTextClient 网关链热加载。
+          const primary = await resolvePrimaryTextModelName(
+            postgres.db,
+            legacyTextModelName,
+          );
+          const activeModel = primary.name;
           const triage = buildTriageDeps();
+          // Phase 4 视觉直读：仅当 text 槽位主模型声明视觉能力时才注入
+          // 媒体文件存储（把最新入站图片直接喂给主模型）。非视觉模型一律
+          // 不注入，图片维持文本占位——避免把 image_url 喂给不支持图像的
+          // 模型（400 会让轮次失败并再次触发降级转人工）。
+          let imageStorage: LocalFileStorage | undefined;
+          try {
+            const textChain = await resolveSlotChainRuntime(
+              postgres.db,
+              "text",
+            );
+            if (textChain.some((e) => e.capabilities.includes("vision"))) {
+              imageStorage = new LocalFileStorage(
+                `${config.fileStorageRoot}/media`,
+              );
+            }
+          } catch {
+            imageStorage = undefined;
+          }
           const executor = new AgentTurnExecutor(
             postgres.db,
             textModel,
             activeModel,
             {
-              knowledgeSearch,
+              knowledgeSearch: knowledgeSearch(),
               skillRegistry,
               strategyRegistry,
+              ...(imageStorage ? { imageStorage } : {}),
               ...(preResolveAiEmployeePrompt
                 ? { preResolveAiEmployeePrompt }
                 : {}),
@@ -543,6 +633,7 @@ await runProcess({
     );
     return async () => {
       stopModelSettingsReloader();
+      knowledge.stop();
       await Promise.all([worker.close(), memoryWorker.close()]);
       await kernel.stop();
       stopConversationEventBus();

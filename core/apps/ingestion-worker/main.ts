@@ -23,9 +23,20 @@ import { MimoVisionClient } from "../../infrastructure/model_runtime/mimo-vision
 import { MimoAudioClient } from "../../infrastructure/model_runtime/mimo-audio-client.js";
 import { processImageDescription } from "../../modules/media/application/process-image-description.js";
 import { processVoiceTranscription } from "../../modules/media/application/process-voice-transcription.js";
-import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
+import {
+  resolveAsrSlotEndpoint,
+  resolveVisionEndpoint,
+  resolveVoiceToolchainPaths,
+} from "../../modules/media/application/endpoint-resolution.js";
 import { AudioTranscriptionsClient } from "../../infrastructure/model_runtime/audio-transcriptions-client.js";
 
+/**
+ * 识图执行模型分流（模型网关 R2）——主力/视觉槽位分界规则：
+ * 1) 主力文本槽位模型带 vision 能力标签 → 直接用主力模型识图，不经过视觉槽位；
+ * 2) 否则用视觉槽位绑定的模型（专用视觉小模型兜底）；
+ * 3) 网关未绑定启用模型 → undefined（回落 .env 种子端点）。
+ * 描述结果一次性落库（media_assets.description），后续对话复用文字不重复调用。
+ */
 await runProcess({
   name: "ingestion-worker",
   healthPort: (config) => config.ingestionWorkerHealthPort,
@@ -44,85 +55,131 @@ await runProcess({
     const vision = config.vision;
     // 专用 ASR 端点（OpenAI 兼容 audio/transcriptions，如硅基流动）
     const asr = config.asr;
-    // 仅在配置了多模态模型时创建媒体处理队列消费者（图片视觉 / 语音 ASR 共用端点）
-    const mediaWorker = vision
-      ? new Worker<JobEnvelope>(
-          MEDIA_PROCESSING_QUEUE,
-          async (job) => {
-            // 运行时模型选择：切换 vision_model 无需重启
-            const runtime = await readRuntimeSettings(postgres.db);
-            if (job.data.jobType === "media.transcribe_voice") {
-              // 语音转写：读取 SILK → 平台转码器产出 MP3 → ASR → 持久化描述。
-              // 转码工具链路径：VOICE_PYTHON_PATH / VOICE_FFMPEG_PATH 优先，
-              // 回退到本机部署约定（channel-host venv 的 pysilk + 工具箱 ffmpeg）。
-              const pythonPath =
-                process.env.VOICE_PYTHON_PATH ??
-                "C:\\Users\\12991\\Desktop\\We\\weflow\\runtimes\\channel-host-wechat\\.venv\\Scripts\\python.exe";
-              const ffmpegPath =
-                process.env.VOICE_FFMPEG_PATH ??
-                "C:\\Program Files (x86)\\MarukoToolbox\\tools\\ffmpeg.exe";
-              // 配置了专用 ASR 端点时用标准 audio/transcriptions 客户端，
-              // 否则回落 MiMo chat/completions 内联音频。
-              const audioClient = asr
-                ? new AudioTranscriptionsClient({
-                    baseUrl: asr.baseUrl,
-                    apiKey: asr.apiKey,
-                    model: asr.model,
-                    timeoutMs: asr.timeoutMs,
-                  })
-                : new MimoAudioClient({
-                    baseUrl: vision.baseUrl,
-                    apiKey: vision.apiKey,
-                    model: vision.asrModel,
-                    timeoutMs: vision.timeoutMs,
-                  });
-              await processVoiceTranscription(
-                postgres.db,
-                mediaStorage,
-                audioClient,
-                asr?.model ?? vision.asrModel,
-                job.data.businessEntityId,
-                {
-                  transcoder: new PysilkFfmpegTranscoder({
-                    pythonPath,
-                    ffmpegPath,
-                    onDiagnostics: (line) => {
-                      logger.debug({ line }, "audio transcode diagnostics");
-                    },
-                  }),
-                },
-              );
-              return;
-            }
-            // 图片描述：读取图片 -> 调用视觉模型 -> 持久化描述
-            await processImageDescription(
-              postgres.db,
-              mediaStorage,
-              new MimoVisionClient({
-                baseUrl: vision.baseUrl,
-                apiKey: vision.apiKey,
-                model: vision.name,
-                timeoutMs: vision.timeoutMs,
-              }),
-              runtime.visionModel,
-              job.data.businessEntityId,
+    // 媒体消费者常驻（配置收敛）：入队闸门在 api 侧（env 或槽位绑定），
+    // 消费端不该有第二套门禁；未配置时收到任务按防护分支记错退出。
+    const mediaWorker = new Worker<JobEnvelope>(
+      MEDIA_PROCESSING_QUEUE,
+      async (job) => {
+        if (job.data.jobType === "media.transcribe_voice") {
+          // 语音转写：读取 SILK → 平台转码器产出 MP3 → ASR → 持久化描述。
+          // 工具链路径与 ASR 端点解析策略在 modules/media（endpoint-resolution）。
+          const { pythonPath, ffmpegPath } = resolveVoiceToolchainPaths();
+          // ASR 端点分流（配置收敛：asr 槽位是唯一事实源）：
+          // 槽位绑定 → 按注册条目 protocol 分流（audio_transcriptions
+          // multipart / chat_completions 内联音频）；
+          // 未绑槽位回落 .env——config.asr（专用 audio/transcriptions
+          // 端点）优先，其次视觉端点内联音频。
+          const asrSlot = await resolveAsrSlotEndpoint(postgres.db, logger);
+          const fallbackVision = asrSlot || asr ? undefined : vision;
+          if (!asrSlot && !asr && !fallbackVision) {
+            logger.error(
+              { jobId: job.data.jobId },
+              "voice job received but no ASR endpoint configured (slot or env)",
             );
-          },
-          {
-            connection: bullMqConnection(config.redisUrl),
-            // 并发由 MEDIA_PROCESSING_CONCURRENCY 控制：默认 1 避免多模态模型过载，
-            // 50 并发会话场景下大量图片/语音同时到达时可按模型承载上调。
-            concurrency: config.mediaProcessingConcurrency,
-          },
-        )
-      : undefined;
-    if (!mediaWorker) {
-      logger.warn(
-        "Vision Runtime is not configured; media descriptions remain queued",
-      );
-    }
+            return;
+          }
+          // asr 槽位协议分流：audio_transcriptions 走标准 multipart 端点
+          // （如硅基流动）；chat_inline 走 chat/completions 内联音频（MiMo）。
+          const audioClient = asrSlot
+            ? asrSlot.protocol === "audio_transcriptions"
+              ? new AudioTranscriptionsClient({
+                  baseUrl: asrSlot.baseUrl,
+                  apiKey: asrSlot.apiKey ?? "",
+                  model: asrSlot.displayName,
+                  timeoutMs: asrSlot.timeoutMs,
+                })
+              : new MimoAudioClient({
+                  baseUrl: asrSlot.baseUrl,
+                  apiKey: asrSlot.apiKey ?? "",
+                  model: asrSlot.displayName,
+                  timeoutMs: asrSlot.timeoutMs,
+                })
+            : asr
+              ? new AudioTranscriptionsClient({
+                  baseUrl: asr.baseUrl,
+                  apiKey: asr.apiKey,
+                  model: asr.model,
+                  timeoutMs: asr.timeoutMs,
+                })
+              : new MimoAudioClient({
+                  baseUrl: fallbackVision?.baseUrl ?? "",
+                  apiKey: fallbackVision?.apiKey ?? "",
+                  model: fallbackVision?.asrModel ?? "",
+                  timeoutMs: fallbackVision?.timeoutMs ?? 60_000,
+                });
+          await processVoiceTranscription(
+            postgres.db,
+            mediaStorage,
+            audioClient,
+            asrSlot?.displayName ??
+              asr?.model ??
+              fallbackVision?.asrModel ??
+              "mimo-v2.5",
+            job.data.businessEntityId,
+            {
+              transcoder: new PysilkFfmpegTranscoder({
+                ...(pythonPath && { pythonPath }),
+                ...(ffmpegPath && { ffmpegPath }),
+                onDiagnostics: (line) => {
+                  logger.debug({ line }, "audio transcode diagnostics");
+                },
+              }),
+            },
+          );
+          return;
+        }
+        // 图片描述：识图模型按能力分流（主力带视觉→主力；否则视觉槽位；
+        // 均未绑回落 .env 种子）→ 读取图片 → 调用视觉模型 → 持久化描述
+        const visionEndpoint = await resolveVisionEndpoint(postgres.db, logger);
+        logger.info(
+          { endpoint: visionEndpoint?.modelId ?? "legacy-seed" },
+          "vision route decided",
+        );
+        if (visionEndpoint) {
+          await processImageDescription(
+            postgres.db,
+            mediaStorage,
+            new MimoVisionClient({
+              baseUrl: visionEndpoint.baseUrl,
+              apiKey: visionEndpoint.apiKey ?? "",
+              model: visionEndpoint.displayName,
+              timeoutMs: visionEndpoint.timeoutMs,
+            }),
+            visionEndpoint.displayName,
+            job.data.businessEntityId,
+          );
+          return;
+        }
+        if (!visionEndpoint && !vision) {
+          logger.error(
+            { jobId: job.data.jobId },
+            "image job received but no vision endpoint configured (slot or env)",
+          );
+          return;
+        }
+        const fallbackName = vision?.name ?? "mimo-v2.5";
+        await processImageDescription(
+          postgres.db,
+          mediaStorage,
+          new MimoVisionClient({
+            baseUrl: vision?.baseUrl ?? "",
+            apiKey: vision?.apiKey ?? "",
+            model: fallbackName,
+            timeoutMs: vision?.timeoutMs ?? 60_000,
+          }),
+          fallbackName,
+          job.data.businessEntityId,
+        );
+      },
+      {
+        connection: bullMqConnection(config.redisUrl),
+        // 并发由 MEDIA_PROCESSING_CONCURRENCY 控制：默认 1 避免多模态模型过载，
+        // 50 并发会话场景下大量图片/语音同时到达时可按模型承载上调。
+        concurrency: config.mediaProcessingConcurrency,
+      },
+    );
     // 媒体处理任务失败处理
-    mediaWorker?.on("failed", (job, error) => {
+    mediaWorker.on("failed", (job, error) => {
       logger.error(
         { err: error, jobId: job?.id },
         "Media processing attempt failed",

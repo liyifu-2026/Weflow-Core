@@ -35,6 +35,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
+  PlugZap,
   Plus,
 } from "lucide-vue-next";
 
@@ -66,12 +67,23 @@ type GatewayResponse = {
 };
 
 const SLOTS: Array<{ key: string; label: string; desc: string }> = [
-  { key: "text", label: "主力文本", desc: "AI 回复生成的主力模型" },
-  { key: "vision", label: "视觉", desc: "图片理解（含语音转写兜底）" },
+  {
+    key: "text",
+    label: "主力文本",
+    desc: "AI 回复生成的主力模型；带「视觉」能力时同时负责识图",
+  },
+  {
+    key: "vision",
+    label: "视觉",
+    desc: "识图兜底，仅当主力模型无视觉能力时使用；描述落库后复用",
+  },
   { key: "asr", label: "语音转写", desc: "语音消息转文字专用小模型" },
   { key: "triage", label: "预判分流", desc: "高危/简单判定的极速小模型" },
   { key: "fast", label: "直答", desc: "简单题直答的轻量对话模型" },
 ];
+
+/** reka-ui Select 不接受空字符串 value，「未绑定/无」用哨兵值表示 */
+const NONE = "__none__";
 
 const CAPABILITIES = ["text", "vision", "asr"] as const;
 const CAPABILITY_LABELS: Record<string, string> = {
@@ -98,6 +110,63 @@ const newModel = ref({
 });
 /** 编辑中的条目：modelId → 草稿 */
 const editing = ref<Record<string, Partial<ModelEntry> & { apiKey?: string }>>({});
+
+/** 「测试连接」状态：modelId → 进行中 / 最近一次结果 */
+const testing = ref<Record<string, boolean>>({});
+type TestResult = { ok: boolean; text: string };
+const testResults = ref<Record<string, TestResult>>({});
+
+/**
+ * 探测模型连接性：已保存模型直接测注册表端点；编辑表单打开时带表单值
+ * （apiKey 留空则服务端沿用已存密钥），实现「先测再存」。
+ */
+async function testConnection(
+  model: Pick<ModelEntry, "modelId"> & { baseUrl?: string },
+  fromForm = false,
+) {
+  if (testing.value[model.modelId]) return;
+  testing.value = { ...testing.value, [model.modelId]: true };
+  try {
+    const body: Record<string, unknown> = {};
+    if (fromForm) {
+      const patch = editing.value[model.modelId];
+      if (patch?.baseUrl) body.baseUrl = patch.baseUrl;
+      if (patch?.apiKey && patch.apiKey.trim() !== "")
+        body.apiKey = patch.apiKey.trim();
+      if (patch?.displayName) body.displayName = patch.displayName;
+    }
+    const result = await api<{
+      ok: boolean;
+      latencyMs?: number;
+      error?: string;
+      firstProbe?: boolean;
+    }>(
+      `/api/v1/admin/model-gateway/models/${encodeURIComponent(model.modelId)}/test-connection`,
+      { method: "POST", body: JSON.stringify(body), timeoutMs: 45_000 },
+    );
+    testResults.value = {
+      ...testResults.value,
+      [model.modelId]: result.ok
+        ? {
+            ok: true,
+            text: `连接正常${result.latencyMs != null ? `（${result.latencyMs}ms）` : ""}`,
+          }
+        : { ok: false, text: `连接失败：${result.error ?? "未知错误"}` },
+    };
+    await load();
+  } catch (reason) {
+    testResults.value = {
+      ...testResults.value,
+      [model.modelId]: {
+        ok: false,
+        text:
+          reason instanceof Error ? reason.message : "测试请求失败，请稍后重试",
+      },
+    };
+  } finally {
+    testing.value = { ...testing.value, [model.modelId]: false };
+  }
+}
 
 async function load() {
   loading.value = true;
@@ -289,15 +358,17 @@ onMounted(load);
               <p class="text-sm text-muted-foreground">{{ slot.desc }}</p>
             </div>
             <Select
-              :model-value="data.slots[slot.key] ?? ''"
+              :model-value="data.slots[slot.key] || NONE"
               :disabled="saving"
-              @update:model-value="bindSlot(slot.key, String($event))"
+              @update:model-value="
+                bindSlot(slot.key, String($event) === NONE ? '' : String($event))
+              "
             >
               <SelectTrigger class="w-full">
                 <SelectValue placeholder="选择模型" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">未绑定（回落 .env 种子）</SelectItem>
+                <SelectItem :value="NONE">未绑定（回落 .env 种子）</SelectItem>
                 <SelectItem
                   v-for="model in data.models.filter((m) => m.enabled)"
                   :key="model.modelId"
@@ -388,12 +459,19 @@ onMounted(load);
           </div>
           <div class="space-y-2">
             <Label>故障转移</Label>
-            <Select v-model="newModel.failoverTo" :disabled="!data">
+            <Select
+              :model-value="newModel.failoverTo || NONE"
+              :disabled="!data"
+              @update:model-value="
+                (value: unknown) =>
+                  (newModel.failoverTo = value === NONE ? '' : String(value))
+              "
+            >
               <SelectTrigger class="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem :value="''">无</SelectItem>
+                <SelectItem :value="NONE">无</SelectItem>
                 <SelectItem
                   v-for="model in data?.models ?? []"
                   :key="model.modelId"
@@ -453,6 +531,15 @@ onMounted(load);
                 </code>
                 <Badge v-if="!model.enabled" variant="outline">已禁用</Badge>
                 <span class="grow" />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  :disabled="testing[model.modelId]"
+                  @click="testConnection(model)"
+                >
+                  <PlugZap class="size-4" />
+                  {{ testing[model.modelId] ? "测试中…" : "测试连接" }}
+                </Button>
                 <Button variant="ghost" size="sm" @click="startEdit(model)">
                   编辑
                 </Button>
@@ -475,6 +562,15 @@ onMounted(load);
                 <span>超时 {{ Math.round(model.timeoutMs / 1000) }}s</span>
                 <span>{{ model.hasApiKey ? "密钥已配置" : "无密钥" }}</span>
               </div>
+              <p
+                v-if="testResults[model.modelId]"
+                class="mt-1.5 flex items-center gap-1.5 text-xs"
+                :class="testResults[model.modelId]!.ok ? 'text-emerald-600' : 'text-destructive'"
+              >
+                <CircleCheck v-if="testResults[model.modelId]!.ok" class="size-3.5" />
+                <CircleX v-else class="size-3.5" />
+                {{ testResults[model.modelId]!.text }}
+              </p>
             </div>
 
             <!-- 编辑表单 -->
@@ -531,12 +627,19 @@ onMounted(load);
                 </div>
                 <div class="space-y-2">
                   <Label>故障转移</Label>
-                  <Select v-model="editing[model.modelId]!.failoverTo">
+                  <Select
+                    :model-value="editing[model.modelId]!.failoverTo || NONE"
+                    @update:model-value="
+                      (value: unknown) =>
+                        (editing[model.modelId]!.failoverTo =
+                          value === NONE ? null : String(value))
+                    "
+                  >
                     <SelectTrigger class="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem :value="''">无</SelectItem>
+                      <SelectItem :value="NONE">无</SelectItem>
                       <SelectItem
                         v-for="other in data!.models.filter((m) => m.modelId !== model.modelId)"
                         :key="other.modelId"
@@ -556,6 +659,15 @@ onMounted(load);
                 </div>
               </div>
               <div class="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="testing[model.modelId]"
+                  @click="testConnection(model, true)"
+                >
+                  <PlugZap class="size-4" />
+                  {{ testing[model.modelId] ? "测试中…" : "测试连接" }}
+                </Button>
                 <Button variant="outline" size="sm" @click="cancelEdit(model.modelId)">
                   取消
                 </Button>
@@ -563,6 +675,13 @@ onMounted(load);
                   {{ saving ? "保存中…" : "保存" }}
                 </Button>
               </div>
+              <p
+                v-if="testResults[model.modelId]"
+                class="text-right text-xs"
+                :class="testResults[model.modelId]!.ok ? 'text-emerald-600' : 'text-destructive'"
+              >
+                {{ testResults[model.modelId]!.text }}
+              </p>
             </div>
           </div>
         </div>

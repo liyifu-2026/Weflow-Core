@@ -23,6 +23,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { apiBaseUrl } from "@/api/config";
 import { mobileLogout } from "@/auth/api";
 import { loadRecentAccounts } from "@/auth/recent-accounts";
+import { removeSavedAccount, touchAccount } from "@/auth/saved-accounts";
 import {
   clearSession,
   loadSession,
@@ -80,7 +81,11 @@ export default function MeScreen() {
 
   /**
    * 切换账号：走标准退出流程后跳转登录页。
-   * targetUsername 非空时（最近登录列表）登录页预填该用户名。
+   * 退出前刷新该账号的登录卡片（头像/名片名），登录页头像条就能显示最新信息，
+   * 且记住的密码原样保留——下个人直接点头像即可回登。
+   * targetUsername 非空时（最近登录列表）登录页预填该用户名；底部按钮无目标账号时
+   * 带 manual 参数，登录页据此跳过静默自动登录——刚退出的账号往往仍记着密码，
+   * 放行自动登录会把用户直接顶回工作台（表现为「点了切换账号没反应」）。
    * 导航由 leaveAccount 的 finally 保证；这里只负责行内 loading 状态。
    */
   async function switchAccount(targetUsername?: string) {
@@ -88,6 +93,13 @@ export default function MeScreen() {
     if (targetUsername) setSwitchingTo(targetUsername);
     else setSwitching(true);
     try {
+      if (session) {
+        await touchAccount(session.user.username, {
+          avatarUrl: session.user.avatarUrl ?? null,
+          avatarPreset: session.user.avatarPreset ?? null,
+          displayName: session.user.displayName ?? null,
+        }).catch(() => undefined);
+      }
       await leaveAccount(session, {
         logout: mobileLogout,
         revokeDevice: session ? () => unregisterPushDevice(session) : undefined,
@@ -95,7 +107,7 @@ export default function MeScreen() {
         showSignIn: () =>
           router.replace({
             pathname: "/",
-            params: targetUsername ? { username: targetUsername } : {},
+            params: targetUsername ? { username: targetUsername } : { manual: "1" },
           } as never),
       });
     } finally {
@@ -129,11 +141,14 @@ export default function MeScreen() {
         } catch {
           // Continue clearing local security data even when the server is unreachable.
         }
+        // 「清除本机数据」语义包含删除登录卡片（含记住的密码）
+        await removeSavedAccount(session.user.username).catch(() => undefined);
       }
       try {
         await clearSession({ clearLocalData: true });
       } finally {
-        router.replace("/");
+        // 本机可能还记着其他账号的密码：带 manual 参数，登录页跳过静默自动登录
+        router.replace({ pathname: "/", params: { manual: "1" } } as never);
       }
     } finally {
       setClearing(false);

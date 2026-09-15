@@ -12,6 +12,7 @@
  *   保证任何客户消息都不会无声消失
  */
 import { and, asc, eq, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import type { Queue } from "bullmq";
 import type { Logger } from "pino";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../postgres/schema.js";
@@ -38,6 +39,26 @@ export type MediaDispatcherDependencies = {
     conversationId: string;
   }) => Promise<void>;
 };
+
+/**
+ * 清除同 ID 的已完结 job 残留（completed/failed hash）。
+ * jobId 对资产幂等固定；removeOnComplete/Fail 窗口内的旧 hash 会让
+ * queue.add 静默 dedup（duplicated 事件）——手动把资产重置回
+ * processing_queued 时任务将永不执行（2026-09-07 重排队饿死事故）。
+ * 只清 completed/failed：waiting/active/delayed 的去重是防重复投递的关键。
+ */
+async function clearSettledJob(queue: Queue, jobId: string): Promise<void> {
+  try {
+    const job = await queue.getJob(jobId);
+    if (!job) return;
+    const state = await job.getState();
+    if (state === "completed" || state === "failed") {
+      await job.remove().catch(() => undefined);
+    }
+  } catch {
+    // 探测失败不阻断本轮投递：dedup 仍挡重复，最坏情形回到饿死原状
+  }
+}
 
 /** 媒体处理队列名称 */
 export const MEDIA_PROCESSING_QUEUE = "media-processing";
@@ -219,6 +240,13 @@ export async function createDegradedTurns(
       schema.contactProfiles,
       eq(schema.contactProfiles.contactId, schema.conversations.contactId),
     )
+    // 降级 Turn 只服务客户消息：outbound 回声（自消息回流）与 unknown 方向
+    // 的媒体资产失败绝不建 Turn，否则 AI 会把客服自己发的文件/图片当成
+    // 客户输入自动回复（ingest 建_turn 闸门只认 inbound，此处必须对齐）。
+    .innerJoin(
+      schema.messages,
+      eq(schema.messages.messageId, schema.mediaAssets.messageId),
+    )
     .where(
       and(
         eq(schema.mediaAssets.status, "failed"),
@@ -229,6 +257,7 @@ export async function createDegradedTurns(
           ne(schema.mediaAssets.errorCode, "vision_disabled"),
         ),
         isNull(schema.agentTurns.turnId),
+        eq(schema.messages.direction, "inbound"),
       ),
     )
     .limit(DEGRADED_TURN_BATCH);
@@ -335,6 +364,7 @@ export function startMediaProcessingDispatcher(options: {
                 traceId: `media:${asset.mediaId}`,
                 createdAt: asset.createdAt.toISOString(),
               };
+              await clearSettledJob(queue, envelope.jobId);
               await queue.add(jobType, envelope, {
                 jobId: envelope.jobId,
                 attempts: 3,

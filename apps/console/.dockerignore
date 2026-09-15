@@ -1,4 +1,0 @@
-*
-!dist
-!nginx.conf
-!docker-entrypoint.sh

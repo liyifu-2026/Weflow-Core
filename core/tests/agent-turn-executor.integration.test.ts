@@ -308,6 +308,12 @@ integration("AgentTurnExecutor tool failure degradation", () => {
       .delete(schema.toolExecutions)
       .where(sql`conversation_id LIKE ${`${conversationId}%`}`);
     await postgres.db
+      .delete(schema.sessionWakes)
+      .where(sql`conversation_id LIKE ${`${conversationId}%`}`);
+    await postgres.db
+      .delete(schema.agentSessions)
+      .where(sql`conversation_id LIKE ${`${conversationId}%`}`);
+    await postgres.db
       .delete(schema.agentTurns)
       .where(sql`conversation_id LIKE ${`${conversationId}%`}`);
     await postgres.db
@@ -348,7 +354,7 @@ integration("AgentTurnExecutor tool failure degradation", () => {
     }).execute({ turnId, traceId: turnId });
 
     expect(result.status).toBe("completed");
-    expect(calls()).toBe(1);
+    expect(calls()).toBe(2);
     const [turn] = await postgres.db
       .select()
       .from(schema.agentTurns)
@@ -390,7 +396,7 @@ integration("AgentTurnExecutor tool failure degradation", () => {
     }).execute({ turnId, traceId: turnId });
 
     expect(result.status).toBe("completed");
-    expect(calls()).toBe(1);
+    expect(calls()).toBe(2);
     const [turn] = await postgres.db
       .select()
       .from(schema.agentTurns)
@@ -412,5 +418,117 @@ integration("AgentTurnExecutor tool failure degradation", () => {
       );
     expect(outbound).toHaveLength(1);
     expect(outbound[0]).toMatchObject({ sendState: "pending" });
+  });
+
+  // 2026-09-07 回归（可可猫群 turn76/私聊 turn395 双 5min 假死）：
+  // 模型在工具链末端把收尾意图包成 tool_calls（幻觉工具名 "none"/"reply"），
+  // 旧代码直接落 checkpoint → disposition 恢复路径 getToolPlan 抛
+  // tool_not_in_catalog 穿顶且无兜底 → turn 卡 running 直到 STALE 回收。
+  // FC 出口闸门：目录外工具名 → 落 invalid_tool_call_retry 事件 +
+  // 回喂无效工具回执 + 摘工具面重试一次 → 模型以 JSON 决策收尾。
+  it("FC 出口闸门：幻觉工具名回喂重试后以 JSON 决策收尾，不落 checkpoint", async () => {
+    const { localConversationId } = await insertConversationFixture(
+      "fcgate",
+    );
+    const turnId = await insertToolTurn("fcgate", localConversationId, "planned");
+
+    // 第 1 次调用：幻觉工具名 "none"（2026-09-07 私聊 395 实测形态）；
+    // 第 2 次调用（摘工具面重试）：正常 JSON 决策收尾。
+    let modelCalls = 0;
+    const client = new OpenAiCompatibleClient({
+      baseUrl: "https://model.invalid",
+      apiKey: "test-only",
+      model: "test",
+      timeoutMs: 1_000,
+      fetch: () => {
+        modelCalls += 1;
+        if (modelCalls === 1) {
+          return Promise.resolve(
+            Response.json({
+              choices: [
+                {
+                  message: {
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: "call_hallucinated_1",
+                        type: "function",
+                        function: { name: "none", arguments: "{}" },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
+                },
+              ],
+            }),
+          );
+        }
+        return Promise.resolve(
+          Response.json({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    next_action: "reply",
+                    reply_text: "25565 先查加密狗灯，亮的话换个 USB 口重插。",
+                    requires_human: false,
+                    risk_level: "low",
+                    wait_ms: 60_000,
+                  }),
+                },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+        );
+      },
+    });
+
+    const result = await new AgentTurnExecutor(postgres.db, client, "test", {
+      knowledgeSearch: {
+        search: () => {
+          throw new Error("knowledge search must not run behind the FC gate");
+        },
+      },
+    }).execute({ turnId, traceId: turnId });
+
+    expect(result.status).toBe("completed");
+    expect(modelCalls).toBe(2);
+    const [turn] = await postgres.db
+      .select()
+      .from(schema.agentTurns)
+      .where(eq(schema.agentTurns.turnId, turnId));
+    expect(turn).toMatchObject({ status: "completed" });
+    // 闸门事件必须落库（排错从 turn_events 一处可查）
+    const gateEvents = await postgres.db
+      .select()
+      .from(schema.agentTurnEvents)
+      .where(
+        and(
+          eq(schema.agentTurnEvents.turnId, turnId),
+          eq(schema.agentTurnEvents.eventType, "invalid_tool_call_retry"),
+        ),
+      );
+    expect(gateEvents).toHaveLength(1);
+    expect(gateEvents[0]?.payload).toMatchObject({ toolName: "none" });
+    // 幻觉工具绝不产生工具执行（不落 checkpoint）；原 planned 执行也不应
+    // 被重复执行成功——闸门拦截发生在执行之前。
+    const executions = await postgres.db
+      .select()
+      .from(schema.toolExecutions)
+      .where(eq(schema.toolExecutions.turnId, turnId));
+    expect(executions).toHaveLength(1);
+    // 回复照常落库
+    const outbound = await postgres.db
+      .select()
+      .from(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.conversationId, localConversationId),
+          eq(schema.messages.direction, "outbound"),
+        ),
+      );
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]?.text).toContain("25565");
   });
 });

@@ -50,6 +50,8 @@ export type Message = {
   senderName?: string | null;
   replyToChannelMessageId?: string;
   mentionContactRefs?: string[];
+  /** AI 回复批次键（回合气泡把「回合完成」钉在该轮最后一条回复后） */
+  replyBatchId?: string | null;
 };
 export type Evidence = {
   evidenceId?: string;
@@ -65,6 +67,32 @@ export type Evidence = {
 export type SectionScope = "attention" | "mine" | "others";
 export type QueueSectionKey = SectionScope;
 
+/** 回合侧轨（TurnRail）的一个点：AI 回复轮 / 人工处理轮 / 唤醒跟进 */
+export type RailRound = {
+  key: string;
+  kind: "agent" | "human" | "wake";
+  /** ok=已回复/已完成 warn=未回复 error=失败 running=处理中 info=中性 */
+  tone: "ok" | "warn" | "error" | "running" | "info";
+  title: string;
+  timeText: string;
+  /** 排序用（升序时间线） */
+  occurredAt: string;
+  /** 点击跳转锚定的消息 id；null = 进行中滚到底部，其余滚到顶部 */
+  anchorMessageId: string | null;
+  /** 卡片摘要行（时间/耗时/错误/处理人等） */
+  lines: string[];
+  /** 客户触发消息摘要（AI 轮） */
+  question?: string;
+  /** AI 回复摘要（已回复轮） */
+  reply?: string;
+  /** 人工首条消息摘要（人工轮） */
+  excerpt?: string;
+  /** 实时思维链（进行中 AI 轮，live 轮询） */
+  reasoning?: string | null;
+  /** 决策轨迹入口（AI 轮 / 唤醒） */
+  turnId?: string;
+};
+
 export function priority(item: Conversation) {
   const risk =
     item.riskLevel === "high" ? 300 : item.riskLevel === "medium" ? 150 : 0;
@@ -77,18 +105,7 @@ export function priority(item: Conversation) {
   return risk + handoffRank + Number(item.unreadCustomerCount || 0);
 }
 
-export function handoffLabel(status?: string) {
-  return status === "pending"
-    ? "等待接手"
-    : status === "in_progress"
-      ? "处理中"
-      : status === "resolved"
-        ? "已完成"
-        : "Agent 处理中";
-}
-
-export function riskLabel(risk?: string | null) {
-  return risk === "high" ? "高风险" : risk === "medium" ? "需关注" : "常规";
+export function riskLabel(risk?: string | null) {  return risk === "high" ? "高风险" : risk === "medium" ? "需关注" : "常规";
 }
 
 export function rowSummary(item: Conversation): string {
@@ -159,6 +176,10 @@ export function isFileMessage(message: Message): boolean {
 export function isVoiceMsg(message: Message): boolean {
   return message.mediaKind === "voice" || message.contentType === "voice";
 }
+/** 消息是否渲染为视频：mediaKind=video 或 contentType=video（入站视频） */
+export function isVideoMsg(message: Message): boolean {
+  return message.mediaKind === "video" || message.contentType === "video";
+}
 /** 引用卡片摘要：取原消息前 40 字符 */
 export function quotedSummary(quoted: Message): string {
   const text = (quoted.text || "").trim();
@@ -187,9 +208,10 @@ export function mentionSegments(
   }
   return segments;
 }
-// 状态降噪：正常（sent/confirmed）不显示；仅发送中/失败/未知显示。
+// 状态降噪：正常（sent/confirmed/observed）不显示；仅发送中/拦截/取消/失败/未知显示。
+// 与 Core 词汇表（send-states.ts，CHECK 约束 8 态）对齐；sending/accepted 为历史兼容。
 export function isNonDefaultSendState(message: Message): boolean {
-  return ["sending", "pending", "failed", "unknown"].includes(
+  return ["pending", "submitting", "held", "cancelled", "failed", "unknown"].includes(
     message.sendState || "",
   );
 }
@@ -201,21 +223,12 @@ export function messageTime(value: string) {
 }
 export function sendStateLabel(state?: string) {
   if (!state) return "";
-  if (state === "confirmed" || state === "sent") return "已发送";
+  if (state === "confirmed" || state === "observed" || state === "sent") return "已发送";
   if (state === "failed") return "发送失败";
   if (state === "unknown") return "结果未知";
-  if (state === "pending" || state === "sending") return "发送中";
+  if (state === "pending" || state === "submitting" || state === "sending") return "发送中";
+  if (state === "held") return "已拦截";
+  if (state === "cancelled") return "已取消";
   if (state === "accepted") return "已受理";
   return state;
-}
-export function cycleStatusLabel(status?: string) {
-  const map: Record<string, string> = {
-    HANDOFF_PENDING: "等待处理",
-    HANDOFF_ACCEPTED: "已接管",
-    HANDOFF_RESOLVED: "已结束",
-    TRANSFER_PENDING: "转交等待接受",
-    TRANSFERRED: "已转交",
-    AGENT_HANDOFF: "Agent 转人工",
-  };
-  return map[String(status).toUpperCase()] ?? status ?? "交接";
 }

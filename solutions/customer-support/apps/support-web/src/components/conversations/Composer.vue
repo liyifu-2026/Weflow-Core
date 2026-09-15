@@ -25,8 +25,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   "update:text": [value: string];
   send: [];
-  "pick-image": [];
-  "pick-file": [];
+  "pick-image": [event: Event];
+  "pick-file": [event: Event];
   "open-assets": [];
   "clear-reply": [];
   "focus-input": [];
@@ -145,8 +145,8 @@ defineExpose({ textareaRef, imageInputRef, fileInputRef });
     </div>
 
     <!-- 隐藏的文件输入 -->
-    <input ref="imageInputRef" type="file" accept="image/*" class="hidden" @change="$emit('pick-image')" />
-    <input ref="fileInputRef" type="file" accept="*/*" class="hidden" @change="$emit('pick-file')" />
+    <input ref="imageInputRef" type="file" accept="image/*" class="hidden" @change="($event) => $emit('pick-image', $event)" />
+    <input ref="fileInputRef" type="file" accept="*/*" class="hidden" @change="($event) => $emit('pick-file', $event)" />
 
     <!-- 工具行 -->
     <div class="flex items-center gap-0.5 pb-1">
