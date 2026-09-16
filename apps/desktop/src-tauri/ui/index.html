@@ -2,21 +2,161 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Weflow</title>
     <style>
-      html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
-      body { display: flex; align-items: center; justify-content: center; background: #f5f6f8; color: #333; }
-      .box { text-align: center; max-width: 32rem; padding: 2rem; }
-      h1 { font-size: 1.25rem; margin-bottom: .5rem; }
-      p { color: #666; line-height: 1.6; }
-      code { background: #e8eaed; padding: .1rem .4rem; border-radius: 4px; }
+      html, body { margin: 0; height: 100%; font-family: system-ui, "Segoe UI", sans-serif; }
+      body { display: flex; align-items: center; justify-content: center; background: #f5f6f8; color: #1f2328; }
+      .box { width: 100%; max-width: 34rem; padding: 2rem; }
+      h1 { font-size: 1.15rem; margin: 0 0 .5rem; }
+      p { color: #57606a; line-height: 1.6; margin: .35rem 0; }
+      .status { display: flex; align-items: center; gap: .5rem; margin: 1rem 0; color: #57606a; font-size: .9rem; }
+      .dot { width: .55rem; height: .55rem; border-radius: 50%; background: #d0d7de; }
+      .dot.busy { background: #d29922; animation: pulse 1s infinite ease-in-out; }
+      .dot.ok { background: #1a7f37; }
+      .dot.bad { background: #cf222e; }
+      @keyframes pulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
+      label { display: block; font-size: .85rem; color: #57606a; margin: 1.25rem 0 .35rem; }
+      input { width: 100%; box-sizing: border-box; padding: .55rem .7rem; font-size: .95rem;
+              border: 1px solid #d0d7de; border-radius: 6px; background: #fff; color: inherit; }
+      input:focus { outline: 2px solid #0969da33; border-color: #0969da; }
+      .row { display: flex; gap: .6rem; margin-top: .8rem; }
+      button { padding: .55rem 1.1rem; font-size: .95rem; border-radius: 6px; border: 1px solid #d0d7de;
+               background: #fff; color: #1f2328; cursor: pointer; }
+      button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+      button:disabled { opacity: .55; cursor: default; }
+      .hint { font-size: .82rem; color: #8b949e; margin-top: 1.1rem; line-height: 1.6; }
+      code { background: #e8eaed; padding: .1rem .35rem; border-radius: 4px; }
+      .error { color: #cf222e; font-size: .85rem; min-height: 1.2rem; margin-top: .5rem; }
+      .hidden { display: none; }
     </style>
   </head>
   <body>
     <div class="box">
-      <h1>无法连接 Weflow 服务</h1>
-      <p>请确认 Weflow 服务已在本机或远程服务器上运行。<br />加载地址可在本程序同目录的 <code>weflow.conf</code> 中配置：</p>
-      <p><code>{ "url": "http://127.0.0.1:3100" }</code></p>
+      <h1>Weflow 桌面端</h1>
+      <div class="status">
+        <span id="dot" class="dot busy"></span>
+        <span id="statusText">正在读取服务器地址…</span>
+      </div>
+
+      <div id="form" class="hidden">
+        <label for="url">服务器地址</label>
+        <input id="url" type="text" spellcheck="false" placeholder="https://web.leaif.com" />
+        <div class="row">
+          <button id="connect" class="primary">连接</button>
+          <button id="retry">重新探测当前地址</button>
+        </div>
+        <div id="error" class="error"></div>
+        <p class="hint">
+          同机部署填 <code>http://127.0.0.1:3100</code>；远程接入填 <code>https://web.leaif.com</code>
+          （远程必须是 https，否则登录会话 Cookie 无法保存）。<br />
+          地址会记住，下次启动直接连；命令行 <code>--url &lt;地址&gt;</code> 可临时覆盖。
+        </p>
+      </div>
     </div>
+
+    <script>
+      const invoke = (cmd, args) =>
+        (window.__TAURI__ && window.__TAURI__.core
+          ? window.__TAURI__.core.invoke(cmd, args)
+          : Promise.reject(new Error("非桌面端环境")));
+
+      const dot = document.getElementById("dot");
+      const statusText = document.getElementById("statusText");
+      const form = document.getElementById("form");
+      const urlInput = document.getElementById("url");
+      const errorBox = document.getElementById("error");
+      const connectBtn = document.getElementById("connect");
+      const retryBtn = document.getElementById("retry");
+
+      function setStatus(kind, text) {
+        dot.className = "dot" + (kind ? " " + kind : "");
+        statusText.textContent = text;
+      }
+
+      function showForm(url, message) {
+        form.classList.remove("hidden");
+        urlInput.value = url || "";
+        errorBox.textContent = message || "";
+        connectBtn.disabled = false;
+        retryBtn.disabled = false;
+      }
+
+      async function tryConnect(url, sourceText) {
+        setStatus("busy", "正在连接 " + url + (sourceText ? "（" + sourceText + "）" : "") + " …");
+        let reachable = false;
+        try {
+          reachable = await invoke("probe_server", { url });
+        } catch (err) {
+          setStatus("bad", "无法探测服务器：" + (err && err.message ? err.message : err));
+          showForm(url, "");
+          return;
+        }
+        if (reachable) {
+          setStatus("ok", "已连接，正在打开 " + url);
+          location.replace(url);
+          return;
+        }
+        setStatus("bad", "连接不上 " + url);
+        showForm(url, "目标地址没有响应，请检查服务是否已启动、地址端口是否正确。");
+      }
+
+      async function boot() {
+        let info;
+        try {
+          info = await invoke("current_server");
+        } catch (err) {
+          setStatus("bad", "无法读取配置：" + (err && err.message ? err.message : err));
+          showForm("http://127.0.0.1:3100", "");
+          return;
+        }
+        const sourceLabel = {
+          cli: "命令行指定",
+          exe: "程序目录 weflow.conf",
+          user: "用户配置",
+          default: "默认同机地址",
+        }[info.source] || info.source;
+        urlInput.value = info.url;
+        await tryConnect(info.url, sourceLabel);
+      }
+
+      connectBtn.addEventListener("click", async () => {
+        const url = urlInput.value.trim();
+        errorBox.textContent = "";
+        if (!url) {
+          errorBox.textContent = "请填写服务器地址";
+          return;
+        }
+        connectBtn.disabled = true;
+        retryBtn.disabled = true;
+        setStatus("busy", "正在保存并连接 " + url + " …");
+        try {
+          await invoke("save_server_url", { url });
+        } catch (err) {
+          connectBtn.disabled = false;
+          retryBtn.disabled = false;
+          setStatus("bad", "连接失败");
+          errorBox.textContent = err && err.message ? err.message : String(err);
+          return;
+        }
+        setStatus("ok", "已保存，正在打开 " + url);
+        location.replace(url);
+      });
+
+      retryBtn.addEventListener("click", () => {
+        errorBox.textContent = "";
+        connectBtn.disabled = true;
+        retryBtn.disabled = true;
+        tryConnect(urlInput.value.trim() || "http://127.0.0.1:3100", "");
+      });
+
+      urlInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !connectBtn.disabled) {
+          connectBtn.click();
+        }
+      });
+
+      boot();
+    </script>
   </body>
 </html>

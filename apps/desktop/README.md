@@ -4,13 +4,21 @@ Weflow 的 Windows 桌面端：Tauri 2 + WebView2 壳，只负责把产品网页
 
 ## 架构
 
-- 壳启动后加载目标地址（运行时配置 `weflow.conf`，exe 同目录）：
-  ```json
-  { "url": "http://127.0.0.1:3100" }
-  ```
-- 未配置时回落编译期默认 `http://127.0.0.1:3100`（同机部署，api 同时托管前端）。
-- 指向远程服务器只需改 `weflow.conf`，无需重新打包。
-- 离线/服务不可达时显示内置引导页（`src-tauri/ui/index.html`）。
+- 服务器地址解析顺序（先命中者生效，`src-tauri/src/main.rs`）：
+  1. 命令行 `--url <地址>` / `--url=<地址>`（临时覆盖，排障用）；
+  2. exe 同目录 `weflow.conf`（便携部署 / IT 统一下发）：
+     ```json
+     { "url": "https://web.leaif.com" }
+     ```
+  3. `%APPDATA%\Weflow\weflow.conf`（应用内「连接设置」写入的位置）；
+  4. 编译期默认 `http://127.0.0.1:3100`（同机部署，api 同时托管前端）。
+- **远程客户端**：把地址填成 `https://web.leaif.com` 之类即可（远程必须 https，
+  否则生产环境的 Secure 会话 Cookie 不会被 WebView 保存，登录会一直失败）。
+- **连接页**（`src-tauri/ui/index.html`）：壳先加载它，探测目标地址可达后跳转；
+  不可达就停在连接页，可直接改地址并保存（写回 `weflow.conf`），不会出现
+  WebView2 的原生错误页。连接页调用 `current_server` / `probe_server` /
+  `save_server_url` 三个命令，命令侧校验调用方必须是内置页，产品前端（远端
+  页面）拿不到任何 IPC 能力。
 - **下载即打开**：页面里的「下载」由 WebView2 落盘到系统下载目录，下载完成后壳用系统默认程序打开该文件（`on_download` → `tauri_plugin_opener::open_path`，Rust 侧调用，不给远端页面开任何 IPC 权限）。文档预览因此不必内建查看器——PDF/图片在浏览器内预览，docx/xlsx/pptx/zip 等下载后由本机 Office/解压工具打开。窗口在 `src-tauri/src/main.rs` 里用 Rust 构建（`tauri.conf.json` 的 `app.windows` 为空），只有 builder 能挂 `on_download`。
 - 自动更新：Tauri updater 已预留占位（`src-tauri/tauri.conf.json` 的 `plugins.updater`），启用前需：
   1. 生成密钥对：`npx tauri signer generate`；
