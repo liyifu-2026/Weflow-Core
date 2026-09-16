@@ -101,14 +101,34 @@ class MediaDownloader:
             ("%d" % cfg_dword + wxid).encode("utf-8")).hexdigest()[:16]
         return aes_key, xor_key
 
-    def _derive_cfg_key(self) -> Optional[Tuple[str, int]]:
-        """cfgDword 派生并验证; 优先显式注入, 否则用 db.cfg_dword(自动提取)。"""
+    def _derive_cfg_key(
+        self, refresh_dword: bool = False
+    ) -> Optional[Tuple[str, int]]:
+        """cfgDword 派生并验证; 优先显式注入, 否则用 db.cfg_dword(自动提取)。
+
+        ``refresh_dword=True``（仅后台密钥服务路径）：``db.cfg_dword`` 缺失
+        （如 Host 先于微信启动）时现读微信进程重新提取，成功后回填
+        ``db.cfg_dword``。请求路径（HTTP worker）禁止传 True。
+        """
         cfg_dword = self._cfg_dword
         if cfg_dword is None:
             cfg_dword = getattr(self.db, "cfg_dword", None)
+        if not cfg_dword and refresh_dword:
+            extract = getattr(self.db, "extract_master_key", None)
+            if callable(extract):
+                auto = extract()
+                if auto:
+                    _, cfg_dword, _ = auto
+                    try:
+                        self.db.cfg_dword = cfg_dword
+                    except Exception:
+                        pass
         if not cfg_dword:
             return None
-        aes_key, xor_key = self.derive_image_keys(cfg_dword, self.db.wxid)
+        wxid = getattr(self.db, "wxid", None)
+        if not wxid:
+            return None
+        aes_key, xor_key = self.derive_image_keys(cfg_dword, wxid)
         if self._validate_key(aes_key):
             return aes_key, xor_key
         return None
@@ -359,9 +379,18 @@ class MediaDownloader:
             return self._img_key
 
     def _current_aes_key(self) -> Optional[str]:
-        """无副作用的快速解析：显式注入 → 持久化文件。不扫描进程内存。"""
+        """无副作用的快速解析：显式注入 → cfgDword 派生 → 持久化文件。不扫描进程内存。
+
+        cfgDword 派生与上游 wechatauto-replica 的 ``_resolve_aes_key`` 同源
+        （MD5(cfgDword + wxid)[:16]，经真实密文探针校验）；微信登录期间
+        cfgDword 恒定可得，派生命中后不再依赖「点开大图后密钥短暂驻留
+        内存」的扫描路径。
+        """
         if self._image_key and self._validate_key(self._image_key):
             return self._image_key
+        derived = self._derive_cfg_key()
+        if derived:
+            return derived[0]
         return self._load_persisted_key()
 
     def has_image_key(self) -> bool:
@@ -378,6 +407,13 @@ class MediaDownloader:
         """
         with self._key_lock:
             if self._current_aes_key() is not None:
+                self._last_scan_miss = None
+                return True
+            # cfgDword 缺失（Host 先于微信启动等）：现读微信进程重提取。
+            # 命中即持久化，后续走 _current_aes_key 快路径。
+            derived = self._derive_cfg_key(refresh_dword=True)
+            if derived:
+                self._persist_key(derived[0])
                 self._last_scan_miss = None
                 return True
             if (
