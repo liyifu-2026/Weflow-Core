@@ -122,14 +122,38 @@
           showForm("http://127.0.0.1:3100", "");
           return;
         }
+        urlInput.value = info.url;
+        const candidates =
+          info.candidates && info.candidates.length ? info.candidates : [info.url];
         const sourceLabel = {
           cli: "命令行指定",
           exe: "程序目录 weflow.conf",
           user: "用户配置",
-          default: "默认同机地址",
+          default: "自动探测",
         }[info.source] || info.source;
-        urlInput.value = info.url;
-        await tryConnect(info.url, sourceLabel);
+        if (info.source !== "default") {
+          await tryConnect(info.url, sourceLabel);
+          return;
+        }
+        // 默认（未做任何配置）：按「本机 → 公网」顺序自动探测，第一个通的直接进，
+        // 装完双击即用——不需要填地址，也不会停在连接页。
+        for (let i = 0; i < candidates.length; i += 1) {
+          const url = candidates[i];
+          setStatus("busy", "正在连接 " + url + "（自动探测 " + (i + 1) + "/" + candidates.length + "）…");
+          let reachable = false;
+          try {
+            reachable = await invoke("probe_server", { url });
+          } catch (err) {
+            reachable = false;
+          }
+          if (reachable) {
+            setStatus("ok", "已连接，正在打开 " + url);
+            location.replace(withShellMarker(url));
+            return;
+          }
+        }
+        setStatus("bad", "候选地址都没响应");
+        showForm(info.url, "本机与公网地址都连不上，请检查网络，或手动填写服务器地址。");
       }
 
       connectBtn.addEventListener("click", async () => {

@@ -27,8 +27,15 @@ use std::time::Duration;
 use tauri::webview::DownloadEvent;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-/// 编译期默认：同机部署的 Core API（同时托管前端）
-const DEFAULT_URL: &str = "http://127.0.0.1:3100";
+/// 编译期默认候选（按顺序自动探测，谁通用谁）：
+/// 1. 同机部署的 Core API（同时托管前端）——生产机上离线也能用，且连不上是
+///    秒回（本地端口拒绝连接），不会拖慢启动；
+/// 2. 公网入口（X230 经 frpc + 服务器侧 caddy）——装在别的机器上时直接可用。
+/// 装完即用：不需要 weflow.conf，也不需要在连接页点任何东西。
+const DEFAULT_CANDIDATES: &[&str] = &[
+    "http://127.0.0.1:3100",
+    "https://web.leaif.com",
+];
 /// 单次可达性探测超时（建立连接）
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -39,9 +46,12 @@ struct Conf {
 
 #[derive(Serialize)]
 struct ServerInfo {
+    /// 首选地址（显式配置时即它本身；否则是候选里的第一个）
     url: String,
     /// exe | user | cli | default —— 连接页据此说明地址来源
     source: String,
+    /// 按顺序尝试的候选地址；显式配置时只有一个
+    candidates: Vec<String>,
 }
 
 fn exe_dir() -> Option<PathBuf> {
@@ -86,32 +96,32 @@ fn cli_url() -> Option<String> {
     None
 }
 
+/// 显式配置（命令行 / conf 文件）优先；没有配置时返回自动探测候选列表
 fn resolve_server() -> ServerInfo {
-    if let Some(url) = cli_url() {
+    let explicit = cli_url()
+        .map(|url| (url, "cli"))
+        .or_else(|| {
+            exe_dir()
+                .and_then(|dir| read_conf(&dir.join("weflow.conf")))
+                .map(|url| (url, "exe"))
+        })
+        .or_else(|| {
+            user_conf_path()
+                .and_then(|path| read_conf(&path))
+                .map(|url| (url, "user"))
+        });
+    if let Some((url, source)) = explicit {
         return ServerInfo {
+            candidates: vec![url.clone()],
             url,
-            source: "cli".into(),
+            source: source.into(),
         };
     }
-    if let Some(dir) = exe_dir() {
-        if let Some(url) = read_conf(&dir.join("weflow.conf")) {
-            return ServerInfo {
-                url,
-                source: "exe".into(),
-            };
-        }
-    }
-    if let Some(path) = user_conf_path() {
-        if let Some(url) = read_conf(&path) {
-            return ServerInfo {
-                url,
-                source: "user".into(),
-            };
-        }
-    }
+    let candidates: Vec<String> = DEFAULT_CANDIDATES.iter().map(|s| s.to_string()).collect();
     ServerInfo {
-        url: DEFAULT_URL.to_string(),
+        url: candidates[0].clone(),
         source: "default".into(),
+        candidates,
     }
 }
 
