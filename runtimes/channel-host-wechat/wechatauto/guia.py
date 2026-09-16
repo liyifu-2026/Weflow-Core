@@ -48,6 +48,7 @@ import os
 import platform
 import re
 import tempfile
+import threading
 import time
 from ctypes import wintypes
 from typing import Dict, List, Optional, Tuple
@@ -1747,12 +1748,15 @@ class WeChatGUI:
     def _verify_sent(self, text: str, who: Optional[str]) -> bool:
         try:
             db = self._get_db()
+            resolved = None
             if not who:
                 who = db.get_self_info()['username']
+                resolved = who
             else:
                 hits = db.search_contact(who)
                 if hits:
                     who = hits[0]["username"]
+                    resolved = who
             msgs = db.get_messages(who, limit=3)
             for pos, m in enumerate(msgs):
                 if text not in (m.get('content') or ''):
@@ -1764,8 +1768,13 @@ class WeChatGUI:
                 # （微信升级换语义）以「内容 + 时序」为准，不因判定失败误报失败
                 if pos == 0:
                     return True
+            wxlog.debug(
+                '发送校验未命中：目标=%r 解析为=%r 最近%d条=%r',
+                who, resolved, len(msgs),
+                [(m.get('sender_id'), (m.get('content') or '')[:24]) for m in msgs],
+            )
         except Exception as e:
-            wxlog.debug(f'发送校验失败：{e}')
+            wxlog.info(f'发送校验异常：{e}')
         return False
 
     # ------------------------------------------------------------------

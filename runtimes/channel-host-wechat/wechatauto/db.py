@@ -613,21 +613,55 @@ class WeChatDB:
             int(rid) for rid, name in index.items() if name == user_name
         )
 
+    def learned_self_sender_ids(self, max_age: float = 300.0) -> frozenset:
+        """从「文件传输助手」会话反推本机发消息用的行号（带 TTL 缓存）。
+
+        这是唯一不依赖「2=自己」假设的**直接证据**：文件传输助手里的消息
+        必然由本机账号发出（自己给自己传文件），所以它们用过的 real_sender_id
+        就是本机的发送行号。实测两台机器并不一致——开发机自己发的是 2、
+        X230 是 1——任何写死的常量都会在其中一台判错。
+
+        取不到（会话被清空 / 库不可读）时返回空集合，调用方继续走索引反查
+        与经典约定。
+        """
+        now = time.time()
+        cached = getattr(self, "_learned_self_ids", None)
+        if cached is not None and now - cached[0] < max_age:
+            return cached[1]
+        ids: set = set()
+        try:
+            rows = self._run_msg_query(
+                "filehelper",
+                lambda tables: self._shard_rows(
+                    tables, "", (),
+                    order_ext=self._MSG_ORDER_DESC, per_shard_limit=20,
+                ),
+            ) or []
+            for r in rows:
+                sid = r["real_sender_id"]
+                if sid:
+                    ids.add(int(sid))
+        except Exception:
+            ids = set()
+        self._learned_self_ids = (now, frozenset(ids))
+        return self._learned_self_ids[1]
+
     def is_self_sender(self, sender_id, conversation_ref: Optional[str] = None) -> bool:
-        """消息是否由本机账号发出（自适应新旧/各版本 real_sender_id 语义）。
+        """消息是否由本机账号发出（自适应各版本/各机器 real_sender_id 语义）。
 
         单一事实源：发送回执校验（guia）、事件分类（channel-host）、消息
         导出全部走这里，避免各处再写死「2=自己」。
 
         判定顺序（全部基于库内可验证证据，不做版本假设）：
         1. 字符串身份（wxid/群成员）→ 与 self wxid 相等即自己。
-        2. 数字行号能在 ``SenderName2Id`` 反查到 → 以反查结果为准：
-           反查到自己 = 自己；反查到别人（含私聊对端、群成员）= 不是自己。
-           —— 开发机实测：对端 Leaif 占行号 1、自己发出去的消息是行号 2；
-              X230 实测：行号 2 是对端 Leaif。两者靠索引反查即可区分。
-        3. 行号不在索引里：私聊只有两个参与者，且对端行号已知、不等于是
-           本行号 → 只能是自己（自己发出的消息常不占索引行号）。
-        4. 兜底：经典约定 2=自己（上游文档语义，也是最老库的写法）。
+        2. 数字行号能在 ``SenderName2Id`` 反查到 → 以反查结果为准：反查到
+           自己 = 自己；反查到别人（含私聊对端、群成员）= 不是自己。
+        3. 反查不到的 → 与「本机发送行号」比对（从文件传输助手学到，见
+           ``learned_self_sender_ids``）。实测开发机自己=2、X230 自己=1 而
+           对端=2，只有这一步能同时判对。
+        4. 学不到（文件传输助手为空）时退回：私聊只有两个参与者，对端行号
+           已知且不等于是本行号 → 自己。
+        5. 兜底：经典约定 2=自己（上游文档语义，也是最老库的写法）。
         """
         if sender_id is None:
             return False
@@ -643,6 +677,9 @@ class WeChatDB:
         resolved = index.get(sid_int) if isinstance(index, dict) else None
         if resolved:
             return bool(self_ref) and resolved == self_ref
+        learned = self.learned_self_sender_ids()
+        if learned:
+            return sid_int in learned
         if (conversation_ref and self_ref
                 and not conversation_ref.endswith("@chatroom")):
             peer_ids = self.contact_sender_ids(conversation_ref)

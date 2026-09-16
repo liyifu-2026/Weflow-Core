@@ -24,7 +24,11 @@ class ContactResolutionError(RuntimeError):
 # A GUI send may already have succeeded while the WeChat database is still
 # catching up. Reconcile that narrow window by reading the original operation
 # only; never create a replacement operation or invoke the GUI a second time.
-AMBIGUOUS_RECONCILIATION_SECONDS = 8.0
+#
+# 窗口取值以实测为准（2026-09-16 X230）：消息写进微信本地库后，我们的解密
+# 缓存要等微信刷盘/文件元数据更新才看得见——实测发送完成 +7s 写库、+17.7s
+# 才可读（滞后约 11s）。原 8s 窗口必然超时，把已送达的消息记成 unknown。
+AMBIGUOUS_RECONCILIATION_SECONDS = 30.0
 AMBIGUOUS_RECONCILIATION_INTERVAL_SECONDS = 1.0
 
 
@@ -82,7 +86,7 @@ class WeChatChannelSender:
     ) -> Optional[str]:
         rows = self.db.get_messages(conversation_ref, limit=200)
         for row in rows:
-            if row.get("sender_id") not in (2, "2"):
+            if not self._is_self_row(row, conversation_ref):
                 continue
             if row.get("content") != text:
                 continue
@@ -92,6 +96,20 @@ class WeChatChannelSender:
             if local_id is not None:
                 return str(local_id)
         return None
+
+    def _is_self_row(self, row: dict, conversation_ref: str) -> bool:
+        """该行是否为本机发出——走 DB 层自适应判定，不写死「2=自己」。
+
+        两台实机语义相反（开发机自己=2、X230 自己=1 而对端=2），写死常量会让
+        发送对账在 X230 上永远匹配不到，把已送达的消息记成 unknown。
+        """
+        check = getattr(self.db, "is_self_sender", None)
+        if callable(check):
+            try:
+                return bool(check(row.get("sender_id"), conversation_ref))
+            except TypeError:
+                return bool(check(row.get("sender_id")))
+        return row.get("sender_id") in (2, "2")
 
     def send_text(self, conversation_ref: str, text: str) -> SendAttempt:
         try:

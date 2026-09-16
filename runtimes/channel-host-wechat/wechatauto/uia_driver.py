@@ -186,7 +186,8 @@ SPIF_SENDCHANGE = 0x02
 QACCESSIBLE_ACTIVE_RVA_BY_VERSION = {
     "4.1.11.22": 0x0A1E7DB8,
     "4.1.13.65": 0x0AE2B0C8,   # 2026-09-12 实测：热写后 mmui 树立即物化
-    "4.1.15.8": 0x0B125C38,    # 2026-09-16 实测：热写后 mmui 树立即物化
+    "4.1.15.8": 0x0B125C38,    # 2026-09-16 开发机实测：热写后 mmui 树立即物化
+    "4.1.15.9": 0x0B12DC38,    # 2026-09-16 X230 实测：热写后 mmui 树立即物化
 }
 QACCESSIBLE_CORE_STRING = b"qt.accessibility.core"
 QACCESSIBLE_GATE_PATTERN = re.compile(
