@@ -48,6 +48,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
     Stop-Process -Id $_.ProcessId -Force -ErrorAction Continue
   }
 Start-Sleep -Seconds 2
+schtasks /end /tn "Weflow ChannelHost" 2>&1 | Out-Null
+Start-Sleep -Seconds 1
 $out = schtasks /run /tn "Weflow ChannelHost" 2>&1 | Out-String
 Log ("schtasks run: " + $out.Trim())
 Start-Sleep -Seconds 10
