@@ -10,6 +10,7 @@ import { computed, ref, type Ref } from "vue";
 import { api } from "../api";
 import type { Message } from "../components/conversations/types";
 
+
 export type InspectorView = "context" | "brief" | "evidence" | "customer" | "history";
 
 type HistoryConversation = {
@@ -28,7 +29,9 @@ export function useConversationInspector(options: {
   getSelectedContactId: () => string | undefined;
 }) {
   const inspectorOpen = ref(false);
-  // 收起偏好记忆（UX-DECISIONS §1）：手动收起后不再随选中自动展开
+  // 收起偏好记忆（UX-DECISIONS §1）：手动收起后不再随选中自动展开。
+  // 桌面壳首次进入会由 main.ts 的 applyDesktopShellDefaults() 预置 "collapsed"
+  // ——桌面窗口宽度有限，聊天区优先；用户手动展开一次即写回 "open"。
   const inspectorCollapsed = ref(
     localStorage.getItem("wf-inspector") === "collapsed",
   );

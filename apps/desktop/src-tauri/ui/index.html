@@ -74,6 +74,18 @@
         statusText.textContent = text;
       }
 
+      // 给产品页带上外壳标记：support-web 据此把桌面端默认值调成「右侧上下文
+      // 检查器收起」（窗口窄，聊天区优先），浏览器入口不受影响。
+      function withShellMarker(url) {
+        try {
+          const target = new URL(url);
+          target.searchParams.set("shell", "desktop");
+          return target.toString();
+        } catch {
+          return url;
+        }
+      }
+
       function showForm(url, message) {
         form.classList.remove("hidden");
         urlInput.value = url || "";
@@ -94,7 +106,7 @@
         }
         if (reachable) {
           setStatus("ok", "已连接，正在打开 " + url);
-          location.replace(url);
+          location.replace(withShellMarker(url));
           return;
         }
         setStatus("bad", "连接不上 " + url);
@@ -140,7 +152,7 @@
           return;
         }
         setStatus("ok", "已保存，正在打开 " + url);
-        location.replace(url);
+        location.replace(withShellMarker(url));
       });
 
       retryBtn.addEventListener("click", () => {
