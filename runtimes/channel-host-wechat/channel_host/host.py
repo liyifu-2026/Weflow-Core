@@ -277,7 +277,7 @@ class WeChatChannelHost:
 
         self_ref = self._get_self_ref()
         sender_id = message.get("sender_id")
-        is_self = self._is_self_sender(sender_id)
+        is_self = self._is_self_sender(sender_id, conversation_ref)
         # 私聊会话的对端即联系人 wxid：对方消息的 sender_ref 直接用它，
         # 兼容 4.1.15+ 无法从索引反查的 sender_id（如 2）。
         peer_ref = (
@@ -347,51 +347,33 @@ class WeChatChannelHost:
         return self._self_ref or None
 
     def _self_sender_ids(self) -> frozenset:
-        """SenderName2Id 中属于本机账号的 rowid 集合（缓存）。
+        """SenderName2Id 中属于本机账号的 rowid 集合（委托 DB 层，缓存）。
 
-        新版微信（4.1.15+）在 SenderName2Id 里为本机账号保留真实 rowid
-        （如 id=1 → 本机 wxid）；旧版（≤4.1.12）索引中不含本机行，
-        返回空集合，调用方回退到经典约定。
+        判定逻辑与发送回执校验共用 ``WeChatDB.self_sender_ids()``——
+        单一事实源，避免各处再写死「2=自己」。
         """
         if self._self_sender_ids_cache is None:
-            ids: set = set()
-            self_ref = self._get_self_ref()
-            if self_ref:
-                try:
-                    index = self.db._sender_id_index()
-                except Exception:
-                    index = {}
-                if isinstance(index, dict):
-                    for rid, name in index.items():
-                        if name == self_ref:
-                            try:
-                                ids.add(int(rid))
-                            except (TypeError, ValueError):
-                                continue
-            self._self_sender_ids_cache = frozenset(ids)
+            try:
+                self._self_sender_ids_cache = self.db.self_sender_ids()
+            except Exception:
+                self._self_sender_ids_cache = frozenset()
         return self._self_sender_ids_cache
 
-    def _is_self_sender(self, sender_id) -> bool:
-        """消息是否由本机账号发出（自适应新旧 real_sender_id 语义）。
+    def _is_self_sender(self, sender_id, conversation_ref: Optional[str] = None) -> bool:
+        """消息是否由本机账号发出（自适应各版本 real_sender_id 语义）。
 
-        - 新版（4.1.15+，``_self_sender_ids()`` 非空）：以「sender_id ==
-          本机 rowid」判定。经典约定「2=自己」在该代库中已不成立——2
-          可能是对方（实测：本机=1、对方=2）。
-        - 旧版：沿用经典约定「2=自己」。
+        判定逻辑全部委托 ``WeChatDB.is_self_sender``（单一事实源）：索引
+        反查优先，私聊里「非对端即自己」，最后退回经典约定 2=自己。
+        取不到本机身份时保守判 False（宁可当对方消息，不可把对端当自己）。
         """
         if sender_id is None:
             return False
-        self_ref = self._get_self_ref()
-        if self_ref is None:
+        if self._get_self_ref() is None:
             return False
         try:
-            sid_int = int(sender_id)
-        except (TypeError, ValueError):
-            return str(sender_id) == self_ref
-        self_ids = self._self_sender_ids()
-        if self_ids:
-            return sid_int in self_ids
-        return sid_int == 2
+            return bool(self.db.is_self_sender(sender_id, conversation_ref))
+        except Exception:
+            return False
 
     def _get_self_nickname(self) -> Optional[str]:
         """Return the current user's display nickname for @ detection."""

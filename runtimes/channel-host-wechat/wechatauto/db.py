@@ -41,7 +41,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 PAGE_SZ = 4096
 RESERVE_SZ = 80  # IV(16) + HMAC(64)
-STAMP_VERSION = 2  # 解密缓存 stamp 格式版本，改合并逻辑时递增以强制重建
+STAMP_VERSION = 3  # v3: stamp 内 mtime 改用 %r 完整精度（%f 只留 6 位小数，与 Windows 7 位小数比较恒不等→每秒重建缓存→磁盘 50MB/s 读+写）
 CONFIG_CIPHER_NAME = b"com.Tencent.WCDB.Config.Cipher"
 CONFIG_XOR_MASK = bytes.fromhex(
     "d2c7442458020000004889442450488b"
@@ -562,6 +562,94 @@ class WeChatDB:
                 return {"username": row[0], "nick_name": row[1], "remark": row[2]}
         return {"username": self.wxid, "nick_name": "", "remark": ""}
 
+    def self_username(self) -> str:
+        """本机账号 wxid（缓存；读库较慢，供高频的发送者判定复用）。"""
+        if getattr(self, "_self_username_cache", None) is None:
+            try:
+                info = self.get_self_info()
+                self._self_username_cache = (
+                    str(info.get("username") or "") if isinstance(info, dict) else ""
+                )
+            except Exception:
+                self._self_username_cache = ""
+        return self._self_username_cache
+
+    def self_sender_ids(self) -> frozenset:
+        """SenderName2Id 中属于本机账号的 rowid 集合（缓存）。
+
+        新版微信（4.1.15+）在 SenderName2Id 里为本机账号保留真实 rowid
+        （实测：开发机 6、X230 1）；旧版（≤4.1.12）索引不含本机行，返回
+        空集合，调用方回退经典约定「2=自己」。
+        """
+        if getattr(self, "_self_sender_ids_cache", None) is None:
+            ids = set()
+            self_ref = self.self_username()
+            if self_ref:
+                try:
+                    index = self._sender_id_index()
+                except Exception:
+                    index = {}
+                if isinstance(index, dict):
+                    for rid, name in index.items():
+                        if name == self_ref:
+                            try:
+                                ids.add(int(rid))
+                            except (TypeError, ValueError):
+                                continue
+            self._self_sender_ids_cache = frozenset(ids)
+        return self._self_sender_ids_cache
+
+    def contact_sender_ids(self, user_name: str) -> frozenset:
+        """索引中属于某个 wxid 的行号集合（该账号作为发送者可能用的 rowid）。"""
+        if not user_name:
+            return frozenset()
+        try:
+            index = self._sender_id_index()
+        except Exception:
+            return frozenset()
+        if not isinstance(index, dict):
+            return frozenset()
+        return frozenset(
+            int(rid) for rid, name in index.items() if name == user_name
+        )
+
+    def is_self_sender(self, sender_id, conversation_ref: Optional[str] = None) -> bool:
+        """消息是否由本机账号发出（自适应新旧/各版本 real_sender_id 语义）。
+
+        单一事实源：发送回执校验（guia）、事件分类（channel-host）、消息
+        导出全部走这里，避免各处再写死「2=自己」。
+
+        判定顺序（全部基于库内可验证证据，不做版本假设）：
+        1. 字符串身份（wxid/群成员）→ 与 self wxid 相等即自己。
+        2. 数字行号能在 ``SenderName2Id`` 反查到 → 以反查结果为准：
+           反查到自己 = 自己；反查到别人（含私聊对端、群成员）= 不是自己。
+           —— 开发机实测：对端 Leaif 占行号 1、自己发出去的消息是行号 2；
+              X230 实测：行号 2 是对端 Leaif。两者靠索引反查即可区分。
+        3. 行号不在索引里：私聊只有两个参与者，且对端行号已知、不等于是
+           本行号 → 只能是自己（自己发出的消息常不占索引行号）。
+        4. 兜底：经典约定 2=自己（上游文档语义，也是最老库的写法）。
+        """
+        if sender_id is None:
+            return False
+        self_ref = self.self_username()
+        try:
+            sid_int = int(sender_id)
+        except (TypeError, ValueError):
+            return bool(self_ref) and str(sender_id) == self_ref
+        try:
+            index = self._sender_id_index()
+        except Exception:
+            index = {}
+        resolved = index.get(sid_int) if isinstance(index, dict) else None
+        if resolved:
+            return bool(self_ref) and resolved == self_ref
+        if (conversation_ref and self_ref
+                and not conversation_ref.endswith("@chatroom")):
+            peer_ids = self.contact_sender_ids(conversation_ref)
+            if peer_ids and sid_int not in peer_ids:
+                return True
+        return sid_int == 2
+
     def list_contacts(self, after_cursor: str = "", limit: int = 100) -> dict:
         """Return a stable, provider-neutral contact page.
 
@@ -906,7 +994,13 @@ class WeChatDB:
         key = self._keys.get(rel)
         if not key:
             return False
-        path = self._db_path(rel)
+        try:
+            path = self._db_path(rel)
+        except KeyError:
+            # 微信升级/换账号后，旧密钥缓存里可能残留已不存在的库名
+            # （如 message_2.db 被合并/移除）——视为陈旧条目丢弃，
+            # 不得让整个密钥加载流程因此崩掉。
+            return False
         try:
             with open(path, "rb") as f:
                 page1 = f.read(PAGE_SZ)
@@ -1428,7 +1522,7 @@ class WeChatDB:
                 build = False
                 os.makedirs(os.path.dirname(stamp), exist_ok=True)
                 with open(stamp, "w") as f:
-                    f.write("%d,%f,%d,%f,%d,%d"
+                    f.write("%d,%r,%d,%r,%d,%d"
                             % (STAMP_VERSION, src_mtime, src_size, wal_mtime, wal_size, applied))
             elif attempt >= 3:
                 raise RuntimeError("数据库合并失败(文件被微信并发改写): %s" % rel)
@@ -1700,20 +1794,40 @@ class WeChatDB:
                         conn.close()
         return None
 
-    def _shard_rows(self, tables, sql_ext, params=()):
+    # 跨分片统一排序键：分片间 local_id 会重复（每片从 1 起），
+    # 必须在分片内固定 tie-break，否则同一 sort_seq 的先后会随扫描顺序漂移。
+    # 方向选 local_id ASC：实测真实库中 main 的裸扫描在重复 sort_seq 组内
+    # 一律是 local_id 升序（≈rowid 顺序），因此该方向能与旧输出逐条一致
+    # （local_id DESC 会反转这些重复组内的先后）。
+    _MSG_ORDER_DESC = "ORDER BY sort_seq DESC, local_id ASC"
+    _MSG_ORDER_ASC = "ORDER BY sort_seq ASC, local_id ASC"
+
+    def _shard_rows(self, tables, sql_ext, params=(), order_ext="", per_shard_limit=None):
         """跨分片执行统一 SELECT，返回合并后的 sqlite3.Row 列表（调用方后续排序）。
 
         tables: _run_msg_query 传入的 [(conn, table), ...]。
-        分片间 local_id 会重复排序（每片从 1 起），因此调用方必须显式按
-        sort_seq 排序，不能用跨分片 LIMIT/OFFSET 直查。
+        分片间 local_id 会重复（每片从 1 起），因此跨分片排序键必须带上
+        local_id，不能用跨分片 LIMIT/OFFSET 直查。
+
+        order_ext: 分片内 ORDER BY 子句（如 _MSG_ORDER_DESC）。
+        per_shard_limit: 分片内 LIMIT，必须与 order_ext 使用同一排序键。
+            全局前 K 行必然各自落在所属分片按同一排序键的前 K 行内（连同
+            分片顺序，合并后构成 (sort_seq, 分片序, local_id) 全序），
+            因此"先各片取前 K 再合并排序分页"与"全量取回再排序分页"逐条
+            等价，但超大群不必再把每个分片的全部行取回 Python 排序。
+            为 None 时保持原全量行为。
         """
+        limit_sql = ""
+        if per_shard_limit is not None:
+            limit_sql = " LIMIT %d" % max(0, int(per_shard_limit))
         rows = []
         for conn, table in tables:
             try:
                 rows += conn.execute(
                     "SELECT local_id, local_type, real_sender_id, create_time, "
                     "message_content, source, packed_info_data, compress_content, "
-                    "server_id, sort_seq FROM %s %s" % (table, sql_ext),
+                    "server_id, sort_seq FROM %s %s %s%s" % (
+                        table, sql_ext, order_ext, limit_sql),
                     params,
                 ).fetchall()
             except sqlite3.DatabaseError:
@@ -1721,15 +1835,26 @@ class WeChatDB:
         return rows
 
     def get_messages(self, user: str, limit: int = 20, offset: int = 0) -> List[dict]:
-        """读取指定会话（微信号/群号）的最近消息（跨分片合并后按 sort_seq 排序）"""
+        """读取指定会话（微信号/群号）的最近消息（跨分片合并后按 sort_seq 降序）
+
+        优化：分片内先 ORDER BY+LIMIT(limit+offset) 再合并排序取窗口。
+        全局第 offset..offset+limit 行必然落在各分片同一排序键的前
+        limit+offset 行内，因此结果与"全量取回再排序分页"逐条一致，
+        但超大群（数万条）不再把每个分片的全部行取回 Python。
+        合并排序保持与旧实现相同的稳定语义：重复 sort_seq 时先分片顺序、
+        再分片内 local_id 升序（已在分片内 ORDER BY 固定）。
+        """
+        cap = max(0, int(limit)) + max(0, int(offset))
         rows = self._run_msg_query(
             user,
-            lambda tables: self._shard_rows(tables, ""),
+            lambda tables: self._shard_rows(
+                tables, "", order_ext=self._MSG_ORDER_DESC, per_shard_limit=cap,
+            ),
         )
         if not rows:
             return []
         rows.sort(key=lambda r: r["sort_seq"], reverse=True)
-        return [self._msg_row_to_dict(r) for r in rows[offset:offset + limit]]
+        return [self._msg_row_to_dict(r, user) for r in rows[offset:offset + limit]]
 
     def get_message_rows_for_media(self, user: str, local_id: int) -> List[dict]:
         """返回跨分片 local_id 命中的全部消息行（供媒体分发判定类型）。
@@ -1791,7 +1916,7 @@ class WeChatDB:
         row = row[0]
         sender_id = row["real_sender_id"]
         sender_username = ""
-        if sender_id and sender_id != 2:
+        if sender_id and not self.is_self_sender(sender_id, user):
             sender_index = self._sender_id_index()
             sender_username = sender_index.get(int(sender_id), "")
             if not sender_username:
@@ -1831,20 +1956,27 @@ class WeChatDB:
         return [r["local_id"] for r in rows]
 
     def get_new_messages(self, user: str, since_seq: int = 0, limit: int = 200) -> List[dict]:
-        """返回 sort_seq > since_seq 的新消息（升序），供轮询监听使用"""
+        """返回 sort_seq > since_seq 的新消息（升序），供轮询监听使用
+
+        优化：分片内先 ORDER BY+LIMIT 再合并取前 limit 条。排序键同
+        get_messages：分片内 local_id 升序固定 tie-break，跨分片保持
+        稳定合并（先分片顺序），与旧实现逐条一致。
+        """
+        want = max(0, int(limit))
         rows = self._run_msg_query(
             user,
             lambda tables: self._shard_rows(
                 tables, "WHERE sort_seq > ?",
                 (since_seq,),
+                order_ext=self._MSG_ORDER_ASC, per_shard_limit=want,
             ),
         )
         if not rows:
             return []
         rows.sort(key=lambda r: r["sort_seq"])
-        return [self._msg_row_to_dict(r) for r in rows[:limit]]
+        return [self._msg_row_to_dict(r, user) for r in rows[:want]]
 
-    def _msg_row_to_dict(self, r) -> dict:
+    def _msg_row_to_dict(self, r, conversation_ref: Optional[str] = None) -> dict:
         content = r["message_content"]
         mtype = WeChatDB._msg_type_name(r["local_type"])
         if isinstance(content, bytes):
@@ -1864,7 +1996,7 @@ class WeChatDB:
                     content = cc_text
         sender_id = r["real_sender_id"]
         sender_username = ""
-        if sender_id and sender_id != 2:
+        if sender_id and not self.is_self_sender(sender_id, conversation_ref):
             sender_index = self._sender_id_index()
             sender_username = sender_index.get(int(sender_id), "")
             if not sender_username:
@@ -2237,7 +2369,7 @@ class WeChatDB:
         return idx
 
     def _resolve_sender(self, sender_id, sender_index, nicks, self_nick) -> str:
-        if sender_id in (2, "2"):
+        if self.is_self_sender(sender_id):
             return self_nick
         if isinstance(sender_id, int):
             u = sender_index.get(sender_id)

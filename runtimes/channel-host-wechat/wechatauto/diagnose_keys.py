@@ -220,7 +220,18 @@ try:
         else:
             print("extract_master_key: FAILED（微信未运行 / 权限不足 / 版本改动）")
     print("主密钥: %s" % ("已取得（不打印内容）" if master else "无"))
-    print("各账号目录密钥可用性（缓存 / 主密钥现派生）:")
+    # 决定性指标：内存扫描能收集到多少**候选密钥**（未经账号校验）
+    #   = 0        → 该微信构建的 Config.Cipher 结构已漂移（需按 FileVersion 适配扫描锚点）
+    #   > 0 但均不通过 → 候选解析错 / 数据库不属于当前登录账号
+    cands = set()
+    try:
+        cands = db._all_key_candidates()
+        print("内存扫描候选密钥数: %d" % len(cands))
+        if not cands:
+            print("   ⚠ 没扫到任何候选：本构建的 Config.Cipher 布局可能已变（请把 FileVersion 发给维护者）")
+    except Exception as e:
+        print("候选密钥收集失败:", repr(e))
+    print("各账号目录密钥可用性（缓存 / 主密钥现派生 / 候选校验）:")
     for d in _find_account_dirs(db.db_dir):
         acct = os.path.basename(d)
         saved = (db.account, db.account_dir, db._db_files, db._keys,
@@ -246,9 +257,16 @@ try:
             if master:
                 db._keys = db.derive_keys_from_master(master)
                 ok_derived = sum(1 for rel, _, _ in db._db_files if db._key_works(rel))
-            print("   %-34s 库数 %2d  缓存可用 %2d  主密钥派生 %2d %s"
-                  % (acct, len(db._db_files), ok_cache, ok_derived,
-                     "<== 属于此账号" if (ok_cache or ok_derived) else ""))
+            ok_cand = 0
+            if cands:
+                try:
+                    db._keys = db._keys_from_candidates(cands)
+                    ok_cand = sum(1 for rel, _, _ in db._db_files if db._key_works(rel))
+                except Exception:
+                    ok_cand = -1
+            print("   %-34s 库数 %2d  缓存 %2d  派生 %2d  候选 %2d %s"
+                  % (acct, len(db._db_files), ok_cache, ok_derived, ok_cand,
+                     "<== 属于此账号" if (ok_cache or ok_derived or ok_cand) else ""))
         finally:
             (db.account, db.account_dir, db._db_files, db._keys,
              db.workdir, db.keys_file) = saved

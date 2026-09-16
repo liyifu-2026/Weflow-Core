@@ -11,22 +11,22 @@ id=2 实际是私聊对端。旧实现把对方消息误判为 is_self，导致�
 import unittest
 
 from channel_host.host import WeChatChannelHost, _sender_and_content
+from wechatauto.db import WeChatDB
 
 
-class _DbStub:
-    def __init__(self, index):
-        self._index = index
-
-    def get_self_info(self):
-        return {"username": "wxid_self"}
-
-    def _sender_id_index(self):
-        return self._index
+def _db_stub(index, self_wxid="wxid_self"):
+    """真实 WeChatDB 骨架（跳过 __init__/加解密），只喂 sender 索引与自机身份。"""
+    db = WeChatDB.__new__(WeChatDB)
+    db._self_username_cache = None
+    db._self_sender_ids_cache = None
+    db._sender_id_cache = dict(index)      # _sender_id_index() 直接命中缓存
+    db.get_self_info = lambda: {"username": self_wxid}
+    return db
 
 
 def _host(index):
     host = WeChatChannelHost.__new__(WeChatChannelHost)
-    host.db = _DbStub(index)
+    host.db = _db_stub(index)
     host._self_ref = None
     host._self_nickname = None
     host._self_sender_ids_cache = None
@@ -35,17 +35,22 @@ def _host(index):
 
 
 class SenderSemanticsTests(unittest.TestCase):
-    def test_new_wechat_semantics_uses_real_self_rowid(self):
-        # 4.1.15+：索引含本机 rowid（1=本机）；2 是对方，不得视为自己
+    def test_index_resolved_self_rowid_is_self(self):
+        # 行号能反查到本机 → 自己（群消息里常用真实行号）
         host = _host({1: "wxid_self"})
         self.assertTrue(host._is_self_sender(1))
-        self.assertFalse(host._is_self_sender(2))
 
-    def test_legacy_wechat_keeps_classic_two_as_self(self):
-        # ≤4.1.12：索引不含本机行 → 回退经典约定 2=自己
-        host = _host({2: "wxid_someone", 3: "wxid_other"})
-        self.assertTrue(host._is_self_sender(2))
-        self.assertFalse(host._is_self_sender(3))
+    def test_index_resolved_peer_rowid_is_not_self(self):
+        # X230 现场形状：对端占行号 2（索引可反查）→ 不是自己
+        host = _host({1: "wxid_self", 2: "wxid_leaif"})
+        self.assertFalse(host._is_self_sender(2, "wxid_leaif"))
+        self.assertTrue(host._is_self_sender(1, "wxid_leaif"))
+
+    def test_unmapped_sentinel_in_private_chat_is_self(self):
+        # 开发机现场形状：对端占行号 1，自己发出的消息行号是 2（未映射哨兵）
+        host = _host({1: "wxid_leaif", 6: "wxid_self"})
+        self.assertTrue(host._is_self_sender(2, "wxid_leaif"))
+        self.assertFalse(host._is_self_sender(1, "wxid_leaif"))
 
     def test_missing_sender_id_is_not_self(self):
         host = _host({1: "wxid_self"})

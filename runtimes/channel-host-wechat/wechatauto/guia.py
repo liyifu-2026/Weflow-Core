@@ -1754,8 +1754,15 @@ class WeChatGUI:
                 if hits:
                     who = hits[0]["username"]
             msgs = db.get_messages(who, limit=3)
-            for m in msgs:
-                if m.get('sender_id') == 2 and text in (m.get('content') or ''):
+            for pos, m in enumerate(msgs):
+                if text not in (m.get('content') or ''):
+                    continue
+                # 发送者判定走 DB 层自适应（索引反查 + 私聊非对端即自己）
+                if db.is_self_sender(m.get('sender_id'), who):
+                    return True
+                # 兜底：最近一条就是刚写进去的正文——行号语义无法判定时
+                # （微信升级换语义）以「内容 + 时序」为准，不因判定失败误报失败
+                if pos == 0:
                     return True
         except Exception as e:
             wxlog.debug(f'发送校验失败：{e}')
@@ -1983,8 +1990,13 @@ class WeChatGUI:
             deadline = time.time() + (6.0 if is_image else 10.0)
             while time.time() < deadline:
                 # 优先：发送后出现了 sort_seq 更大的同类型消息（图片消息无文件名，只能靠它）
-                for m in db.get_new_messages(who, since_seq=before_seq, limit=8):
-                    if m.get('sender_id') != 2 or m.get('type') != expect_type:
+                rows = db.get_new_messages(who, since_seq=before_seq, limit=8)
+                for pos, m in enumerate(rows):
+                    if m.get('type') != expect_type:
+                        continue
+                    # 发送者判定自适应；行号语义判不出时，最新一条即刚发出去的附件
+                    if not db.is_self_sender(m.get('sender_id'), who) \
+                            and pos != len(rows) - 1:
                         continue
                     # 文件消息再做文件名匹配，图片消息仅凭类型+时序
                     if is_image:

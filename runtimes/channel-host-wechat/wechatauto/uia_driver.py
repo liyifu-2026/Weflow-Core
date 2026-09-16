@@ -91,6 +91,39 @@ def _title_is_main(title: str) -> bool:
     return any(hint in title for hint in MAIN_NAME_HINTS)
 
 
+# ---------------------------------------------------------------------------
+# 主窗口判定：**不能依赖窗口标题**
+# 微信 4.x 主窗口标题是当前账号昵称（实测客服号标题为「客服」），
+# 旧版逻辑要求标题含「微信/Weixin」，会把主窗口整个漏掉 → UIA 永远
+# 不可用、退化到 OCR 物理鼠标路径。改为「进程名 + 窗口类 + 尺寸」判定：
+#   * 进程：weixin.exe（辅助进程另有其名）
+#   * 类名：Qt51514QWindowIcon（Qt 大版本升级会改名，故按前缀 Qt + 后缀
+#     QWindowIcon 匹配）／物化后变成 mmui::MainWindow
+#   * 尺寸：主窗口边长 ≥ MIN_WINDOW_EDGE（托盘/提示窗都是小窗）
+# 标题命中只作为额外放行条件，不再作为必需条件。
+# ---------------------------------------------------------------------------
+WECHAT_EXE_NAME = "weixin.exe"
+QT_WINDOW_CLASS_SUFFIX = "QWindowIcon"
+MMUI_CLASS_PREFIX = "mmui::"
+MIN_WINDOW_EDGE = 300
+
+
+def _looks_like_wechat_window(title: str, cls: str, exe_name: str,
+                              width: int, height: int) -> bool:
+    """微信主窗口/主界面窗口判定（纯函数，便于单测；可见性由调用方判断）。"""
+    if (exe_name or "").lower() != WECHAT_EXE_NAME:
+        return False
+    if width < MIN_WINDOW_EDGE or height < MIN_WINDOW_EDGE:
+        return False
+    cls = cls or ""
+    if cls.startswith(MMUI_CLASS_PREFIX):          # 已物化：mmui::MainWindow
+        return True
+    if cls.startswith("Qt") and cls.endswith(QT_WINDOW_CLASS_SUFFIX):
+        return True
+    return _title_is_main(title or "")
+
+
+
 def _aid_hit(aid: str, candidates) -> bool:
     """AutomationId 容错匹配（新旧版通用）。
 
@@ -153,6 +186,7 @@ SPIF_SENDCHANGE = 0x02
 QACCESSIBLE_ACTIVE_RVA_BY_VERSION = {
     "4.1.11.22": 0x0A1E7DB8,
     "4.1.13.65": 0x0AE2B0C8,   # 2026-09-12 实测：热写后 mmui 树立即物化
+    "4.1.15.8": 0x0B125C38,    # 2026-09-16 实测：热写后 mmui 树立即物化
 }
 QACCESSIBLE_CORE_STRING = b"qt.accessibility.core"
 QACCESSIBLE_GATE_PATTERN = re.compile(
@@ -164,6 +198,13 @@ QACCESSIBLE_GATE_PATTERN = re.compile(
 # 已验证的 gate RVA：按 Weixin.dll 身份（版本目录+大小+mtime）缓存。
 # 好处：换版本后优先使用上次真正生效过的地址；命中时无需重扫 198MB DLL。
 _VERIFIED_GATE_RVA: Dict[str, int] = {}
+
+# pid → 进程可执行文件名（小写）缓存；窗口枚举高频调用，避免反复 OpenProcess
+_EXE_NAME_CACHE: Dict[int, str] = {}
+
+# Weixin.dll 身份 → 特征扫描候选结果。扫描要读整个 DLL（约 200MB，数秒），
+# 而热激活在树退化时会被反复触发，故按身份缓存扫描结果。
+_SCAN_CANDIDATES_CACHE: Dict[str, Tuple[int, ...]] = {}
 
 
 def _dll_identity(dll_path: str) -> str:
@@ -444,11 +485,10 @@ class WeChatUIA:
         if not candidates:
             return ()
         candidates.sort(key=lambda item: item[0])
-        # 优先取与 qt.accessibility.core 同一代码岛（≤0x20000）的候选；
-        # 一个都没有时退化为全部候选，交给热写校验兜底
-        near = [rva for dist, rva in candidates if dist <= 0x20000]
-        ordered = near or [rva for _dist, rva in candidates]
-        return tuple(dict.fromkeys(ordered))
+        # 近距候选（与 qt.accessibility.core 同一代码岛）优先，但**不丢弃**
+        # 远距候选：版本升级后 gate 会漂移，调用方逐个热写并用「mmui 树
+        # 是否真的物化」判定，写错即回滚后继续下一个。
+        return tuple(dict.fromkeys(rva for _dist, rva in candidates))
 
     @staticmethod
     def _scan_qaccessible_active_rva(dll_path: str) -> Optional[int]:
@@ -457,20 +497,39 @@ class WeChatUIA:
         return cands[0] if cands else None
 
     @staticmethod
+    def _iter_gate_candidates(dll_path: str):
+        """gate RVA 候选的惰性序列：已验证缓存 > 版本实测表 > 特征扫描。
+
+        扫描要读整个 Weixin.dll（约 200MB、数秒），因此放在最后且惰性求值：
+        版本表命中时（含本次实测的 4.1.15.8）根本不会触发扫描；版本升级导致
+        表失效时才扫描找新地址。
+        """
+        seen = set()
+
+        def _yield(rva):
+            if rva is None:
+                return None
+            rva = int(rva)
+            if rva in seen:
+                return None
+            seen.add(rva)
+            return rva
+
+        for rva in (_VERIFIED_GATE_RVA.get(_dll_identity(dll_path)),
+                    QACCESSIBLE_ACTIVE_RVA_BY_VERSION.get(
+                        os.path.basename(os.path.dirname(dll_path)))):
+            v = _yield(rva)
+            if v is not None:
+                yield v
+        for rva in WeChatUIA._scan_qaccessible_candidates(dll_path) or ():
+            v = _yield(rva)
+            if v is not None:
+                yield v
+
+    @staticmethod
     def _qaccessible_candidate_rvas(dll_path: str) -> List[int]:
-        """gate RVA 候选序列：已验证缓存 > 特征扫描 > 版本兜底表。"""
-        out: List[int] = []
-        cached = _VERIFIED_GATE_RVA.get(_dll_identity(dll_path))
-        if cached is not None:
-            out.append(int(cached))
-        for rva in WeChatUIA._scan_qaccessible_candidates(dll_path):
-            if int(rva) not in out:
-                out.append(int(rva))
-        version = os.path.basename(os.path.dirname(dll_path))
-        fallback = QACCESSIBLE_ACTIVE_RVA_BY_VERSION.get(version)
-        if fallback is not None and int(fallback) not in out:
-            out.append(int(fallback))
-        return out
+        """gate RVA 候选全量列表（含特征扫描；测试/诊断用）。"""
+        return list(WeChatUIA._iter_gate_candidates(dll_path))
 
     @staticmethod
     def _qaccessible_active_rva(dll_path: str) -> Optional[int]:
@@ -540,10 +599,7 @@ class WeChatUIA:
             wxlog.warning("热激活 UIA 失败：PID %s 未找到 Weixin.dll。", pid)
             return False
         base, _size, dll_path = mod
-        candidates = self._qaccessible_candidate_rvas(dll_path)[:max_candidates]
-        if not candidates:
-            wxlog.warning("热激活 UIA 失败：不支持的 Weixin.dll 版本路径 %s。", dll_path)
-            return False
+        candidates = self._iter_gate_candidates(dll_path)
 
         access = (PROCESS_QUERY_INFORMATION | PROCESS_VM_READ |
                   PROCESS_VM_WRITE | PROCESS_VM_OPERATION)
@@ -557,7 +613,11 @@ class WeChatUIA:
             wxlog.warning("热激活 UIA 失败：无法打开 Weixin.exe PID %s。", pid)
             return False
         try:
+            tried = 0
             for rva in candidates:
+                if tried >= max_candidates:
+                    break
+                tried += 1
                 address = int(base) + int(rva)
                 current = self._read_process_byte(handle, address)
                 if current is None:
@@ -572,7 +632,7 @@ class WeChatUIA:
                                pid, rva, current)
                 if not verify:
                     return True
-                if self._mmui_present(hwnd):
+                if self._any_mmui_present():
                     _VERIFIED_GATE_RVA[_dll_identity(dll_path)] = int(rva)
                     wxlog.info("UIA 树已物化，已记录 gate RVA：Weixin.dll+0x%x", rva)
                     return True
@@ -580,17 +640,36 @@ class WeChatUIA:
                 if wrote:
                     self._write_process_byte(handle, address, original)
             wxlog.warning("热激活 UIA 失败：%d 个候选均未使 mmui 树物化（%s）。",
-                          len(candidates), os.path.basename(dll_path))
+                          tried, os.path.basename(dll_path))
             return False
         finally:
             kernel32.CloseHandle(handle)
+
+    def _any_mmui_present(self, timeout: float = 1.5) -> bool:
+        """任一微信窗口物化出 mmui 控件即视为激活成功（进程级全局开关）。
+
+        gate byte 是进程级全局量，校验不能只盯着调用方传入的单个句柄：
+        曾出现「传进来的句柄不是主窗口 → 写对了字节却判定失败 → 回滚」，
+        表现为 UIA 永远不可用（4.1.15.8 上就是这么被掩盖的）。
+        """
+        deadline = time.time() + max(0.1, timeout)
+        while True:
+            for h in self._wechat_hwnds():
+                if self._mmui_present(h, timeout=0.05):
+                    return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.2)
 
     def _wake_accessibility(self) -> bool:
         """确保 mmui 树物化：设系统读屏标志 + 逐窗口热写并校验（含候选重试）。"""
         self._set_screen_reader_flag(True)
         ok = False
         for hwnd in self._wechat_hwnds():
-            ok = self._hot_activate_accessibility(hwnd) or ok
+            # gate 是进程级开关，任一窗口激活成功即可停止
+            if self._hot_activate_accessibility(hwnd):
+                ok = True
+                break
         if ok:
             self._win = None
             time.sleep(0.2)
@@ -598,29 +677,71 @@ class WeChatUIA:
 
     # ------------------------------------------------------------------ 窗口定位
     def _wechat_hwnds(self):
+        """微信主界面候选窗口（面积降序）。
+
+        判定见 ``_looks_like_wechat_window``：不要求标题含“微信”，否则
+        昵称即标题的账号（如客服号标题「客服」）会整个漏掉。
+        """
         if not _HAS_WIN32:
             return []
         res = []
 
         def cb(h, _):
             try:
+                if not win32gui.IsWindowVisible(h):
+                    return True
+                cls = win32gui.GetClassName(h)
                 title = win32gui.GetWindowText(h)
-                if win32gui.IsWindowVisible(h) and _title_is_main(title):
-                    # 只保留加载了 Weixin.dll 的主进程窗口，过滤掉无 DLL 的
-                    # 辅助进程窗口（其热激活必然失败，只会产生噪音警告）
-                    pid = self._pid_from_hwnd(h)
-                    if pid and self._weixin_dll_module(pid):
-                        l, t, r, b = win32gui.GetWindowRect(h)
-                        res.append(((r - l) * (b - t), h))
+                pid = self._pid_from_hwnd(h)
+                if not pid:
+                    return True
+                exe = self._process_exe_name(pid)
+                if not exe:
+                    return True
+                l, t, r, b = win32gui.GetWindowRect(h)
+                if not _looks_like_wechat_window(title, cls, exe, r - l, b - t):
+                    return True
+                # 只保留加载了 Weixin.dll 的主进程窗口，过滤掉无 DLL 的
+                # 辅助进程窗口（其热激活必然失败，只会产生噪音警告）
+                if self._weixin_dll_module(pid):
+                    res.append(((r - l) * (b - t), h))
             except Exception:
                 pass
             return True
+
         try:
             win32gui.EnumWindows(cb, None)
         except Exception:
             pass
         res.sort(reverse=True)
         return [h for _, h in res]
+
+    @staticmethod
+    def _process_exe_name(pid: int) -> str:
+        """pid → 可执行文件名（小写）；带缓存，避免每次枚举都 OpenProcess。"""
+        if pid in _EXE_NAME_CACHE:
+            return _EXE_NAME_CACHE[pid]
+        name = ""
+        try:
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if h:
+                try:
+                    buf = ctypes.create_unicode_buffer(1024)
+                    size = wintypes.DWORD(1024)
+                    if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                        name = os.path.basename(buf.value).lower()
+                finally:
+                    kernel32.CloseHandle(h)
+        except Exception:
+            name = ""
+        if name:
+            # 进程pid会被复用，缓存封顶防止长期进程里无限增长
+            if len(_EXE_NAME_CACHE) > 256:
+                _EXE_NAME_CACHE.clear()
+            _EXE_NAME_CACHE[pid] = name
+        return name
 
     def _anchor(self, hwnd):
         try:
