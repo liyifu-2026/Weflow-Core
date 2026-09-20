@@ -5,8 +5,7 @@
  */
 
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
+import type { BusinessDb } from "../../identity/application/db.js";
 import {
   authenticate,
   type AuthenticatedUser,
@@ -23,7 +22,7 @@ export type RequestIdentity = {
 
 /** 从请求头或 Cookie 中提取并验证用户身份，未认证时返回 undefined */
 export async function requestIdentity(
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   request: FastifyRequest,
 ): Promise<RequestIdentity | undefined> {
   const token =
@@ -45,7 +44,7 @@ function bearerToken(header: string | undefined): string | undefined {
  * 未认证返回 401，需要修改密码时返回 403。
  */
 export async function requireBusinessIdentity(
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<RequestIdentity | undefined> {
@@ -63,7 +62,7 @@ export async function requireBusinessIdentity(
 
 /** 强制要求管理员身份。业务身份通过后再做角色判断，默认拒绝。 */
 export async function requireAdminIdentity(
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<RequestIdentity | undefined> {

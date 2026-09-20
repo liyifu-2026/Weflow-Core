@@ -6,9 +6,8 @@
  * They must NOT import from infrastructure/postgres/schema or call Drizzle ORM.
  */
 import type { FastifyInstance } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { BusinessDb } from "../../identity/application/db.js";
 import { z } from "zod";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
 import {
   requireAdminIdentity,
   requireBusinessIdentity,
@@ -42,9 +41,9 @@ import {
   probeModelAndRecord,
 } from "../application/model-failover.js";
 import {
-  readSolutionExtensionSettings,
-  writeSolutionExtensionSettings,
-} from "../../../infrastructure/settings/extension-settings.js";
+  getExtensionSettings,
+  putExtensionSettings,
+} from "../application/extension-settings-service.js";
 import {
   readAdminOverview,
   readRuntimeStatuses,
@@ -80,7 +79,7 @@ const modelRegistryUpsertSchema = z
 
 export function registerOperationsRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   capabilities: RuntimeCapabilities,
 ): void {
   server.get("/api/v1/system/status", async (request, reply) => {
@@ -332,11 +331,11 @@ export function registerOperationsRoutes(
         .safeParse(request.params);
       if (!params.success)
         return reply.code(400).send({ error: "invalid_request" });
-      const settings = await readSolutionExtensionSettings(db, {
+      const settings = await getExtensionSettings(db, {
         solutionId: params.data.solutionId,
         extensionId: params.data.extensionId,
       });
-      return { settings: settings ?? {} };
+      return { settings };
     },
   );
 
@@ -358,11 +357,12 @@ export function registerOperationsRoutes(
         .safeParse(request.body);
       if (!params.success || !body.success)
         return reply.code(400).send({ error: "invalid_request" });
-      await writeSolutionExtensionSettings(db, {
+      await putExtensionSettings(db, {
         solutionId: params.data.solutionId,
         extensionId: params.data.extensionId,
         settingsJson: body.data.settings,
         updatedBy: identity.user.userId,
+        sourceIp: request.ip,
       });
       return { ok: true };
     },

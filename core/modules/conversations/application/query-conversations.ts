@@ -19,6 +19,7 @@ import {
   type SQL,
   type SQLWrapper,
 } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { groupDisplayName } from "../../contacts/application/group-display-name.js";
@@ -522,10 +523,15 @@ export async function searchSharedConversations(
   }));
 }
 
-/** 设置当前用户的会话隐藏状态。 */
+/** 设置当前用户的会话隐藏状态（隐藏/恢复均记审计）。 */
 export async function setConversationHidden(
   db: NodePgDatabase<typeof schema>,
-  input: { userId: string; conversationId: string; hidden: boolean },
+  input: {
+    userId: string;
+    conversationId: string;
+    hidden: boolean;
+    sourceIp?: string | undefined;
+  },
 ) {
   const [conversation] = await db
     .select({ conversationId: schema.conversations.conversationId })
@@ -551,6 +557,15 @@ export async function setConversationHidden(
         ),
       );
   }
+  await db.insert(schema.auditEvents).values({
+    auditId: randomUUID(),
+    actorUserId: input.userId,
+    eventType: input.hidden ? "conversation.hidden" : "conversation.restored",
+    subjectType: "conversation",
+    subjectId: input.conversationId,
+    sourceIp: input.sourceIp ?? null,
+    metadata: { hidden: String(input.hidden) },
+  });
   return { conversationId: input.conversationId, hidden: input.hidden };
 }
 

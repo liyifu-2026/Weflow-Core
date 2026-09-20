@@ -4,13 +4,9 @@
  * 所有路由均需业务身份认证。
  */
 
-import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
-import * as databaseSchema from "../../../infrastructure/postgres/schema.js";
+import type { BusinessDb } from "../../identity/application/db.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 import { requireAdminIdentity } from "../../identity/interface/request-authentication.js";
 import {
@@ -26,9 +22,11 @@ import {
   searchSharedConversations,
   setConversationHidden,
 } from "../application/query-conversations.js";
-import { ChannelSendRejectedError } from "../../channel/contracts/channel-send-operations.js";
-import { ChannelProviderError } from "../../../infrastructure/channel/http-channel-provider.js";
-import type { HttpChannelProvider } from "../../../infrastructure/channel/http-channel-provider.js";
+import {
+  requestChannelBackfillSync,
+  sendConversationPoke,
+  type ChannelActionsPort,
+} from "../application/channel-actions.js";
 
 const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -105,8 +103,8 @@ const visibilityBody = z.object({ hidden: z.boolean() }).strict();
  *  此接缝——认证、协议校验与错误翻译不再被路由层裸 fetch 绕过。 */
 export function registerConversationRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
-  channelProvider?: HttpChannelProvider,
+  db: BusinessDb,
+  channelProvider?: ChannelActionsPort,
 ): void {
   server.get("/api/v1/conversations", async (request, reply) => {
     const identity = await requireBusinessIdentity(db, request, reply);
@@ -178,20 +176,10 @@ export function registerConversationRoutes(
         userId: identity.user.userId,
         conversationId: params.data.conversationId,
         hidden: body.data.hidden,
+        sourceIp: request.ip,
       });
       if (!visibility)
         return reply.code(404).send({ error: "conversation_not_found" });
-      await db.insert(databaseSchema.auditEvents).values({
-        auditId: randomUUID(),
-        actorUserId: identity.user.userId,
-        eventType: body.data.hidden
-          ? "conversation.hidden"
-          : "conversation.restored",
-        subjectType: "conversation",
-        subjectId: params.data.conversationId,
-        sourceIp: request.ip,
-        metadata: { hidden: String(body.data.hidden) },
-      });
       return { visibility };
     },
   );
@@ -339,22 +327,16 @@ export function registerConversationRoutes(
     if (!channelProvider) {
       return reply.code(503).send({ error: "channel_host_not_configured" });
     }
-    // 走 provider 接缝：认证/超时/传输错误翻译集中一处（曾为裸 fetch）。
-    try {
-      const result = await channelProvider.requestBackfillSync();
-      return await reply.send({
-        synced: true,
-        started: result.started,
-      });
-    } catch (error) {
-      if (error instanceof ChannelProviderError) {
-        return reply.code(error.httpStatus ?? 502).send({
-          error: "channel_sync_failed",
-          message: error.message,
-        });
-      }
-      throw error;
+    const result = await requestChannelBackfillSync(channelProvider);
+    if (result.status === "provider_error") {
+      return reply
+        .code(result.error.httpStatus ?? 502)
+        .send({ error: "channel_sync_failed", message: result.error.message });
     }
+    return await reply.send({
+      synced: true,
+      started: result.started,
+    });
   });
 
   /**
@@ -374,69 +356,23 @@ export function registerConversationRoutes(
       if (!params.success) {
         return reply.code(400).send({ error: "invalid_request" });
       }
-      const conversationId = params.data.conversationId;
-      // 验证会话存在且用户有接管权限
-      const conversation = await db
-        .select({
-          channelConversationId:
-            databaseSchema.conversations.channelConversationId,
-          channelAccount: databaseSchema.conversations.channelAccount,
-        })
-        .from(databaseSchema.conversations)
-        .where(eq(databaseSchema.conversations.conversationId, conversationId))
-        .limit(1);
-      if (!conversation[0]) {
+      const result = await sendConversationPoke(db, channelProvider, {
+        conversationId: params.data.conversationId,
+        operatorUserId: identity.user.userId,
+      });
+      if (result.status === "conversation_not_found") {
         return reply.code(404).send({ error: "conversation_not_found" });
       }
-      const handoff = await db
-        .select({
-          status: databaseSchema.handoffStates.status,
-          assignedUserId: databaseSchema.handoffStates.assignedUserId,
-        })
-        .from(databaseSchema.handoffStates)
-        .where(eq(databaseSchema.handoffStates.conversationId, conversationId))
-        .limit(1);
-      if (
-        !handoff[0] ||
-        handoff[0].status !== "in_progress" ||
-        handoff[0].assignedUserId !== identity.user.userId
-      ) {
+      if (result.status === "not_assignee") {
         return reply.code(403).send({ error: "handoff_not_assignee" });
       }
-      // 走 Channel Send 接缝（provider.create）：协议校验、认证与错误翻译
-      // 与出站链路同源（曾为路由层裸 fetch，绕过全部护栏）。
-      const operationId = `poke:${randomUUID()}`;
-      const channelConversationId = conversation[0].channelConversationId;
-      const account = conversation[0].channelAccount;
-      try {
-        const operation = await channelProvider.create({
-          operationId,
-          conversationRef: channelConversationId,
-          ...(account ? { account } : {}),
-          payload: { kind: "poke" },
+      if (result.status === "provider_error") {
+        return reply.code(result.error.httpStatus ?? 502).send({
+          error: result.error.errorCode,
+          message: result.error.message,
         });
-        return await reply.code(202).send({
-          poke: {
-            operationId: operation.operationId,
-            state: operation.state,
-            channelMessageId: operation.channelMessageId ?? null,
-          },
-        });
-      } catch (error) {
-        if (error instanceof ChannelSendRejectedError) {
-          return reply.code(error.httpStatus).send({
-            error: "poke_failed",
-            message: error.message,
-          });
-        }
-        if (error instanceof ChannelProviderError) {
-          return reply.code(error.httpStatus ?? 502).send({
-            error: "channel_host_error",
-            message: error.message,
-          });
-        }
-        throw error;
       }
+      return await reply.code(202).send({ poke: result.operation });
     },
   );
 }

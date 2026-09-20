@@ -5,14 +5,8 @@
  */
 
 import type { FastifyInstance, FastifyReply } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
-import { Readable } from "node:stream";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
-import * as databaseSchema from "../../../infrastructure/postgres/schema.js";
-import type { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
+import type { BusinessDb } from "../application/db.js";
 import {
   changePassword,
   listTagVocabulary,
@@ -21,19 +15,20 @@ import {
   MAX_AGENT_TAGS,
   setUserAvatarPreset,
   updateProfile,
-  userAvatarUrl,
 } from "../application/identity-service.js";
 import {
-  defaultUserAvatarPreset,
-  fallbackPresetSvg,
   USER_AVATAR_PRESETS,
-  userAvatarPresetById,
   userAvatarPresetUrl,
 } from "../application/avatar-presets.js";
 import {
   fetchDiceBearSvg,
   isDiceBearStyle,
 } from "../application/dicebear-avatars.js";
+import {
+  resolveUserAvatar,
+  uploadUserAvatar,
+  type AvatarFileStore,
+} from "../application/avatar-service.js";
 import {
   clearSessionCookie,
   requireAdminIdentity,
@@ -118,24 +113,10 @@ function sendUserAvatarSvg(reply: FastifyReply, svg: string): void {
   reply.send(svg);
 }
 
-/**
- * 取预设头像 SVG：优先 DiceBear 代理缓存；上游不可达时用本地降级 SVG，
- * 保证头像端点始终有内容（绝不 404/500）。
- */
-async function resolvePresetSvg(
-  presetId: string,
-): Promise<{ svg: string; fromProxy: boolean } | undefined> {
-  const preset = userAvatarPresetById(presetId);
-  if (!preset) return undefined;
-  const proxied = await fetchDiceBearSvg("blobs", preset.seed);
-  if (proxied) return { svg: proxied, fromProxy: true };
-  return { svg: fallbackPresetSvg(preset), fromProxy: false };
-}
-
 export function registerIdentityRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
-  fileStorage?: LocalFileStorage,
+  db: BusinessDb,
+  fileStorage?: AvatarFileStore,
 ): void {
   server.post("/api/v1/auth/login", async (request, reply) => {
     const parsed = loginBody.safeParse(request.body);
@@ -232,59 +213,14 @@ export function registerIdentityRoutes(
       if (buffer.length === 0 || buffer.length > AVATAR_MAX_BYTES) {
         return reply.code(413).send({ error: "upload_too_large" });
       }
-      const stored = await fileStorage.write(
-        Readable.from(buffer),
-        file.filename,
-        file.mimetype,
-      );
-      let avatarUpdatedAt = new Date();
-      try {
-        await db.transaction(async (transaction) => {
-          await transaction.insert(databaseSchema.storedFiles).values({
-            fileId: stored.fileId,
-            ownerModule: "identity",
-            originalName: stored.originalName,
-            mimeType: stored.mimeType,
-            size: stored.size,
-            checksum: stored.checksum,
-            storageKey: stored.storageKey,
-            createdByUserId: identity.user.userId,
-          });
-          const updatedRows = await transaction
-            .update(databaseSchema.users)
-            .set({
-              avatarFileId: stored.fileId,
-              // 上传与预设二选一：自定义上传生效时清掉预设引用
-              avatarPreset: null,
-              updatedAt: new Date(),
-            })
-            .where(eq(databaseSchema.users.userId, identity.user.userId))
-            .returning({ updatedAt: databaseSchema.users.updatedAt });
-          const updatedUser = updatedRows[0];
-          if (!updatedUser) {
-            throw new Error(`user ${identity.user.userId} does not exist`);
-          }
-          avatarUpdatedAt = updatedUser.updatedAt;
-          await transaction.insert(databaseSchema.auditEvents).values({
-            auditId: randomUUID(),
-            actorUserId: identity.user.userId,
-            eventType: "identity.avatar_updated",
-            subjectType: "user",
-            subjectId: identity.user.userId,
-            sourceIp: request.ip,
-            metadata: { fileId: stored.fileId },
-          });
-        });
-      } catch (reason) {
-        await fileStorage.remove(stored.storageKey).catch(() => undefined);
-        throw reason;
-      }
-      return {
-        avatarUrl: userAvatarUrl({
-          userId: identity.user.userId,
-          updatedAt: avatarUpdatedAt,
-        }),
-      };
+      const result = await uploadUserAvatar(db, fileStorage, {
+        userId: identity.user.userId,
+        filename: file.filename,
+        mimeType: file.mimetype,
+        buffer,
+        sourceIp: request.ip,
+      });
+      return { avatarUrl: result.avatarUrl };
     });
   }
 
@@ -333,56 +269,21 @@ export function registerIdentityRoutes(
     if (!params.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    const rows = await db
-      .select({
-        username: databaseSchema.users.username,
-        avatarPreset: databaseSchema.users.avatarPreset,
-        storageKey: databaseSchema.storedFiles.storageKey,
-        mimeType: databaseSchema.storedFiles.mimeType,
-      })
-      .from(databaseSchema.users)
-      .leftJoin(
-        databaseSchema.storedFiles,
-        eq(
-          databaseSchema.storedFiles.fileId,
-          databaseSchema.users.avatarFileId,
-        ),
-      )
-      .where(eq(databaseSchema.users.userId, params.data.userId))
-      .limit(1);
-    const user = rows[0];
-    if (!user) {
+    const content = await resolveUserAvatar(
+      db,
+      fileStorage,
+      params.data.userId,
+    );
+    if (!content) {
       return reply.code(404).send({ error: "avatar_not_found" });
     }
-
-    // 1) 自定义上传（文件丢失时继续回落后续来源，不 404）
-    if (fileStorage && user.storageKey) {
-      if (await fileStorage.exists(user.storageKey)) {
-        reply.header("content-type", user.mimeType ?? "image/jpeg");
-        reply.header("cache-control", "private, no-store");
-        reply.header("x-content-type-options", "nosniff");
-        return reply.send(fileStorage.read(user.storageKey));
-      }
+    if (content.kind === "file") {
+      reply.header("content-type", content.mimeType);
+      reply.header("cache-control", "private, no-store");
+      reply.header("x-content-type-options", "nosniff");
+      return reply.send(content.stream);
     }
-
-    // 2) 已选平台预设（未知 id 时回落默认）
-    if (user.avatarPreset) {
-      const resolved = await resolvePresetSvg(user.avatarPreset);
-      if (resolved) {
-        sendUserAvatarSvg(reply, resolved.svg);
-        return;
-      }
-    }
-
-    // 3) 默认预设：按用户名哈希稳定分配，保证同一客服始终同一头像
-    const fallback = await resolvePresetSvg(
-      defaultUserAvatarPreset(user.username).id,
-    );
-    sendUserAvatarSvg(
-      reply,
-      fallback?.svg ??
-        fallbackPresetSvg(defaultUserAvatarPreset(user.username)),
-    );
+    sendUserAvatarSvg(reply, content.svg);
   });
 
   // DiceBear 头像代理（平台中立）：前端统一经此取确定性生成头像，

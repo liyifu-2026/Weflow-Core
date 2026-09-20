@@ -7,7 +7,7 @@
  * - 访问/刷新令牌与合成密码以 AES-256-GCM 密文存 knora_accounts，
  *   缓存 22h 内直接复用，过期后用合成密码重新登录
  */
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
@@ -149,11 +149,63 @@ export class KnoraAccountService {
   async bootstrap(
     user: AuthenticatedUser,
     password: string,
+    audit?: { actorUserId: string; sourceIp: string },
   ): Promise<KnoraSessionPayload> {
     const email = this.emailFor(user.username);
     const tokens = await knoraLogin(this.upstream, { email, password });
     await this.persistAccount(user, email, password, tokens);
+    if (audit) {
+      await this.db.insert(schema.auditEvents).values({
+        auditId: randomUUID(),
+        actorUserId: audit.actorUserId,
+        eventType: "knora.account_bootstrap",
+        subjectType: "user",
+        subjectId: user.userId,
+        sourceIp: audit.sourceIp,
+        metadata: { email },
+      });
+    }
     return this.buildPayload(tokens);
+  }
+
+  /**
+   * 交换入口：按 weflow userId 取 active 用户 → 会话载荷 + 审计。
+   * 用户缺失/非 active 抛 Error("weflow user unavailable")；
+   * 注册冲突抛 KnoraBootstrapRequiredError，由调用方按 409 引导绑定。
+   */
+  async resolveSessionForUser(input: {
+    userId: string;
+    actorUserId: string | null;
+    sourceIp: string | null;
+  }): Promise<KnoraSessionPayload> {
+    const [user] = await this.db
+      .select()
+      .from(schema.users)
+      .where(eq(schema.users.userId, input.userId))
+      .limit(1);
+    if (!user || user.status !== "active") {
+      throw new Error("weflow user unavailable");
+    }
+    const payload = await this.sessionFor({
+      userId: user.userId,
+      username: user.username,
+      role: user.role as "admin" | "operator",
+      mustChangePassword: user.mustChangePassword,
+      avatarUrl: null,
+      avatarPreset: user.avatarPreset,
+      displayName: user.displayName,
+      tags: user.tags,
+    });
+    await this.db.insert(schema.auditEvents).values({
+      auditId: randomUUID(),
+      actorUserId: input.actorUserId,
+      eventType: "knora.session_exchanged",
+      subjectType: "user",
+      subjectId: input.userId,
+      sourceIp: input.sourceIp,
+      metadata: { email: this.emailFor(user.username) },
+    });
+    return payload;
   }
 
   private async persistAccount(
