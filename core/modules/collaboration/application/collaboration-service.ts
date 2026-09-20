@@ -267,6 +267,11 @@ export async function claimCollaborationRequest(
       return { status: "ok", replayed: true, request };
     }
     if (request.status !== "pending") return { status: "invalid_transition" };
+    // 校验阶段记下的 handoff 快照：后续 UPDATE 的 WHERE 携带同一组谓词，
+    // 关闭「校验后被并发写手改写仍覆盖」的窗口（与 escalateHandoff 同源）。
+    let claimedHandoff:
+      | { handoffRevision: number; status: string; assignedQueueId: string }
+      | undefined;
     if (request.kind === "escalation") {
       const [handoff] = await transaction
         .select()
@@ -280,6 +285,11 @@ export async function claimCollaborationRequest(
         handoff.assignedQueueId !== request.queueId
       )
         return { status: "invalid_transition" };
+      claimedHandoff = {
+        handoffRevision: handoff.handoffRevision,
+        status: handoff.status,
+        assignedQueueId: handoff.assignedQueueId,
+      };
     }
     const [claimed] = await transaction
       .update(schema.collaborationRequests)
@@ -305,7 +315,7 @@ export async function claimCollaborationRequest(
         userId: input.actorUserId,
       })
       .onConflictDoNothing();
-    if (request.kind === "escalation") {
+    if (request.kind === "escalation" && claimedHandoff) {
       await transaction
         .update(schema.handoffStates)
         .set({
@@ -315,7 +325,20 @@ export async function claimCollaborationRequest(
           acceptedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(schema.handoffStates.conversationId, request.conversationId));
+        .where(
+          and(
+            eq(schema.handoffStates.conversationId, request.conversationId),
+            eq(
+              schema.handoffStates.handoffRevision,
+              claimedHandoff.handoffRevision,
+            ),
+            eq(schema.handoffStates.status, claimedHandoff.status),
+            eq(
+              schema.handoffStates.assignedQueueId,
+              claimedHandoff.assignedQueueId,
+            ),
+          ),
+        );
       await transaction
         .update(schema.handoffCycles)
         .set({
@@ -325,7 +348,12 @@ export async function claimCollaborationRequest(
           acceptedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(schema.handoffCycles.cycleId, request.handoffCycleId));
+        .where(
+          and(
+            eq(schema.handoffCycles.cycleId, request.handoffCycleId),
+            eq(schema.handoffCycles.status, "pending"),
+          ),
+        );
       await transaction.insert(schema.handoffEvents).values({
         eventId: collaborationHandoffEventId("claimed", request.requestId),
         cycleId: request.handoffCycleId,

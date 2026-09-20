@@ -40,6 +40,7 @@ import { registerConsoleEventRoutes } from "../../modules/console-events/interfa
 import { startConversationEventBus } from "../../infrastructure/events/conversation-events.js";
 import { registerHandoffRoutes } from "../../modules/handoff/interface/http-routes.js";
 import { registerIdentityRoutes } from "../../modules/identity/interface/http-routes.js";
+import { configureSessionCookies } from "../../modules/identity/interface/request-authentication.js";
 import { registerContactProfileRoutes } from "../../modules/contacts/interface/http-routes.js";
 import { registerContactAvatarRoutes } from "../../modules/contacts/interface/avatar-routes.js";
 import { AvatarProxyService } from "../../modules/contacts/application/avatar-proxy-service.js";
@@ -101,6 +102,11 @@ await runProcess({
     }
     await server.register(multipart, {
       limits: { fileSize: 100 * 1_024 * 1_024, files: 1 },
+    });
+    // Cookie 安全旗标单一事实源：注入已校验 config（domain 仅 env 提供）
+    configureSessionCookies({
+      domain: process.env.SESSION_COOKIE_DOMAIN?.trim() || undefined,
+      secure: config.sessionCookieSecure,
     });
     registerIdentityRoutes(
       server,

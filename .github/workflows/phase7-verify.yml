@@ -48,6 +48,9 @@ jobs:
       - name: Install all package workspaces
         run: pnpm install:all
 
+      - name: Migration journal consistency (files 1:1 with journal)
+        run: pnpm --dir core check:migrations
+
       - name: Migrate test database
         run: pnpm --dir core migrate
         env:

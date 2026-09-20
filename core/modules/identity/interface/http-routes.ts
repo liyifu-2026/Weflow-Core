@@ -15,7 +15,12 @@ import {
   MAX_AGENT_TAGS,
   setUserAvatarPreset,
   updateProfile,
+  type AuthenticatedUser,
 } from "../application/identity-service.js";
+import {
+  LoginThrottle,
+  LoginThrottledError,
+} from "../application/login-throttle.js";
 import {
   USER_AVATAR_PRESETS,
   userAvatarPresetUrl,
@@ -113,6 +118,55 @@ function sendUserAvatarSvg(reply: FastifyReply, svg: string): void {
   reply.send(svg);
 }
 
+/** 登录限流器（模块级单例：单进程部署下内存态即全量状态） */
+const loginThrottle = new LoginThrottle();
+
+type LoginOutcome =
+  | { kind: "sent" }
+  | { kind: "ok"; token: string; expiresAt: Date; user: AuthenticatedUser };
+
+/** 登录端点共用：限流检查 + 失败/成功计数 */
+async function throttledLogin(
+  reply: FastifyReply,
+  input: {
+    db: BusinessDb;
+    ip: string;
+    username: string;
+    password: string;
+    mobile?: boolean;
+  },
+): Promise<LoginOutcome> {
+  try {
+    loginThrottle.assertAllowed(input.ip, input.username);
+  } catch (error) {
+    if (error instanceof LoginThrottledError) {
+      reply.header("retry-after", String(error.retryAfterSeconds));
+      await reply.code(429).send({ error: "too_many_attempts" });
+      return { kind: "sent" };
+    }
+    throw error;
+  }
+  const result = await login(
+    input.db,
+    input.username,
+    input.password,
+    input.ip,
+    input.mobile ? { mobile: true } : {},
+  );
+  if (!result) {
+    loginThrottle.recordFailure(input.ip, input.username);
+    await reply.code(401).send({ error: "invalid_credentials" });
+    return { kind: "sent" };
+  }
+  loginThrottle.recordSuccess(input.ip, input.username);
+  return {
+    kind: "ok",
+    token: result.token,
+    expiresAt: result.expiresAt,
+    user: result.user,
+  };
+}
+
 export function registerIdentityRoutes(
   server: FastifyInstance,
   db: BusinessDb,
@@ -123,17 +177,15 @@ export function registerIdentityRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    const result = await login(
+    const outcome = await throttledLogin(reply, {
       db,
-      parsed.data.username,
-      parsed.data.password,
-      request.ip,
-    );
-    if (!result) {
-      return reply.code(401).send({ error: "invalid_credentials" });
-    }
-    reply.header("set-cookie", sessionCookie(result.token, result.expiresAt));
-    return { user: result.user };
+      ip: request.ip,
+      username: parsed.data.username,
+      password: parsed.data.password,
+    });
+    if (outcome.kind === "sent") return reply;
+    reply.header("set-cookie", sessionCookie(outcome.token, outcome.expiresAt));
+    return { user: outcome.user };
   });
 
   server.post("/api/v1/mobile/auth/login", async (request, reply) => {
@@ -141,21 +193,18 @@ export function registerIdentityRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request" });
     }
-    // mobile=true：创建 30 天长时效会话（服务端滑动续期，免去每日重登）
-    const result = await login(
+    const outcome = await throttledLogin(reply, {
       db,
-      parsed.data.username,
-      parsed.data.password,
-      request.ip,
-      { mobile: true },
-    );
-    if (!result) {
-      return reply.code(401).send({ error: "invalid_credentials" });
-    }
+      ip: request.ip,
+      username: parsed.data.username,
+      password: parsed.data.password,
+      mobile: true,
+    });
+    if (outcome.kind === "sent") return reply;
     return {
-      sessionToken: result.token,
-      expiresAt: result.expiresAt.toISOString(),
-      user: result.user,
+      sessionToken: outcome.token,
+      expiresAt: outcome.expiresAt.toISOString(),
+      user: outcome.user,
     };
   });
 

@@ -12,6 +12,10 @@ import type { Logger } from "pino";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { createLogger } from "../../../infrastructure/observability/logger.js";
 import type { ChannelEvent } from "../../channel/contracts/channel-event-source.js";
+import {
+  BARE_CHANNEL_REF_RE,
+  CHANNEL_WIRE_TYPES,
+} from "../../channel/contracts/channel-wire.js";
 import { cancelPendingScheduledSendsOnInbound } from "../../agent/application/scheduled-sends.js";
 import { cancelPendingSessionWakesOnInbound } from "../../agent/application/session-wake.js";
 import {
@@ -459,6 +463,9 @@ async function ingestNormalizedEvent(
           sourceLocalId: event.sourceLocalId,
           sourceMediaRef: event.sourceMediaRef,
           kind: event.kind,
+          // 应用时钟写入：sync 的资格判断用 new Date() 比较，若依赖 DB
+          // defaultNow，宿主与容器时钟漂移会让新媒体行在漂移窗口内不可见
+          nextAttemptAt: new Date(),
         })
         .onConflictDoNothing();
     }
@@ -482,6 +489,7 @@ async function ingestNormalizedEvent(
           sourceLocalId: event.sourceLocalId,
           sourceMediaRef: event.sourceMediaRef,
           kind: event.kind,
+          nextAttemptAt: new Date(),
         })
         .onConflictDoNothing();
     }
@@ -631,14 +639,8 @@ const IMAGE_LIKE_KINDS = new Set(["image", "emoji", "emotion"]);
 const MEDIA_KINDS = new Set([...IMAGE_LIKE_KINDS, "file", "voice", "video"]);
 /** 纯文本事件（不需要 mediaRef；emotion 已文本化为 [表情包]<含义>） */
 const TEXT_LIKE_KINDS = new Set(["text", "pat"]);
-/** Provider-neutral 通道类型映射（沿用源通道编号，业务层不解析） */
-const FILE_CHANNEL_TYPE = 49;
-const VOICE_CHANNEL_TYPE = 34;
-const VIDEO_CHANNEL_TYPE = 43;
-
-/** 整条消息就是一个通道内部 id 的形态（user_ 前缀 + 长 token） */
-const BARE_CHANNEL_REF_RE = /^user_[A-Za-z0-9_-]{16,}$/;
-/** 上游解析失败时以占位文案落库，替代裸 id（原始事件在 Host 事件库可查） */
+/** 上游解析失败时以占位文案落库，替代裸 id（原始事件在 Host 事件库可查）。
+ *  内嵌中文缺省是 ADR-0013 的裁决（占位文案不作运行时设置）；见该 ADR。 */
 export const UNKNOWN_CUSTOMER_TEXT = "（未知客户）";
 
 /** 剥除消息内嵌 HTML；<a href="url">文字</a> 保留为「文字 (url)」，不丢链接 */
@@ -713,14 +715,14 @@ function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
     sourceMediaRef: event.mediaRef ?? null,
     senderId: event.senderRef ?? null,
     type: imageLike
-      ? 3
+      ? CHANNEL_WIRE_TYPES.IMAGE
       : videoLike
-        ? VIDEO_CHANNEL_TYPE
+        ? CHANNEL_WIRE_TYPES.VIDEO
         : fileLike
-          ? FILE_CHANNEL_TYPE
+          ? CHANNEL_WIRE_TYPES.FILE
           : event.kind === "voice"
-            ? VOICE_CHANNEL_TYPE
-            : 1,
+            ? CHANNEL_WIRE_TYPES.VOICE
+            : CHANNEL_WIRE_TYPES.TEXT,
     kind: imageLike ? "image" : event.kind,
     content: sanitizeInboundContent(
       event.kind,

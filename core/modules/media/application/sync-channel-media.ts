@@ -10,6 +10,7 @@
 import { Readable } from "node:stream";
 import { and, asc, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { Logger } from "pino";
 import type { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { ChannelMediaSource } from "../../channel/contracts/channel-media-source.js";
@@ -19,10 +20,15 @@ const SYSTEM_ACTOR = "system-channel-host";
 /** 参与同步的资产类型：图片（视觉描述）、视频/文件附件（无派生阶段）、语音（转写） */
 const SYNC_KINDS = ["image", "file", "voice", "video"] as const;
 
+const SILENT_LOGGER: Logger = {
+  error: () => undefined,
+} as unknown as Logger;
+
 export async function syncChannelMedia(
   db: NodePgDatabase<typeof schema>,
   storage: LocalFileStorage,
   source: ChannelMediaSource,
+  logger: Logger = SILENT_LOGGER,
 ): Promise<void> {
   const assets = await db
     .select()
@@ -134,7 +140,13 @@ export async function syncChannelMedia(
         await storage.remove(file.storageKey);
         throw error;
       }
-    } catch {
+    } catch (error) {
+      // 吞错会掩盖下载故障（曾有存储写入失败被静默成 queued 重试）：
+      // 记录后按既有语义退避重试。
+      logger.error(
+        { err: error, mediaId: asset.mediaId, attempt: asset.attempt },
+        "channel media sync failed",
+      );
       await db
         .update(schema.mediaAssets)
         .set({

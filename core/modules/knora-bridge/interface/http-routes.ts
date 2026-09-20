@@ -10,6 +10,7 @@
  * 与 launch 共享同一份 code 暂存（模块级），保证两种入口都走同一审计。
  */
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import type { BusinessDb } from "../../identity/application/db.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 import {
@@ -34,6 +35,19 @@ export type KnoraBridgeOptions = {
 
 /** 测试辅助：清空 code 暂存（转发到 application 层实现） */
 export { resetLaunchCodes };
+
+const redirectQuery = z.object({
+  /** bridge.html 落点；必须站内相对路径（防开放跳转） */
+  target: z.string().max(500).optional(),
+  /** bridge 调 exchange 用的 weflow 源；必须 http(s) */
+  api: z.string().max(500).optional(),
+});
+const exchangeBody = z.object({
+  code: z.string().min(1).max(200).optional(),
+});
+const bootstrapBody = z.object({
+  password: z.string().min(1).max(200),
+});
 
 export function registerKnoraBridgeRoutes(
   server: FastifyInstance,
@@ -121,14 +135,16 @@ export function registerKnoraBridgeRoutes(
       return reply.code(502).send({ error: "knora_bridge_failed" });
     }
     const code = issueCode(identity.user.userId);
-    const query = (request.query ?? {}) as { target?: unknown; api?: unknown };
-    const target =
-      typeof query.target === "string" && query.target.startsWith("/")
-        ? query.target
-        : "/";
+    const parsedQuery = redirectQuery.safeParse(request.query ?? {});
+    if (!parsedQuery.success) {
+      return reply.code(400).send({ error: "invalid_request" });
+    }
+    const target = parsedQuery.data.target?.startsWith("/")
+      ? parsedQuery.data.target
+      : "/";
     const api =
-      typeof query.api === "string" && /^https?:\/\//.test(query.api)
-        ? query.api
+      parsedQuery.data.api && /^https?:\/\//.test(parsedQuery.data.api)
+        ? parsedQuery.data.api
         : `${request.protocol}://${request.headers.host ?? ""}`;
     const url = new URL(`${options.origin}/bridge.html`);
     url.searchParams.set("code", code);
@@ -142,9 +158,11 @@ export function registerKnoraBridgeRoutes(
     if (!service) {
       return reply.code(503).send({ error: "knora_bridge_unavailable" });
     }
-    const body = (request.body ?? {}) as { code?: string };
-    const userId =
-      typeof body.code === "string" ? consumeCode(body.code) : null;
+    const parsedBody = exchangeBody.safeParse(request.body ?? {});
+    if (!parsedBody.success || !parsedBody.data.code) {
+      return reply.code(401).send({ error: "invalid_or_expired_code" });
+    }
+    const userId = consumeCode(parsedBody.data.code);
     if (!userId) {
       return reply.code(401).send({ error: "invalid_or_expired_code" });
     }
@@ -171,12 +189,12 @@ export function registerKnoraBridgeRoutes(
     if (!service) {
       return reply.code(503).send({ error: "knora_bridge_unavailable" });
     }
-    const body = (request.body ?? {}) as { password?: string };
-    if (!body.password || body.password.length < 1) {
+    const parsedBody = bootstrapBody.safeParse(request.body ?? {});
+    if (!parsedBody.success) {
       return reply.code(400).send({ error: "password_required" });
     }
     try {
-      await service.bootstrap(identity.user, body.password, {
+      await service.bootstrap(identity.user, parsedBody.data.password, {
         actorUserId: identity.user.userId,
         sourceIp: request.ip,
       });
