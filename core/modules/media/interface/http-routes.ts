@@ -82,7 +82,7 @@ export function registerMediaRoutes(
         createdByUserId: identity.user.userId,
         createdAt: now,
       });
-      return reply.code(201).send({
+      return await reply.code(201).send({
         media: {
           mediaId,
           fileId: written.fileId,
@@ -270,7 +270,7 @@ export function registerMediaRoutes(
     reply.header("x-content-type-options", "nosniff");
     // RFC 5987 filename*：非 ASCII 文件名（中文等）在浏览器下载/移动端
     // 分享时保留原名；filename= 为 ASCII 回退。
-    const contentName = media.originalName ?? "attachment";
+    const contentName = media.originalName;
     reply.header(
       "content-disposition",
       `attachment; filename="${contentName.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(contentName)}`,
@@ -332,7 +332,7 @@ export function registerMediaRoutes(
       reply.header("content-type", media.mimeType);
       reply.header("content-length", String(media.size));
       reply.header("x-content-type-options", "nosniff");
-      const originalName = media.originalName ?? "attachment";
+      const originalName = media.originalName;
       reply.header(
         "content-disposition",
         `attachment; filename="${originalName.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(originalName)}`,

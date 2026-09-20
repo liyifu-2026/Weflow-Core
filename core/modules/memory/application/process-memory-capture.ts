@@ -212,7 +212,7 @@ async function captureMessages(
         messageId: row.messageId,
         direction: row.direction,
         actorType: row.actorType,
-        text: `语音转写：${hasChannelText ? row.text : row.mediaDescription}`,
+        text: `语音转写：${String(hasChannelText ? row.text : row.mediaDescription)}`,
       });
       continue;
     }
@@ -229,7 +229,7 @@ async function captureMessages(
       messageId: row.messageId,
       direction: row.direction,
       actorType: row.actorType,
-      text: row.text ?? "",
+      text: row.text,
     });
   }
   return {

@@ -501,7 +501,7 @@ async function commitDispositionTail(
     decision.nextAction === "retrieve_knowledge" ||
     decision.nextAction === "call_tool"
   ) {
-    let toolPlan: ToolPlan | null = null;
+    let toolPlan: ToolPlan | null;
     if (mode.kind === "fresh") {
       toolPlan = mode.toolPlan;
     } else {

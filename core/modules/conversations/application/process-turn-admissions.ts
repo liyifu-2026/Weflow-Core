@@ -48,10 +48,11 @@ export async function processTurnAdmissions(
 
   let processed = 0;
   for (const { conversationId, revision } of due) {
-    const claimed = await claimDueTurnAdmission(
-      db as unknown as Parameters<typeof claimDueTurnAdmission>[0],
-      { conversationId, revision, now },
-    );
+    const claimed = await claimDueTurnAdmission(db, {
+      conversationId,
+      revision,
+      now,
+    });
     if (!claimed) continue; // stale：已被其他实例认领或窗口被新消息重置
     try {
       await dispatchClaimedAdmission(db, claimed, now);
@@ -98,7 +99,7 @@ async function dispatchClaimedAdmission(
       conversationId: claimed.conversationId,
       status: "queued",
       executionProfileId: admission.profile.profileId,
-      traceId: `turn-admission:${claimed.conversationId}:${claimed.revision}`,
+      traceId: `turn-admission:${claimed.conversationId}:${String(claimed.revision)}`,
     })
     .onConflictDoNothing();
   await markDone(db, claimed.conversationId, null);

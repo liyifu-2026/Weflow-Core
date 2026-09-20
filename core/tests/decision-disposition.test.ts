@@ -25,9 +25,7 @@ vi.mock("../modules/agent/application/agent-turn-outcome-command.js", () => ({
 vi.mock(
   "../modules/agent/application/turn-utils.js",
   async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../modules/agent/application/turn-utils.js")
-    >()),
+    ...(await importOriginal<typeof turnUtilsModule>()),
     findNewerActiveTurnIds: vi.fn(async () => []),
   }),
 );
@@ -47,6 +45,7 @@ import {
   persistAgentToolCheckpoint,
 } from "../modules/agent/application/agent-turn-outcome-command.js";
 import { findNewerActiveTurnIds } from "../modules/agent/application/turn-utils.js";
+import type * as turnUtilsModule from "../modules/agent/application/turn-utils.js";
 import type { AgentDecision } from "../modules/agent/application/agent-decision.js";
 import * as schema from "../infrastructure/postgres/schema.js";
 

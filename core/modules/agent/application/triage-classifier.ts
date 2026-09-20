@@ -231,9 +231,9 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
         clearTimeout(timer);
         resolve(value);
       },
-      (error) => {
+      (reason: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(reason instanceof Error ? reason : new Error(String(reason)));
       },
     );
   });

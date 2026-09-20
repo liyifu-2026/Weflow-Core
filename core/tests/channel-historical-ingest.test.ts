@@ -153,7 +153,7 @@ function createStubDb() {
         const { builder } = makeBuilder(name, rows);
         return builder;
       },
-      select(..._args: unknown[]) {
+      select() {
         const state: { table: string; where: Row } = { table: "", where: {} };
         const chain: any = {
           from(table: unknown) {
@@ -161,7 +161,7 @@ function createStubDb() {
               ((table as any)?.[Symbol.for("drizzle:Name")] as string) ?? "";
             return chain;
           },
-          where(_condition: unknown) {
+          where() {
             return chain;
           },
           limit() {

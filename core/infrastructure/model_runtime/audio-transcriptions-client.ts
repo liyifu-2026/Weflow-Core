@@ -58,7 +58,7 @@ export class AudioTranscriptionsClient {
       );
     }
     const parsed = responseSchema.parse(await response.json());
-    const transcription = (parsed.text ?? "").trim();
+    const transcription = parsed.text.trim();
     if (!transcription) {
       throw new Error("audio transcriptions API returned an empty text");
     }

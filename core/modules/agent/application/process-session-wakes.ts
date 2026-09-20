@@ -35,9 +35,7 @@ export type WakeProcessorDeps = {
     wakeId: number;
   }) => Promise<boolean>;
   /** 策略闸门复检（默认 isAgentPaused + contactProfiles.agentEnabled） */
-  checkGates?: (input: {
-    conversationId: string;
-  }) => Promise<{
+  checkGates?: (input: { conversationId: string }) => Promise<{
     blocked: boolean;
     reason: "handoff_active" | "agent_disabled";
   }>;
@@ -65,11 +63,11 @@ export async function processDueSessionWakes(
       await db
         .insert(schema.agentTurns)
         .values({
-          turnId: `turn:wake:${input.wakeId}`,
+          turnId: `turn:wake:${String(input.wakeId)}`,
           triggerMessageId: null as never,
           conversationId: input.conversationId,
           status: "queued",
-          traceId: `session-wake:${input.wakeId}`,
+          traceId: `session-wake:${String(input.wakeId)}`,
         })
         .onConflictDoNothing();
       return true;
@@ -97,7 +95,6 @@ export async function processDueSessionWakes(
       return { blocked: false, reason: "handoff_active" as const };
     });
 
-  let processed = 0;
   let actioned = 0;
   for (const wake of due) {
     try {
@@ -131,7 +128,6 @@ export async function processDueSessionWakes(
       );
     } finally {
       await markWakeDone(db, wake.wakeId);
-      processed += 1;
     }
   }
   return actioned;

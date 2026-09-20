@@ -78,7 +78,6 @@ export async function buildOlderRoundSummaries(
   const rounds = turns
     .filter(
       (turn) =>
-        turn.triggerMessageId !== null &&
         turn.createdAt < input.beforeOccurrence &&
         !(turn.errorCode ?? "").startsWith("absorbed_into"),
     )
@@ -94,7 +93,7 @@ export async function buildOlderRoundSummaries(
         occurredAt: schema.messages.occurredAt,
       })
       .from(schema.messages)
-      .where(eq(schema.messages.messageId, turn.triggerMessageId as string))
+      .where(eq(schema.messages.messageId, turn.triggerMessageId))
       .limit(1);
     const [reply] = await db
       .select({

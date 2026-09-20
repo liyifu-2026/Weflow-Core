@@ -157,12 +157,12 @@ export async function claimDueTurnAdmission(
   const row = claimed[0];
   if (!row) return null;
   return {
-    conversationId: String(row.conversationId),
-    contactId: String(row.contactId),
-    lastMessageId: String(row.lastMessageId),
-    messageCount: Number(row.messageCount ?? 0),
-    revision: Number(row.revision ?? 0),
-    status: String(row.status),
+    conversationId: row.conversationId,
+    contactId: row.contactId,
+    lastMessageId: row.lastMessageId,
+    messageCount: row.messageCount,
+    revision: row.revision,
+    status: row.status,
   };
 }
 

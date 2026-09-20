@@ -368,14 +368,17 @@ export function registerIdentityRoutes(
     // 2) 已选平台预设（未知 id 时回落默认）
     if (user.avatarPreset) {
       const resolved = await resolvePresetSvg(user.avatarPreset);
-      if (resolved) return sendUserAvatarSvg(reply, resolved.svg);
+      if (resolved) {
+        sendUserAvatarSvg(reply, resolved.svg);
+        return;
+      }
     }
 
     // 3) 默认预设：按用户名哈希稳定分配，保证同一客服始终同一头像
     const fallback = await resolvePresetSvg(
       defaultUserAvatarPreset(user.username).id,
     );
-    return sendUserAvatarSvg(
+    sendUserAvatarSvg(
       reply,
       fallback?.svg ??
         fallbackPresetSvg(defaultUserAvatarPreset(user.username)),

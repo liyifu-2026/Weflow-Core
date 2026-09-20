@@ -72,7 +72,7 @@ export class AgentTurnExecutor {
       preResolveAiEmployeePrompt?: (
         contactId: string,
         conversationId: string,
-        triggerText?: string | undefined,
+        triggerText?: string,
       ) => Promise<void>;
       /**
        * Optional hook resolving the AI employee identity for the conversation.
@@ -226,7 +226,6 @@ export class AgentTurnExecutor {
             return this.resultAfterExecution(before, resumed);
           }
           if (
-            verdict.route === "auto" &&
             verdict.tier === "simple" &&
             !verdict.degraded &&
             this.dependencies.triage.fastClient &&

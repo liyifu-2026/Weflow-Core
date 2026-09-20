@@ -52,6 +52,8 @@ export async function reconcileAgentTurnQueueFailure(
     )
     .orderBy(desc(schema.messages.occurredAt))
     .limit(1);
+  // 防御 DB 值与类型不符（text 列类型标注非空，运行时仍可能为 null）
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   const lastCustomerMessage = inboundRows[0]?.text?.slice(0, 200);
 
   const detail = [

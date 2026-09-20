@@ -27,10 +27,8 @@ import {
   setConversationHidden,
 } from "../application/query-conversations.js";
 import { ChannelSendRejectedError } from "../../channel/contracts/channel-send-operations.js";
-import {
-  ChannelProviderError,
-  HttpChannelProvider,
-} from "../../../infrastructure/channel/http-channel-provider.js";
+import { ChannelProviderError } from "../../../infrastructure/channel/http-channel-provider.js";
+import type { HttpChannelProvider } from "../../../infrastructure/channel/http-channel-provider.js";
 
 const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -344,7 +342,7 @@ export function registerConversationRoutes(
     // 走 provider 接缝：认证/超时/传输错误翻译集中一处（曾为裸 fetch）。
     try {
       const result = await channelProvider.requestBackfillSync();
-      return reply.send({
+      return await reply.send({
         synced: true,
         started: result.started,
       });
@@ -417,7 +415,7 @@ export function registerConversationRoutes(
           ...(account ? { account } : {}),
           payload: { kind: "poke" },
         });
-        return reply.code(202).send({
+        return await reply.code(202).send({
           poke: {
             operationId: operation.operationId,
             state: operation.state,

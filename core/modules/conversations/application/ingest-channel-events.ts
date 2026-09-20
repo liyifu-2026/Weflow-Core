@@ -235,7 +235,9 @@ async function ingestNormalizedEvent(
   // 会话类型（ADR-0010）：Host 上报优先；旧 Host 缺省时按通道约定推导
   // ——后缀知识在此收敛为全 Core 唯一回退点，下游一律读落库事实。
   const chatType: "private" | "group" =
-    event.conversationKind ?? chatTypeFromConversationRef(event.conversationId);
+    event.conversationKind ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- ADR-0010 允许的兜底路径
+    chatTypeFromConversationRef(event.conversationId);
 
   const account = normalizeChannelAccount(event.account);
   // default 账号保持旧格式 ID（channel:<ref>），兼容存量数据不回写；
@@ -556,7 +558,7 @@ async function ingestNormalizedEvent(
           .from(schema.turnAdmissionStates)
           .where(eq(schema.turnAdmissionStates.conversationId, conversationId))
           .limit(1);
-        await scheduleTurnAdmissionInTransaction(transaction as never, {
+        await scheduleTurnAdmissionInTransaction(transaction, {
           conversationId,
           contactId,
           messageId,
@@ -917,6 +919,8 @@ async function groupChatCooldownBlocks(
           gt(schema.messages.occurredAt, since),
         ),
       );
+    // 防御 DB 值与类型不符：count(*) 无 ::int 转型，pg 运行时返回 string
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion
     return Number(rows[0]?.value ?? 0) >= maxReplies;
   } catch {
     // 查询失败 fail-open：放行本轮（宁可多发不漏发）

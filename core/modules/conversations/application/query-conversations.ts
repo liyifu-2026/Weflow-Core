@@ -374,16 +374,15 @@ export async function listSharedConversations(
       }) => {
         void handoffTargetUserId;
         // 群聊显示名兜底：未设群名的群 displayName 是裸通道群 ID
-        const contactOut = conversation.contact
-          ? {
-              ...conversation.contact,
-              channelDisplayName: groupDisplayName(
-                conversation.contact.channelDisplayName,
-                conversation.contact.channelContactId,
-                conversation.chatType === "group",
-              ),
-            }
-          : conversation.contact;
+        // contact 经 innerJoin 关联（FK 保证行存在），恒有值
+        const contactOut = {
+          ...conversation.contact,
+          channelDisplayName: groupDisplayName(
+            conversation.contact.channelDisplayName,
+            conversation.contact.channelContactId,
+            conversation.chatType === "group",
+          ),
+        };
         return {
           ...conversation,
           contact: contactOut,
@@ -392,6 +391,7 @@ export async function listSharedConversations(
           chatType: conversation.chatType,
           // pg 对 count(*)（bigint）返回字符串；投影统一转数字，
           // 避免客户端把 "0" 当 truthy 误显示未读红点。
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion, @typescript-eslint/no-unnecessary-condition -- 防御 DB 值与类型不符
           unreadCustomerCount: Number(conversation.unreadCustomerCount ?? 0),
           handoff: handoffStatus
             ? {
@@ -678,7 +678,9 @@ export async function getSharedTranscript(
     .limit(1);
   // 会话类型（ADR-0010）：落库事实；行缺失的极端场景按通道约定兜底推导。
   const chatType =
-    conversation?.chatType ?? chatTypeFromConversationRef(conversationId);
+    conversation?.chatType ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- ADR-0010 允许的兜底路径
+    chatTypeFromConversationRef(conversationId);
   // 群聊消息的发送者昵称解析：actorId（wxid）→ 同账号联系人资料
   // （共享别名 > 显示名 > 昵称）。群成员本身就在联系人同步范围内。
   const senderNames = new Map<string, string>();
@@ -1212,6 +1214,7 @@ export async function listContactsWithLatestConversation(
           : new Date(row.firstContactAt).toISOString()
         : null,
       // pg 的 count(*)（bigint）返回字符串，统一转数字
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion, @typescript-eslint/no-unnecessary-condition -- 防御 DB 值与类型不符
       conversationCount: Number(row.conversationCount ?? 0),
       lastHandlerName: row.lastHandlerName,
       lastHandlerAt: row.lastHandlerAt

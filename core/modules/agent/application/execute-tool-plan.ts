@@ -152,7 +152,7 @@ async function searchChatHistory(
     if (error instanceof Error && error.message.startsWith("invalid_history")) {
       throw error;
     }
-    throw new Error("history_query_failed");
+    throw new Error("history_query_failed", { cause: error });
   }
 }
 
@@ -179,7 +179,7 @@ async function searchChatHistoryInner(
 
   // speaker 解析：先按 wxid 直配；查无此人再按昵称/备注在联系人资料里找
   let actorId: string | null = null;
-  let speakerLabel = speaker;
+  const speakerLabel = speaker;
   if (scope === "speaker") {
     const byWxid = await db
       .select({ resolved: schema.contactProfiles.channelContactId })
@@ -220,7 +220,7 @@ async function searchChatHistoryInner(
     .select({ value: sql<number>`count(*)::int` })
     .from(schema.messages)
     .where(and(...conditions));
-  const totalMatched = Number(totalRows[0]?.value ?? 0);
+  const totalMatched = totalRows[0]?.value ?? 0;
 
   const rows = await db
     .select({

@@ -20,7 +20,7 @@ type Database = NodePgDatabase<typeof schema>;
 export async function readSolutionExtensionSettings(
   db: Database,
   input: { solutionId: string; extensionId: string },
-): Promise<unknown | undefined> {
+): Promise<unknown> {
   const rows = await db
     .select({ settingsJson: schema.solutionExtensionSettings.settingsJson })
     .from(schema.solutionExtensionSettings)
@@ -41,11 +41,11 @@ export async function readSolutionExtensionSettings(
 export function createCachedExtensionSettingsReader(
   db: Database,
   input: { solutionId: string; extensionId: string; ttlMs?: number },
-): () => Promise<unknown | undefined> {
+): () => Promise<unknown> {
   const ttlMs = input.ttlMs ?? 30_000;
-  let cached: unknown | undefined;
+  let cached: unknown;
   let fetchedAt = 0;
-  let inflight: Promise<unknown | undefined> | undefined;
+  let inflight: Promise<unknown> | undefined;
 
   return () => {
     if (inflight) return inflight;

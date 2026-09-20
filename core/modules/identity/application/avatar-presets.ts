@@ -50,8 +50,10 @@ export function presetIndexForSeed(seed: string): number {
 /** 客服默认头像：按稳定种子（用户名）哈希分配一组预设 */
 export function defaultUserAvatarPreset(seed: string): UserAvatarPreset {
   const preset = USER_AVATAR_PRESETS[presetIndexForSeed(seed)];
-  // 预设表是模块内常量且非空，索引必然命中
-  return preset ?? USER_AVATAR_PRESETS[0]!;
+  const fallback = USER_AVATAR_PRESETS[0];
+  // 预设表是模块内常量且非空，索引必然命中；防御性兜底仅在空表时触发
+  if (!fallback) throw new Error("empty_avatar_preset_seeds");
+  return preset ?? fallback;
 }
 
 /** 预设头像的平台代理 URL（两端统一经此取图） */
@@ -64,14 +66,16 @@ export function userAvatarPresetUrl(preset: UserAvatarPreset): string {
  * 用 seed 哈希生成纯色圆 + 首字母的极简占位，保证端点始终有内容。
  */
 export function fallbackPresetSvg(preset: UserAvatarPreset): string {
-  const palette = [
+  const palette: readonly (readonly [string, string])[] = [
     ["#0369a1", "#ffffff"],
     ["#b45309", "#ffffff"],
     ["#a21caf", "#ffffff"],
     ["#047857", "#ffffff"],
     ["#1d4ed8", "#ffffff"],
   ];
-  const [bg, fg] = palette[presetIndexForSeed(preset.seed)] ?? palette[0]!;
+  const fallbackColors = palette[0];
+  if (!fallbackColors) throw new Error("empty_avatar_palette");
+  const [bg, fg] = palette[presetIndexForSeed(preset.seed)] ?? fallbackColors;
   const letter = (preset.name || preset.id).trim().slice(0, 1);
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="512" height="512">` +

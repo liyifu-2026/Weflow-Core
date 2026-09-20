@@ -59,7 +59,7 @@ export async function stageOutboundMedia(
   input: OutboundStagingInput,
 ): Promise<OutboundStagingResult> {
   const directoryName = normalizeDirectoryComponent(
-    `${input.messageId}---${input.mediaIndex}`,
+    `${input.messageId}---${String(input.mediaIndex)}`,
   );
   const directory = join(root, "media-outbound", directoryName);
   const stagedFileName = buildStagedFileName(
@@ -136,6 +136,8 @@ function buildStagedFileName(
 function sanitizeFileName(originalName: string): string {
   const base = originalName.replace(/\\/g, "/").split("/").pop() ?? "";
   const cleaned = base
+    // 文件名消毒：故意匹配控制字符，统一替换为下划线
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f<>:"|?*]/g, "_")
     .replace(/^\.+/, "_")
     .trim()
@@ -185,6 +187,8 @@ function sha256File(path: string): Promise<string> {
     const stream = createReadStream(path);
     stream.on("error", rejectPromise);
     stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", () => resolvePromise(hash.digest("hex")));
+    stream.on("end", () => {
+      resolvePromise(hash.digest("hex"));
+    });
   });
 }

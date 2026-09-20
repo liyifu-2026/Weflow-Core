@@ -72,7 +72,8 @@ export function dedupeSentInstructions(texts: string[]): string[] {
  * 0 成本前挡）与上下文装配（窗口分拣 + 摘要行）共用。
  */
 export function isGroupNoiseText(text: string): boolean {
-  const stripped = (text ?? "")
+  // 防御运行时调用方传入 null/undefined（类型无法约束 JS 边界）
+  const stripped = (text ?? "") // eslint-disable-line @typescript-eslint/no-unnecessary-condition
     .replace(/\[[^\][\n]{1,12}\]/g, "")
     .replace(/[\p{P}\p{S}\p{Z}\s]/gu, "");
   return stripped.length === 0;
@@ -191,7 +192,8 @@ export async function buildAgentContext(
         index !== lastInboundIndex &&
         message.direction === "inbound" &&
         message.contentType === "text" &&
-        isGroupNoiseText(message.text ?? "");
+        // 防御 DB 值与类型不符（text 列理论非空，运行时仍可能为 null）
+        isGroupNoiseText(message.text ?? ""); // eslint-disable-line @typescript-eslint/no-unnecessary-condition
       if (isNoise) {
         const name = senderOf(message) ?? "有人";
         noiseBySender.set(name, (noiseBySender.get(name) ?? 0) + 1);
@@ -201,7 +203,7 @@ export async function buildAgentContext(
     });
     if (noiseBySender.size > 0) {
       const parts = [...noiseBySender.entries()]
-        .map(([name, count]) => `${name} ×${count}`)
+        .map(([name, count]) => `${name} ×${String(count)}`)
         .join("、");
       groupNoiseDigest = `\n\n近段群内另有（短水消息，已省略原文）：${parts}`;
     }
@@ -479,7 +481,7 @@ export function collapseConsecutiveAssistantMessages(
       message.role === "assistant" &&
       typeof previous.content === "string" &&
       typeof message.content === "string";
-    if (mergeable && previous) {
+    if (mergeable) {
       previous.content = `${previous.content as string}\n${message.content as string}`;
       continue;
     }

@@ -266,8 +266,12 @@ await runProcess({
     const stopScheduledSendDispatcher = startTurnAdmissionDispatcher({
       process: async () =>
         processDueScheduledSends(postgres.db, undefined, {
-          error: (obj, msg) => logger.error(obj as object, msg),
-          info: (obj, msg) => logger.info(obj as object, msg),
+          error: (obj, msg) => {
+            logger.error(obj as object, msg);
+          },
+          info: (obj, msg) => {
+            logger.info(obj as object, msg);
+          },
         }),
       intervalMs: 5_000,
       logger,
@@ -383,7 +387,9 @@ await runProcess({
           processOutboundMessages(db, channelSendOperations, {
             fileStorageRoot: config.fileStorageRoot,
             logger: {
-              warn: (obj, msg) => logger.warn(obj, msg),
+              warn: (obj, msg) => {
+                logger.warn(obj, msg);
+              },
             },
           }),
       });
@@ -434,7 +440,7 @@ await runProcess({
     logger.info(
       "Channel Host is not configured; background channel polling is disabled",
     );
-    return async () => {
+    return () => {
       stopMobileHandoffMaintenance();
       stopAgentTurnDispatcher();
       stopMemoryCaptureDispatcher();

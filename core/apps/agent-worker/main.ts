@@ -91,9 +91,7 @@ await runProcess({
       textModel: {
         name: config.model.name,
         baseUrl: config.model.baseUrl,
-        ...(config.model.apiKey !== undefined
-          ? { apiKey: config.model.apiKey }
-          : {}),
+        apiKey: config.model.apiKey,
       },
       ...(config.triage
         ? {
@@ -128,7 +126,7 @@ await runProcess({
         apiKey: modelSettings.textModel.apiKey ?? "",
         model: modelSettings.textModel.name,
         timeoutMs: textTimeoutMs,
-        maxTokens: config.model?.maxTokens,
+        maxTokens: config.model.maxTokens,
       }),
     );
 
@@ -373,6 +371,8 @@ await runProcess({
         db: unknown,
         contactId: string,
         conversationId: string,
+        // exactOptionalPropertyTypes 下须显式容纳 undefined 实参
+        // eslint-disable-next-line @typescript-eslint/no-duplicate-type-constituents
         triggerText?: string | undefined,
       ) => Promise<void>;
       /** 可选：读取 preResolve 阶段缓存的 AI 员工标识（用于消息头像） */
@@ -388,6 +388,8 @@ await runProcess({
       | ((
           contactId: string,
           conversationId: string,
+          // 与 AgentTurnExecutor 依赖签名对齐，须显式容纳 undefined
+          // eslint-disable-next-line @typescript-eslint/no-duplicate-type-constituents
           triggerText?: string | undefined,
         ) => Promise<void>)
       | undefined;
@@ -416,17 +418,16 @@ await runProcess({
         strategyRegistry.register(module.strategy);
       }
       if (module.preResolveAiEmployeePrompt) {
+        const preResolve = module.preResolveAiEmployeePrompt;
         preResolveAiEmployeePrompt = (contactId, conversationId, triggerText) =>
-          module.preResolveAiEmployeePrompt!(
-            pluginDb,
-            contactId,
-            conversationId,
-            triggerText,
-          );
+          preResolve(pluginDb, contactId, conversationId, triggerText);
       }
       if (module.getCachedAiEmployeeId && module.preResolveAiEmployeePrompt) {
+        const getCachedAiEmployeeId = module.getCachedAiEmployeeId;
+        // 接口约定返回 Promise，实现是同步缓存读取，保留 async 包装
+        // eslint-disable-next-line @typescript-eslint/require-await
         resolveAiEmployeeId = async (contactId, conversationId) =>
-          module.getCachedAiEmployeeId!(contactId, conversationId) ?? null;
+          getCachedAiEmployeeId(contactId, conversationId) ?? null;
       }
       logger.info({ source }, "agent worker plugin loaded");
     };
@@ -455,7 +456,7 @@ await runProcess({
           );
           continue;
         }
-        registerAgentPluginModule(found.module as AgentPluginModule, found.url);
+        registerAgentPluginModule(found.module, found.url);
       }
     }
     // 对话轮次执行器，确保同一对话的任务串行执行

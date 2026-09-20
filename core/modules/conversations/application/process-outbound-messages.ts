@@ -161,6 +161,8 @@ export async function processOutboundMessages(
         hasUnsentPrior: Boolean(firstPrior),
         deliveredCopyExists: delivered.length > 0,
         priorSentAt: pacingPrior[0]?.sendUpdatedAt ?? null,
+        // 防御 DB 值与类型不符（text 列类型标注非空，运行时仍可能为 null）
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         text: message.text ?? "",
         messageId: message.messageId,
         now: new Date(),
@@ -174,7 +176,7 @@ export async function processOutboundMessages(
     // 在开关翻转前已提交 outbound 也能拦住。已 pending 的 AI 出站置为
     // held（终态，恢复开关后不自动补发，不重复生成）。
     // 发送期插话闸门共用同一次 fresh 读（同为发送边界安全开关）。
-    let agentRuntime: RuntimeSettings | null = null;
+    let agentRuntime: RuntimeSettings | null;
     if (
       message.actorType === "agent" &&
       message.sendState !== SEND_STATE.unknown

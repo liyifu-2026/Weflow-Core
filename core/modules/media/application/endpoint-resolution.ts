@@ -13,7 +13,7 @@
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
-import * as schema from "../../../infrastructure/postgres/schema.js";
+import type * as schema from "../../../infrastructure/postgres/schema.js";
 import { resolveSlotChainRuntime } from "../../operations/application/model-gateway.js";
 
 type Database = NodePgDatabase<typeof schema>;

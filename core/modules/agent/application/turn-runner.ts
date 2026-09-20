@@ -72,7 +72,7 @@ export type TurnRunnerDependencies = {
   preResolveAiEmployeePrompt?: (
     contactId: string,
     conversationId: string,
-    triggerText?: string | undefined,
+    triggerText?: string,
   ) => Promise<void>;
   /**
    * Optional hook resolving the AI employee identity (opaque string, e.g. a
@@ -176,7 +176,9 @@ export async function processAgentTurn(
   // 会话类型（ADR-0010）：读 conversations.chat_type 事实（ingest 定一次）；
   // 行缺失的极端场景按通道约定兜底推导（全 Core 仅 ingest 与此兜底认识后缀）。
   const chatType =
-    conversation?.chatType ?? chatTypeFromConversationRef(turn.conversationId);
+    conversation?.chatType ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- ADR-0010 允许的兜底路径
+    chatTypeFromConversationRef(turn.conversationId);
 
   // 行为参数（R2）：读取失败/未注入时回落出厂默认，绝不阻断 Turn。
   // 提前到上下文构建前：轮窗摘要角色标签（roundSummaryLabels）随行为参数装配。
@@ -489,6 +491,7 @@ async function runPlannedToolTurnBody(
     .limit(1);
   const chatType =
     conversationTypeRow?.chatType ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- ADR-0010 允许的兜底路径
     chatTypeFromConversationRef(execution.conversationId);
 
   // 行为参数（R2）：提前加载供轮窗标签与后续预算使用。
@@ -630,6 +633,8 @@ async function runPlannedToolTurnBody(
         {
           id: toolCallId,
           name: execution.toolName,
+          // 防御 DB 值与类型不符（jsonb 列理论非空，运行时仍可能为 null）
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
           arguments: JSON.stringify(execution.arguments ?? {}),
         },
       ],

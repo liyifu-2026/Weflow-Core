@@ -92,8 +92,8 @@ async function computeModelGatewayFingerprint(
     const slots = Object.fromEntries(
       slotRows
         .filter((row) => row.key.startsWith("model_slot_"))
-        .map((row) => [row.key, row.value])
-        .sort(([a], [b]) => (a ?? "").localeCompare(b ?? "")),
+        .map((row): [string, string] => [row.key, row.value])
+        .sort(([a], [b]) => a.localeCompare(b)),
     );
     const payload = JSON.stringify({
       registry: registryRows.map((row) => ({
