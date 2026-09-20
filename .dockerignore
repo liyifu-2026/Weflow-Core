@@ -1,0 +1,16 @@
+# 构建上下文只需要 core/ 与 packages/contracts（见 core/Dockerfile 头注）
+.git
+**/node_modules
+**/dist
+**/.dev-logs
+**/.data
+apps
+solutions
+tooling
+runtimes
+docs
+deploy
+scripts
+tests
+core/tests
+core/docs

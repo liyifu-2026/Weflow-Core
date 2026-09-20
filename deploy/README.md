@@ -8,6 +8,13 @@
   cp core/.env.example core/.env   # 并配置 MODEL_API_KEY 等可选项
   pnpm --dir core migrate
   ```
+- `core/Dockerfile`：Core 生产镜像。构建上下文是**仓库根**（core 通过 `link:../packages/contracts` 依赖共享契约包，契约包会先进镜像构建）：
+  ```bash
+  docker build -f core/Dockerfile -t weflow-core .
+  # 国内网络需要镜像源时：
+  docker build -f core/Dockerfile --build-arg NPM_CONFIG_REGISTRY=https://registry.npmmirror.com -t weflow-core .
+  ```
+  容器内执行迁移：`docker run --rm weflow-core node dist/infrastructure/postgres/migrate.js`。
 - `core` 提供 `core-api`、`agent-worker`、`ingestion-worker` 三个进程。
 - Channel Host 是平台级通道入口适配层，不由 Core 隐式启动；本仓库的参考实现位于 `runtimes/channel-host-wechat`（Python/微信本地自动化），生产环境可按同一契约部署外部适配器。
 - 产品网页端 support-web 构建产物由 Core API 静态托管（R1 收敛后为唯一前端）；`apps/console` 平台壳退役，不再发布。
