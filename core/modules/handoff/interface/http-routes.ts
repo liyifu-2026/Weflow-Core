@@ -4,11 +4,10 @@
  */
 
 import type { FastifyInstance, FastifyReply } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { z } from "zod";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
-import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
+import type { BusinessDb } from "../../identity/application/db.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
+import { publishHandoffEvent } from "../application/handoff-events.js";
 import {
   acceptHandoff,
   createHandoff,
@@ -125,7 +124,7 @@ const messageFeedbackBody = z
 /** 注册人工接管相关的 HTTP 路由 */
 export function registerHandoffRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
 ): void {
   server.get("/api/v1/mobile/capabilities", async (request, reply) => {
     if (!(await requireBusinessIdentity(db, request, reply))) return;
@@ -516,41 +515,5 @@ function sendTransitionResult(
   return reply.code(result.replayed ? 200 : 201).send({
     handoff: result.handoff,
     replayed: result.replayed,
-  });
-}
-
-/** 根据 handoff 结果发布会话事件（事件只触发失效，客户端回拉权威状态） */
-function publishHandoffEvent(
-  result: Awaited<ReturnType<typeof claimMobileHandoff>> | HandoffResult,
-  eventTypeOverride?: "ownership_changed",
-) {
-  const handoff =
-    "handoff" in result
-      ? result.handoff
-      : (result as HandoffResult & { handoff?: { conversationId?: string } })
-          .handoff;
-  if (!handoff?.conversationId || result.status !== "ok") return;
-  const conversationId = handoff.conversationId;
-  const status = ((handoff as { status?: string }).status ?? "").toLowerCase();
-  let type:
-    | "handoff_created"
-    | "handoff_claimed"
-    | "handoff_transferred"
-    | "handoff_finished"
-    | "ownership_changed"
-    | "conversation_updated" = "conversation_updated";
-  if (eventTypeOverride) {
-    type = eventTypeOverride;
-  } else if (status === "pending" || status === "handoff_pending")
-    type = "handoff_created";
-  else if (status === "in_progress" || status === "human_active")
-    type = "handoff_claimed";
-  else if (status === "transfer_pending") type = "handoff_transferred";
-  else if (status === "resolved" || status === "human_finished")
-    type = "handoff_finished";
-  conversationEvents.publish({
-    type,
-    conversationId,
-    occurredAt: new Date().toISOString(),
   });
 }

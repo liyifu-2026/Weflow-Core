@@ -458,3 +458,48 @@ export async function listScheduledSendsForConversation(
     .orderBy(desc(schema.scheduledSends.updatedAt))
     .limit(limit);
 }
+
+/** 全局「时间-任务」表（时间管理页）：按状态/会话过滤，sendAt 倒序 */
+export async function listAllScheduledSends(
+  db: NodePgDatabase<typeof schema>,
+  filters: {
+    status?: ScheduledSendStatus | undefined;
+    conversationId?: string | undefined;
+    limit: number;
+  },
+) {
+  return db
+    .select({
+      scheduledSendId: schema.scheduledSends.scheduledSendId,
+      conversationId: schema.scheduledSends.conversationId,
+      content: schema.scheduledSends.content,
+      status: schema.scheduledSends.status,
+      sendAt: schema.scheduledSends.sendAt,
+      cancelReason: schema.scheduledSends.cancelReason,
+      createdAt: schema.scheduledSends.createdAt,
+      contactName: schema.contactProfiles.sharedAlias,
+      channelDisplayName: schema.contactProfiles.channelDisplayName,
+      channelContactId: schema.contactProfiles.channelContactId,
+    })
+    .from(schema.scheduledSends)
+    .innerJoin(
+      schema.conversations,
+      eq(schema.conversations.conversationId, schema.scheduledSends.conversationId),
+    )
+    .leftJoin(
+      schema.contactProfiles,
+      eq(schema.contactProfiles.contactId, schema.conversations.contactId),
+    )
+    .where(
+      and(
+        filters.status
+          ? eq(schema.scheduledSends.status, filters.status)
+          : undefined,
+        filters.conversationId
+          ? eq(schema.scheduledSends.conversationId, filters.conversationId)
+          : undefined,
+      ),
+    )
+    .orderBy(desc(schema.scheduledSends.sendAt))
+    .limit(filters.limit);
+}

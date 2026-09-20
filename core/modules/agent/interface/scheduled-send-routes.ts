@@ -8,14 +8,13 @@
  * - POST /api/v1/scheduled-sends/:id/fire-now      立即发/放行（handoff 中拒绝）
  */
 import type { FastifyInstance } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { and, desc, eq, type SQL } from "drizzle-orm";
 import { z } from "zod";
-import * as schema from "../../../infrastructure/postgres/schema.js";
+import type { BusinessDb } from "../../identity/application/db.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 import {
-  operateScheduledSend,
+  listAllScheduledSends,
   listScheduledSendsForConversation,
+  operateScheduledSend,
 } from "../application/scheduled-sends.js";
 
 const listQuerySchema = z.object({
@@ -39,7 +38,7 @@ const rescheduleSchema = z.object({
 /** 注册定时发送相关 HTTP 路由 */
 export function registerScheduledSendRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
 ): void {
   // 全局「时间-任务」表
   server.get("/api/v1/scheduled-sends", async (request, reply) => {
@@ -48,45 +47,13 @@ export function registerScheduledSendRoutes(
     const query = listQuerySchema.safeParse(request.query);
     if (!query.success)
       return reply.code(400).send({ error: "invalid_request" });
-
-    const conditions: SQL[] = [];
-    if (query.data.status) {
-      conditions.push(eq(schema.scheduledSends.status, query.data.status));
-    }
-    if (query.data.conversationId) {
-      conditions.push(
-        eq(schema.scheduledSends.conversationId, query.data.conversationId),
-      );
-    }
-    const rows = await db
-      .select({
-        scheduledSendId: schema.scheduledSends.scheduledSendId,
-        conversationId: schema.scheduledSends.conversationId,
-        content: schema.scheduledSends.content,
-        status: schema.scheduledSends.status,
-        sendAt: schema.scheduledSends.sendAt,
-        cancelReason: schema.scheduledSends.cancelReason,
-        createdAt: schema.scheduledSends.createdAt,
-        contactName: schema.contactProfiles.sharedAlias,
-        channelDisplayName: schema.contactProfiles.channelDisplayName,
-        channelContactId: schema.contactProfiles.channelContactId,
-      })
-      .from(schema.scheduledSends)
-      .innerJoin(
-        schema.conversations,
-        eq(
-          schema.conversations.conversationId,
-          schema.scheduledSends.conversationId,
-        ),
-      )
-      .leftJoin(
-        schema.contactProfiles,
-        eq(schema.contactProfiles.contactId, schema.conversations.contactId),
-      )
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(desc(schema.scheduledSends.sendAt))
-      .limit(query.data.limit);
-    return { scheduledSends: rows };
+    return {
+      scheduledSends: await listAllScheduledSends(db, {
+        status: query.data.status,
+        conversationId: query.data.conversationId,
+        limit: query.data.limit,
+      }),
+    };
   });
 
   // 会话维度的待发/最近列表（web 会话详情 + mobile 复用）
