@@ -12,6 +12,7 @@
  * 重复执行 onConflictDoNothing 静默跳过，无需额外状态列。
  */
 import { and, eq, lte } from "drizzle-orm";
+import { CHANNEL_WIRE_TYPES } from "../../channel/contracts/channel-wire.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 
@@ -63,7 +64,7 @@ export async function processHandoffReminders(
         actorType: "system",
         actorId: "system",
         contentType: "text",
-        channelType: 1,
+        channelType: CHANNEL_WIRE_TYPES.TEXT,
         text,
         isSelf: true,
         processingState: "not_applicable",

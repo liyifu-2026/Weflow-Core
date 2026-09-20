@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  scheduleSessionWake,
-} from "../modules/agent/application/session-wake.js";
+import { scheduleSessionWake } from "../modules/agent/application/session-wake.js";
 
 describe("scheduleSessionWake（wait 决策落唤醒行）", () => {
   const base = new Date("2026-01-01T00:00:00Z");

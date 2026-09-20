@@ -78,7 +78,6 @@ export async function buildOlderRoundSummaries(
   const rounds = turns
     .filter(
       (turn) =>
-        turn.triggerMessageId !== null &&
         turn.createdAt < input.beforeOccurrence &&
         !(turn.errorCode ?? "").startsWith("absorbed_into"),
     )
@@ -89,12 +88,18 @@ export async function buildOlderRoundSummaries(
   // 由旧到新输出
   for (const turn of [...rounds].reverse()) {
     const [trigger] = await db
-      .select({ text: schema.messages.text, occurredAt: schema.messages.occurredAt })
+      .select({
+        text: schema.messages.text,
+        occurredAt: schema.messages.occurredAt,
+      })
       .from(schema.messages)
-      .where(eq(schema.messages.messageId, turn.triggerMessageId as string))
+      .where(eq(schema.messages.messageId, turn.triggerMessageId))
       .limit(1);
     const [reply] = await db
-      .select({ text: schema.messages.text, createdAt: schema.messages.createdAt })
+      .select({
+        text: schema.messages.text,
+        createdAt: schema.messages.createdAt,
+      })
       .from(schema.messages)
       .where(
         and(
@@ -116,7 +121,9 @@ export async function buildOlderRoundSummaries(
     const labels = input.labels ?? DEFAULT_ROUND_SUMMARY_LABELS;
     const customer = clip(trigger?.text ?? "（媒体消息）", 60);
     const agent = reply?.text ? clip(reply.text, 60) : "（未回复）";
-    lines.push(`${when} ${labels.customer}：${customer}｜${labels.agent}：${agent}`);
+    lines.push(
+      `${when} ${labels.customer}：${customer}｜${labels.agent}：${agent}`,
+    );
   }
   return lines;
 }

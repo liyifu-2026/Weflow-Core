@@ -8,7 +8,7 @@
  * （处置统一在 decision-disposition）。
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import * as schema from "../../../infrastructure/postgres/schema.js";
+import type * as schema from "../../../infrastructure/postgres/schema.js";
 import type { TextModel } from "../../model/contracts/text-model.js";
 import type {
   TextModelMessage,

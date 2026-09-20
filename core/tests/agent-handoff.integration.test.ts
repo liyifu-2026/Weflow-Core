@@ -296,7 +296,10 @@ integration("agent automatic handoff", () => {
         .select()
         .from(schema.handoffStates)
         .where(eq(schema.handoffStates.conversationId, silentConversationId));
-      expect(handoff[0]).toMatchObject({ status: "pending", agentPaused: true });
+      expect(handoff[0]).toMatchObject({
+        status: "pending",
+        agentPaused: true,
+      });
       // 模型未给告别语：转人工不发送任何客户可见文案（静默转接）
       const outbound = await postgres.db
         .select()
@@ -311,7 +314,9 @@ integration("agent automatic handoff", () => {
     } finally {
       await postgres.db
         .delete(schema.notificationOutbox)
-        .where(eq(schema.notificationOutbox.conversationId, silentConversationId));
+        .where(
+          eq(schema.notificationOutbox.conversationId, silentConversationId),
+        );
       await postgres.db
         .delete(schema.handoffEvents)
         .where(eq(schema.handoffEvents.conversationId, silentConversationId));

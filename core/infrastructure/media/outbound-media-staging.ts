@@ -40,7 +40,8 @@ export type OutboundStagingInput = {
   messageId: string;
   /** 同一消息内的去重序号（多个附件时区分，0 起） */
   mediaIndex: number;
-};export type OutboundStagingResult = {
+};
+export type OutboundStagingResult = {
   /** 供 send operation payload 使用的暂存文件绝对路径（原名+扩展名） */
   stagedPath: string;
   /** 实际写出的文件名（净化 + 兜底扩展名之后） */
@@ -58,7 +59,7 @@ export async function stageOutboundMedia(
   input: OutboundStagingInput,
 ): Promise<OutboundStagingResult> {
   const directoryName = normalizeDirectoryComponent(
-    `${input.messageId}---${input.mediaIndex}`,
+    `${input.messageId}---${String(input.mediaIndex)}`,
   );
   const directory = join(root, "media-outbound", directoryName);
   const stagedFileName = buildStagedFileName(
@@ -135,6 +136,8 @@ function buildStagedFileName(
 function sanitizeFileName(originalName: string): string {
   const base = originalName.replace(/\\/g, "/").split("/").pop() ?? "";
   const cleaned = base
+    // 文件名消毒：故意匹配控制字符，统一替换为下划线
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f<>:"|?*]/g, "_")
     .replace(/^\.+/, "_")
     .trim()
@@ -184,6 +187,8 @@ function sha256File(path: string): Promise<string> {
     const stream = createReadStream(path);
     stream.on("error", rejectPromise);
     stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("end", () => resolvePromise(hash.digest("hex")));
+    stream.on("end", () => {
+      resolvePromise(hash.digest("hex"));
+    });
   });
 }

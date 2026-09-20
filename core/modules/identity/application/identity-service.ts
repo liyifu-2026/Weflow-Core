@@ -53,7 +53,7 @@ export function userAvatarUrl(user: {
   const version = user.updatedAt
     ? Math.floor(new Date(user.updatedAt).getTime() / 1_000)
     : "0";
-  return `/api/v1/users/${user.userId}/avatar?v=${version}`;
+  return `/api/v1/users/${user.userId}/avatar?v=${String(version)}`;
 }
 
 /** 头像相对路径（投影内部用），见 userAvatarUrl */

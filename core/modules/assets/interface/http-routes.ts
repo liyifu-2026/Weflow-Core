@@ -7,14 +7,14 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
-import { UploadTypeBlockedError } from "../../../infrastructure/file_storage/upload-policy.js";
+
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 import {
   ASSET_CATEGORY_VALUES,
   type AssetDb,
   type AssetProjection,
   type toAssetProjection,
+  type FileStorage,
 } from "../application/asset-service.js";
 import {
   deleteAsset,
@@ -24,6 +24,7 @@ import {
   recordAssetAudit,
   renameAsset,
   uploadAsset,
+  UploadTypeBlockedError,
 } from "../application/asset-service.js";
 
 const listQuery = z.object({

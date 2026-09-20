@@ -1,10 +1,7 @@
 import { Readable, Transform } from "node:stream";
-import { randomUUID } from "node:crypto";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
-import * as databaseSchema from "../../../infrastructure/postgres/schema.js";
+import type { BusinessDb } from "../../identity/application/db.js";
 import {
   requireAdminIdentity,
   requireBusinessIdentity,
@@ -18,7 +15,10 @@ import {
   providerPath,
   type KnowledgeProviderOptions,
 } from "../application/boundary.js";
-import { weknoraAuthHeaders } from "../../../infrastructure/knowledge/weknora-knowledge-client.js";
+import {
+  forwardProviderRequest,
+  recordProviderMutation,
+} from "../application/provider-proxy.js";
 
 export {
   inspectKnowledgeEngine,
@@ -38,7 +38,7 @@ const PREFIX = "/api/v1/console/knowledge-provider/";
  */
 export function registerKnowledgeProviderRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   resolveOptions: () => KnowledgeProviderOptions | undefined,
 ): void {
   server.get("/api/v1/admin/knowledge-engine", async (request, reply) => {
@@ -88,74 +88,52 @@ export function registerKnowledgeProviderRoutes(
           .code(503)
           .send({ error: "knowledge_provider_unavailable" });
 
-      const upstreamUrl = new URL(`${options.baseUrl}/${path}`);
       const sourceUrl = new URL(request.raw.url ?? "", "http://weflow.local");
-      upstreamUrl.search = sourceUrl.search;
-      const headers = new Headers();
-      for (const [name, value] of Object.entries(weknoraAuthHeaders(options))) {
-        headers.set(name, value);
+      const result = await forwardProviderRequest({
+        options,
+        method: request.method,
+        path,
+        query: sourceUrl.search,
+        contentType: request.headers["content-type"],
+        accept: request.headers.accept,
+        body: requestBody(request),
+      });
+
+      if (result.status === "rejected") {
+        return await reply
+          .code(result.httpStatus)
+          .send({ error: "knowledge_provider_rejected" });
       }
-      headers.set("x-request-id", randomUUID());
-      const contentType = request.headers["content-type"];
-      if (contentType) headers.set("content-type", contentType);
-      const accept = request.headers.accept;
-      if (accept) headers.set("accept", accept);
-
-      try {
-        const upstream = await (options.fetch ?? globalThis.fetch)(
-          upstreamUrl,
-          {
-            method: request.method,
-            headers,
-            body: requestBody(request),
-            signal: AbortSignal.timeout(options.timeoutMs),
-            duplex: "half",
-          } as RequestInit & { duplex: "half" },
-        );
-
-        if (!upstream.ok) {
-          await upstream.body?.cancel();
-          const status = [400, 403, 404, 409, 413].includes(upstream.status)
-            ? upstream.status
-            : 502;
-          return await reply
-            .code(status)
-            .send({ error: "knowledge_provider_rejected" });
-        }
-
-        reply.code(upstream.status);
-        for (const name of [
-          "content-type",
-          "content-disposition",
-          "cache-control",
-          "content-length",
-        ]) {
-          const value = upstream.headers.get(name);
-          if (value) reply.header(name, value);
-        }
-        if (access === "write") {
-          await db.insert(databaseSchema.auditEvents).values({
-            auditId: randomUUID(),
-            actorUserId: identity.user.userId,
-            eventType: "knowledge.provider_mutated",
-            subjectType: "knowledge_provider",
-            subjectId: path.slice(0, 100),
-            sourceIp: request.ip,
-            metadata: { method: request.method, path: path.slice(0, 500) },
-          });
-        }
-        if (!upstream.body) return await reply.send();
-        return await reply.send(
-          Readable.fromWeb(upstream.body as NodeReadableStream<Uint8Array>),
-        );
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (message.includes("upload_too_large"))
+      if (result.status === "failed") {
+        if (result.message.includes("upload_too_large"))
           return await reply.code(413).send({ error: "upload_too_large" });
         return await reply
           .code(502)
           .send({ error: "knowledge_provider_failed" });
       }
+      const upstream = result.upstream;
+      reply.code(upstream.status);
+      for (const name of [
+        "content-type",
+        "content-disposition",
+        "cache-control",
+        "content-length",
+      ]) {
+        const value = upstream.headers.get(name);
+        if (value) reply.header(name, value);
+      }
+      if (access === "write") {
+        await recordProviderMutation(db, {
+          actorUserId: identity.user.userId,
+          sourceIp: request.ip,
+          method: request.method,
+          path,
+        });
+      }
+      if (!upstream.body) return await reply.send();
+      return await reply.send(
+        Readable.fromWeb(upstream.body as NodeReadableStream<Uint8Array>),
+      );
     },
   );
 }

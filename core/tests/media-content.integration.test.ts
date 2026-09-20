@@ -125,7 +125,11 @@ integration("media content endpoint", () => {
     );
     server = Fastify();
     registerIdentityRoutes(server, postgres.db);
-    registerMediaRoutes(server, postgres.db, join(root, "media"));
+    registerMediaRoutes(
+      server,
+      postgres.db,
+      new LocalFileStorage(join(root, "media")),
+    );
     await server.ready();
     await postgres.db.insert(schema.contactProfiles).values({
       contactId,

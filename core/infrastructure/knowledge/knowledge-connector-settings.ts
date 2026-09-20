@@ -1,9 +1,9 @@
 /**
  * 知识库连接器配置统一（ADR-0008）：设置中心为唯一界面入口，.env 兜底。
  *
- * 背景：设置中心「知识库连接器」表单写入 support-pipeline 行的
- * knowledgeConnector 键，但运行时过去只读 .env 的 WEKNORA_*，表单是
- * 死配置。本模块把两者合一：
+ * 背景：设置中心「知识库连接器」表单写入业务行为设置行（命名空间由
+ * 部署配置 BEHAVIOR_SETTINGS_REF 绑定）的 knowledgeConnector 键，但运行时
+ * 过去只读 .env 的 WEKNORA_*，表单是死配置。本模块把两者合一：
  *
  * - 优先级：界面 knowledgeConnector（weknora 预设且 retrieveUrl 非空）
  *   > .env WEKNORA_* > 未配置。界面各字段缺省时逐项回落 env 值
@@ -24,7 +24,8 @@
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../postgres/schema.js";
 import {
-  createCachedExtensionSettingsReader,
+  createOptionalCachedExtensionSettingsReader,
+  type ExtensionSettingsRef,
 } from "../settings/extension-settings.js";
 import {
   WeKnoraKnowledgeClient,
@@ -42,11 +43,6 @@ export type KnowledgeConnectorSection = {
   authValue?: unknown;
   knowledgeBaseIds?: unknown;
 };
-
-const PIPELINE_SETTINGS_REF = {
-  solutionId: "weflow.customer-support",
-  extensionId: "support-pipeline",
-} as const;
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -130,8 +126,10 @@ export async function createAdaptiveKnowledgeClient(
   input: {
     intervalMs?: number;
     ttlMs?: number;
-    /** 测试注入：覆盖 support-pipeline 行读取（缺省走 DB + 进程内缓存）。 */
+    /** 测试注入：覆盖绑定命名空间行的读取（缺省走 DB + 进程内缓存）。 */
     readSettings?: () => Promise<unknown>;
+    /** 设置中心命名空间（部署配置 BEHAVIOR_SETTINGS_REF）；未绑定时仅 env 生效 */
+    settingsRef?: ExtensionSettingsRef | undefined;
   } = {},
 ): Promise<{
   client: WeKnoraKnowledgeClient;
@@ -140,10 +138,11 @@ export async function createAdaptiveKnowledgeClient(
 }> {
   const readSettings =
     input.readSettings ??
-    createCachedExtensionSettingsReader(db, {
-      ...PIPELINE_SETTINGS_REF,
-      ...(input.ttlMs !== undefined ? { ttlMs: input.ttlMs } : {}),
-    });
+    createOptionalCachedExtensionSettingsReader(
+      db,
+      input.settingsRef,
+      input.ttlMs,
+    );
   const resolve = async (): Promise<WeKnoraClientOptions | undefined> => {
     const row = await readSettings();
     const section =

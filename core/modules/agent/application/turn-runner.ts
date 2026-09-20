@@ -48,14 +48,9 @@ import {
 import { recordAgentTurnEvent } from "./agent-turn-events.js";
 import { buildAgentContext } from "./agent-context.js";
 import { commitDecisionDisposition } from "./decision-disposition.js";
-import {
-  classifyError,
-  getAgentTurnConversationId,
-} from "./turn-utils.js";
+import { classifyError, getAgentTurnConversationId } from "./turn-utils.js";
 import { chatTypeFromConversationRef } from "../../conversations/application/chat-type.js";
-import {
-  acquireDecision,
-} from "./acquire-decision.js";
+import { acquireDecision } from "./acquire-decision.js";
 import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
 import type { imageToContentPart } from "./image-content.js";
 import type { AgentTurnExecutionInput } from "./agent-turn-executor.js";
@@ -77,7 +72,7 @@ export type TurnRunnerDependencies = {
   preResolveAiEmployeePrompt?: (
     contactId: string,
     conversationId: string,
-    triggerText?: string | undefined,
+    triggerText?: string,
   ) => Promise<void>;
   /**
    * Optional hook resolving the AI employee identity (opaque string, e.g. a
@@ -181,7 +176,9 @@ export async function processAgentTurn(
   // 会话类型（ADR-0010）：读 conversations.chat_type 事实（ingest 定一次）；
   // 行缺失的极端场景按通道约定兜底推导（全 Core 仅 ingest 与此兜底认识后缀）。
   const chatType =
-    conversation?.chatType ?? chatTypeFromConversationRef(turn.conversationId);
+    conversation?.chatType ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- ADR-0010 允许的兜底路径
+    chatTypeFromConversationRef(turn.conversationId);
 
   // 行为参数（R2）：读取失败/未注入时回落出厂默认，绝不阻断 Turn。
   // 提前到上下文构建前：轮窗摘要角色标签（roundSummaryLabels）随行为参数装配。
@@ -345,10 +342,14 @@ export async function processAgentTurn(
     });
     return { continueLoop: disposition.action === "continue" };
   } catch (error) {
-    await recordTurnErrorAndRequeue(db, {
-      turnId: turn.turnId,
-      conversationId: turn.conversationId,
-    }, error);
+    await recordTurnErrorAndRequeue(
+      db,
+      {
+        turnId: turn.turnId,
+        conversationId: turn.conversationId,
+      },
+      error,
+    );
     throw error;
   }
 }
@@ -404,10 +405,14 @@ export async function processPlannedToolTurn(
     // 兜底契约与 fresh 路径一致：错误落事件（排错不依赖 stdout）、
     // running 重置为 queued 让队列重试/回收接管。事发时若缺这一层，
     // 异常静默退出会让 turn 假死到 STALE 兜底（2026-09-07 双 5min 回归）。
-    await recordTurnErrorAndRequeue(db, {
-      turnId: job.turnId,
-      conversationId: execution.conversationId,
-    }, error);
+    await recordTurnErrorAndRequeue(
+      db,
+      {
+        turnId: job.turnId,
+        conversationId: execution.conversationId,
+      },
+      error,
+    );
     throw error;
   }
 }
@@ -486,6 +491,7 @@ async function runPlannedToolTurnBody(
     .limit(1);
   const chatType =
     conversationTypeRow?.chatType ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- ADR-0010 允许的兜底路径
     chatTypeFromConversationRef(execution.conversationId);
 
   // 行为参数（R2）：提前加载供轮窗标签与后续预算使用。
@@ -627,6 +633,8 @@ async function runPlannedToolTurnBody(
         {
           id: toolCallId,
           name: execution.toolName,
+          // 防御 DB 值与类型不符（jsonb 列理论非空，运行时仍可能为 null）
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
           arguments: JSON.stringify(execution.arguments ?? {}),
         },
       ],

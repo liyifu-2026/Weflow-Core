@@ -8,9 +8,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
-import {
-  cancelPendingScheduledSendsForConversation,
-} from "../../agent/application/scheduled-sends.js";
+import { cancelPendingScheduledSendsForConversation } from "../../agent/application/scheduled-sends.js";
 import { AgentTurnService } from "../../agent/application/agent-turn-service.js";
 import { cancelPendingAgentOutbound } from "../../conversations/application/send-states.js";
 
@@ -169,4 +167,17 @@ export async function isConversationAgentEnabled(
     .limit(1);
   const profile = profiles[0];
   return (profile?.agentEnabled ?? true) && !(profile?.blocked ?? false);
+}
+
+/** 联系人头像 URL（头像代理端点用）：未设置时为 null */
+export async function getContactAvatarUrl(
+  db: NodePgDatabase<typeof schema>,
+  contactId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ avatarUrl: schema.contactProfiles.avatarUrl })
+    .from(schema.contactProfiles)
+    .where(eq(schema.contactProfiles.contactId, contactId))
+    .limit(1);
+  return rows[0]?.avatarUrl ?? null;
 }

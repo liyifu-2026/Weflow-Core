@@ -37,8 +37,8 @@ describe("TextModelMessage multimodal content（Phase 4 视觉直读）", () => 
         { type: "text", text: "第二段。" },
       ]),
     ).toBe("第一段。第二段。");
-    expect(textOfContent([{ type: "image_url", image_url: { url: "x" } }])).toBe(
-      "",
-    );
+    expect(
+      textOfContent([{ type: "image_url", image_url: { url: "x" } }]),
+    ).toBe("");
   });
 });

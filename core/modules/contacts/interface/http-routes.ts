@@ -4,9 +4,8 @@
  */
 
 import type { FastifyInstance } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { BusinessDb } from "../../identity/application/db.js";
 import { z } from "zod";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 import {
   getConversationContactProfile,
@@ -69,7 +68,7 @@ const patchSchema = z
 /** 注册联系人资料相关的 HTTP 路由 */
 export function registerContactProfileRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
 ): void {
   // 联系人通讯录（按联系人聚合最近可见会话）
   server.get("/api/v1/contacts", async (request, reply) => {

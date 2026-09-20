@@ -153,7 +153,7 @@ function createStubDb() {
         const { builder } = makeBuilder(name, rows);
         return builder;
       },
-      select(..._args: unknown[]) {
+      select() {
         const state: { table: string; where: Row } = { table: "", where: {} };
         const chain: any = {
           from(table: unknown) {
@@ -161,7 +161,7 @@ function createStubDb() {
               ((table as any)?.[Symbol.for("drizzle:Name")] as string) ?? "";
             return chain;
           },
-          where(_condition: unknown) {
+          where() {
             return chain;
           },
           limit() {
@@ -238,7 +238,7 @@ import { ingestChannelEvents } from "../modules/conversations/application/ingest
 function baseEvent(overrides: Record<string, unknown> = {}) {
   // 毒事件（kind 不在协议目录）也走此构造器，断言 ingest 层纵深防御——
   // 提供方 zod（协议 v6 枚举）之上仍保留归一化层拒收。
-  return ({
+  return {
     cursor: "1",
     eventId: "hist:wxid_demo:101",
     conversationRef: "wxid_demo",
@@ -252,7 +252,7 @@ function baseEvent(overrides: Record<string, unknown> = {}) {
     isSelf: false,
     historical: true,
     ...overrides,
-  }) as Parameters<typeof ingestChannelEvents>[1][number];
+  } as Parameters<typeof ingestChannelEvents>[1][number];
 }
 
 function liveEvent(overrides: Record<string, unknown> = {}) {

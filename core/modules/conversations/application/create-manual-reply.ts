@@ -5,6 +5,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { CHANNEL_WIRE_TYPES } from "../../channel/contracts/channel-wire.js";
 import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
@@ -191,7 +192,7 @@ export async function createManualReply(
           actorType: "user",
           actorId: input.actorUserId,
           contentType: input.mediaId || outboundMediaId ? "media" : "text",
-          channelType: 1,
+          channelType: CHANNEL_WIRE_TYPES.TEXT,
           text: input.text,
           isSelf: true,
           processingState: "not_applicable",

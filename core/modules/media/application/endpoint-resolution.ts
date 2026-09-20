@@ -13,15 +13,12 @@
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
-import * as schema from "../../../infrastructure/postgres/schema.js";
+import type * as schema from "../../../infrastructure/postgres/schema.js";
 import { resolveSlotChainRuntime } from "../../operations/application/model-gateway.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
-export const resolveVisionEndpoint = async (
-  db: Database,
-  logger: Logger,
-) => {
+export const resolveVisionEndpoint = async (db: Database, logger: Logger) => {
   try {
     const textChain = await resolveSlotChainRuntime(db, "text");
     if (textChain[0]?.capabilities.includes("vision")) return textChain[0];
@@ -36,10 +33,7 @@ export const resolveVisionEndpoint = async (
   }
 };
 
-export const resolveAsrSlotEndpoint = async (
-  db: Database,
-  logger: Logger,
-) => {
+export const resolveAsrSlotEndpoint = async (db: Database, logger: Logger) => {
   try {
     const asrChain = await resolveSlotChainRuntime(db, "asr");
     return asrChain[0];
@@ -58,7 +52,9 @@ export const resolveAsrSlotEndpoint = async (
  * PYTHON_PATH / FFMPEG_PATH env 或 PATH 解析，缺失即
  * transcode_unavailable 诚实降级。不设本机绝对路径 fallback。
  */
-export function resolveVoiceToolchainPaths(env: NodeJS.ProcessEnv = process.env): {
+export function resolveVoiceToolchainPaths(
+  env: NodeJS.ProcessEnv = process.env,
+): {
   pythonPath?: string;
   ffmpegPath?: string;
 } {

@@ -39,12 +39,14 @@ handlers MUST also have an `application/` directory with at least one service
 file. The `application/` directory must never be empty.
 
 Route handlers in `interface/` are HTTP adapters. They must:
+
 1. Authenticate the request (`requireBusinessIdentity` or `requireAdminIdentity`)
 2. Validate input with Zod schemas
 3. Delegate to an application-layer function
 4. Map the result to an HTTP response
 
 Route handlers must NOT:
+
 - Import from `infrastructure/postgres/schema` or call Drizzle ORM directly
 - Import from `infrastructure/settings/*` or other cross-module infrastructure
   directly when an application-layer equivalent exists

@@ -6,6 +6,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { CHANNEL_WIRE_TYPES } from "../../channel/contracts/channel-wire.js";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
@@ -759,7 +760,11 @@ async function transitionInTransaction(
       "handoff_active",
       input.agentTurnId,
     );
-    await cancelPendingAgentOutbound(transaction, input.conversationId, "handoff_active");
+    await cancelPendingAgentOutbound(
+      transaction,
+      input.conversationId,
+      "handoff_active",
+    );
     if (type === "created") {
       // 告别话术由发起方自带（平台不持有任何业务文案）；插在 pending
       // agent 消息取消之后，保证它自身不被一起取消。缺省 = 静默转接。
@@ -777,7 +782,7 @@ async function transitionInTransaction(
               actorType: "agent" as const,
               actorId: input.actorUserId,
               contentType: "text" as const,
-              channelType: 1,
+              channelType: CHANNEL_WIRE_TYPES.TEXT,
               text,
               isSelf: true,
               processingState: "not_applicable" as const,

@@ -17,9 +17,7 @@ import {
   type Postgres,
 } from "../infrastructure/postgres/client.js";
 import * as schema from "../infrastructure/postgres/schema.js";
-import {
-  commitDecisionDisposition,
-} from "../modules/agent/application/decision-disposition.js";
+import { commitDecisionDisposition } from "../modules/agent/application/decision-disposition.js";
 import type { AgentDecision } from "../modules/agent/application/agent-decision.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -150,7 +148,10 @@ integration("decision disposition atomic outcome (real db)", () => {
     await insertTriggerMessage(triggerId);
     await insertRunningTurn(turnId, triggerId);
 
-    const result = await disposition(turnId, replyDecision("重启电脑后再试一次。"));
+    const result = await disposition(
+      turnId,
+      replyDecision("重启电脑后再试一次。"),
+    );
 
     expect(result).toEqual({ action: "terminal" });
     const [turn] = await postgres.db
@@ -189,10 +190,7 @@ integration("decision disposition atomic outcome (real db)", () => {
     await insertTriggerMessage(triggerId);
     await insertRunningTurn(turnId, triggerId);
 
-    const result = await disposition(
-      turnId,
-      replyDecision("长".repeat(600)),
-    );
+    const result = await disposition(turnId, replyDecision("长".repeat(600)));
 
     expect(result).toEqual({ action: "terminal" });
     const [turn] = await postgres.db
@@ -222,7 +220,10 @@ integration("decision disposition atomic outcome (real db)", () => {
     const turnId2 = `turn:disp-outcome-dup2-${suffix}`;
     await insertTriggerMessage(`msg:${turnId2}`);
     await insertRunningTurn(turnId2, `msg:${turnId2}`);
-    const result = await disposition(turnId2, replyDecision("请重新插拔一下设备。"));
+    const result = await disposition(
+      turnId2,
+      replyDecision("请重新插拔一下设备。"),
+    );
 
     expect(result).toEqual({ action: "terminal" });
     const [dupTurn] = await postgres.db

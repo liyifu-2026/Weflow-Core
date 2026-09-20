@@ -56,9 +56,7 @@ export async function registerWebStatic(
     // 注意：setHeaders 的第二个参数是文件系统绝对路径（Windows 为反斜杠），
     // 需要先裁成相对 URL 路径再判断
     setHeaders(res, filePath) {
-      const relative = filePath
-        .slice(webDistDir.length)
-        .replace(/\\/g, "/");
+      const relative = filePath.slice(webDistDir.length).replace(/\\/g, "/");
       // 带 hash 的产物长缓存；index.html / SPA fallback 不缓存保证发版即时生效
       if (relative.startsWith("/assets/")) {
         res.setHeader("cache-control", "public, max-age=31536000, immutable");

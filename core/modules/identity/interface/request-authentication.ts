@@ -5,15 +5,30 @@
  */
 
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
+import type { BusinessDb } from "../../identity/application/db.js";
 import {
   authenticate,
   type AuthenticatedUser,
 } from "../application/identity-service.js";
 
 const COOKIE_NAME = "weflow_session";
-const COOKIE_DOMAIN = process.env.SESSION_COOKIE_DOMAIN?.trim();
+
+/**
+ * Cookie 安全旗标的唯一事实源：main.ts 启动时从已校验 config 注入。
+ * 未注入时（测试环境）回落 env/NODE_ENV 判定，行为与注入语义一致——
+ * 此前模块直读 process.env 与 config 形成两个事实源，已收敛。
+ */
+let cookieDomainOverride: string | undefined;
+let cookieSecureOverride: boolean | undefined;
+
+/** 启动时注入已校验的 Cookie 安全配置（main.ts 调用，进程级一次） */
+export function configureSessionCookies(input: {
+  domain?: string | undefined;
+  secure: boolean;
+}): void {
+  cookieDomainOverride = input.domain;
+  cookieSecureOverride = input.secure;
+}
 
 /** 请求中解析出的用户身份信息 */
 export type RequestIdentity = {
@@ -23,7 +38,7 @@ export type RequestIdentity = {
 
 /** 从请求头或 Cookie 中提取并验证用户身份，未认证时返回 undefined */
 export async function requestIdentity(
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   request: FastifyRequest,
 ): Promise<RequestIdentity | undefined> {
   const token =
@@ -45,7 +60,7 @@ function bearerToken(header: string | undefined): string | undefined {
  * 未认证返回 401，需要修改密码时返回 403。
  */
 export async function requireBusinessIdentity(
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<RequestIdentity | undefined> {
@@ -63,7 +78,7 @@ export async function requireBusinessIdentity(
 
 /** 强制要求管理员身份。业务身份通过后再做角色判断，默认拒绝。 */
 export async function requireAdminIdentity(
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<RequestIdentity | undefined> {
@@ -82,6 +97,7 @@ export async function requireAdminIdentity(
  * 否则浏览器不回传 Cookie 导致无法登录）。与 config schema 的枚举对齐。
  */
 function cookieSecure(): boolean {
+  if (cookieSecureOverride !== undefined) return cookieSecureOverride;
   const override = process.env.SESSION_COOKIE_SECURE?.trim();
   if (override === "true") return true;
   if (override === "false") return false;
@@ -94,14 +110,14 @@ function cookieSecure(): boolean {
  */
 export function sessionCookie(token: string, expiresAt: Date): string {
   const secure = cookieSecure();
-  const domain = COOKIE_DOMAIN ? ` Domain=${COOKIE_DOMAIN};` : "";
+  const domain = cookieDomainOverride ? ` Domain=${cookieDomainOverride};` : "";
   return `${COOKIE_NAME}=${token}; Path=/; HttpOnly;${domain}${secure ? " Secure;" : ""} SameSite=Strict; Expires=${expiresAt.toUTCString()}`;
 }
 
 /** 生成清除会话 Cookie 的 Set-Cookie 头值 */
 export function clearSessionCookie(): string {
   const secure = cookieSecure();
-  const domain = COOKIE_DOMAIN ? ` Domain=${COOKIE_DOMAIN};` : "";
+  const domain = cookieDomainOverride ? ` Domain=${cookieDomainOverride};` : "";
   return `${COOKIE_NAME}=; Path=/; HttpOnly;${domain}${secure ? " Secure;" : ""} SameSite=Strict; Max-Age=0`;
 }
 

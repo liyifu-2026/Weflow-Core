@@ -19,6 +19,7 @@ import {
   type SQL,
   type SQLWrapper,
 } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { groupDisplayName } from "../../contacts/application/group-display-name.js";
@@ -201,7 +202,8 @@ export async function listSharedConversations(
       },
       handoffStatus: schema.handoffStates.status,
       handoffReason: schema.handoffStates.reason,
-      handoffCreatedAt: schema.handoffStates.createdAt,      handoffAssignedUserId: schema.handoffStates.assignedUserId,
+      handoffCreatedAt: schema.handoffStates.createdAt,
+      handoffAssignedUserId: schema.handoffStates.assignedUserId,
       handoffAssignedQueueId: schema.handoffStates.assignedQueueId,
       handoffAgentPaused: schema.handoffStates.agentPaused,
       handoffTargetUserId: schema.handoffStates.targetUserId,
@@ -373,16 +375,15 @@ export async function listSharedConversations(
       }) => {
         void handoffTargetUserId;
         // 群聊显示名兜底：未设群名的群 displayName 是裸通道群 ID
-        const contactOut = conversation.contact
-          ? {
-              ...conversation.contact,
-              channelDisplayName: groupDisplayName(
-                conversation.contact.channelDisplayName,
-                conversation.contact.channelContactId,
-                conversation.chatType === "group",
-              ),
-            }
-          : conversation.contact;
+        // contact 经 innerJoin 关联（FK 保证行存在），恒有值
+        const contactOut = {
+          ...conversation.contact,
+          channelDisplayName: groupDisplayName(
+            conversation.contact.channelDisplayName,
+            conversation.contact.channelContactId,
+            conversation.chatType === "group",
+          ),
+        };
         return {
           ...conversation,
           contact: contactOut,
@@ -391,6 +392,7 @@ export async function listSharedConversations(
           chatType: conversation.chatType,
           // pg 对 count(*)（bigint）返回字符串；投影统一转数字，
           // 避免客户端把 "0" 当 truthy 误显示未读红点。
+          // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion, @typescript-eslint/no-unnecessary-condition -- 防御 DB 值与类型不符
           unreadCustomerCount: Number(conversation.unreadCustomerCount ?? 0),
           handoff: handoffStatus
             ? {
@@ -521,10 +523,15 @@ export async function searchSharedConversations(
   }));
 }
 
-/** 设置当前用户的会话隐藏状态。 */
+/** 设置当前用户的会话隐藏状态（隐藏/恢复均记审计）。 */
 export async function setConversationHidden(
   db: NodePgDatabase<typeof schema>,
-  input: { userId: string; conversationId: string; hidden: boolean },
+  input: {
+    userId: string;
+    conversationId: string;
+    hidden: boolean;
+    sourceIp?: string | undefined;
+  },
 ) {
   const [conversation] = await db
     .select({ conversationId: schema.conversations.conversationId })
@@ -550,6 +557,15 @@ export async function setConversationHidden(
         ),
       );
   }
+  await db.insert(schema.auditEvents).values({
+    auditId: randomUUID(),
+    actorUserId: input.userId,
+    eventType: input.hidden ? "conversation.hidden" : "conversation.restored",
+    subjectType: "conversation",
+    subjectId: input.conversationId,
+    sourceIp: input.sourceIp ?? null,
+    metadata: { hidden: String(input.hidden) },
+  });
   return { conversationId: input.conversationId, hidden: input.hidden };
 }
 
@@ -677,7 +693,9 @@ export async function getSharedTranscript(
     .limit(1);
   // 会话类型（ADR-0010）：落库事实；行缺失的极端场景按通道约定兜底推导。
   const chatType =
-    conversation?.chatType ?? chatTypeFromConversationRef(conversationId);
+    conversation?.chatType ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- ADR-0010 允许的兜底路径
+    chatTypeFromConversationRef(conversationId);
   // 群聊消息的发送者昵称解析：actorId（wxid）→ 同账号联系人资料
   // （共享别名 > 显示名 > 昵称）。群成员本身就在联系人同步范围内。
   const senderNames = new Map<string, string>();
@@ -691,7 +709,12 @@ export async function getSharedTranscript(
         sharedAlias: schema.contactProfiles.sharedAlias,
       })
       .from(schema.contactProfiles)
-      .where(eq(schema.contactProfiles.channelAccount, conversation?.channelAccount ?? "default"));
+      .where(
+        eq(
+          schema.contactProfiles.channelAccount,
+          conversation?.channelAccount ?? "default",
+        ),
+      );
     for (const row of memberRows) {
       const resolved =
         row.sharedAlias?.trim() ||
@@ -769,9 +792,7 @@ export async function getSharedTranscript(
       // 群聊发送者昵称：入站消息 actorId（通道联系人 ID）解析为可读名；
       // 未同步的成员回落匿名缩写。私聊恒为 null。
       const senderName =
-        chatType === "group" &&
-        row.direction === "inbound" &&
-        row.actorId
+        chatType === "group" && row.direction === "inbound" && row.actorId
           ? (senderNames.get(row.actorId) ?? maskedSenderLabel(row.actorId))
           : null;
       return {
@@ -1056,7 +1077,9 @@ export async function listContactsWithLatestConversation(
     : undefined;
   const trimmedQuery = input.q?.trim() ?? "";
   const searchPattern =
-    trimmedQuery.length > 0 ? `%${trimmedQuery.replace(/[%_]/g, "\\$&")}%` : null;
+    trimmedQuery.length > 0
+      ? `%${trimmedQuery.replace(/[%_]/g, "\\$&")}%`
+      : null;
   const agentEnabledFilter = input.agentEnabled;
   const blockedFilter = input.blocked;
   const rows = await db.execute<{
@@ -1206,6 +1229,7 @@ export async function listContactsWithLatestConversation(
           : new Date(row.firstContactAt).toISOString()
         : null,
       // pg 的 count(*)（bigint）返回字符串，统一转数字
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion, @typescript-eslint/no-unnecessary-condition -- 防御 DB 值与类型不符
       conversationCount: Number(row.conversationCount ?? 0),
       lastHandlerName: row.lastHandlerName,
       lastHandlerAt: row.lastHandlerAt

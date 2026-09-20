@@ -95,7 +95,8 @@ export class PysilkFfmpegTranscoder {
   readonly #onDiagnostics: (line: string) => void;
 
   public constructor(options: PysilkFfmpegTranscoderOptions = {}) {
-    this.#pythonPath = options.pythonPath ?? process.env.PYTHON_PATH ?? "python";
+    this.#pythonPath =
+      options.pythonPath ?? process.env.PYTHON_PATH ?? "python";
     this.#ffmpegPath =
       options.ffmpegPath ?? process.env.FFMPEG_PATH ?? "ffmpeg";
     this.#sampleRate = options.sampleRate ?? 24_000;

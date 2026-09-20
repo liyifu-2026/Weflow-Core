@@ -19,7 +19,13 @@ describe("turn-utils isTerminal", () => {
   });
 
   it("非终态判定为 false", () => {
-    for (const status of ["queued", "tool_planned", "running", "unknown", "whatever"]) {
+    for (const status of [
+      "queued",
+      "tool_planned",
+      "running",
+      "unknown",
+      "whatever",
+    ]) {
       expect(isTerminal(status)).toBe(false);
     }
   });

@@ -59,7 +59,7 @@ integration("message outcome by stable id", () => {
         messageId: agentMessageId,
         actorType: "agent",
         actorId: null,
-        sendState: "sent",
+        sendState: "confirmed",
         replyBatchId: `agent-reply:turn:${suffix}`,
         replySequence: 1,
         idempotencyKey: agentMessageId,

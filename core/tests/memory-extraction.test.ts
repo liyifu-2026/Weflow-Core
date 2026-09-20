@@ -10,13 +10,21 @@ import {
 
 describe("memory extraction contract", () => {
   it("normalizes fractional or string confidence to 0-100 int", () => {
-    const [a] = parseMemoryExtraction(`{"memories":[{"kind":"fact","key":"k1","content":"c","confidence":0.95,"evidenceMessageIds":["m1"],"subject":"contact","explicit":true,"stable":true,"sensitive":false}]}`);
+    const [a] = parseMemoryExtraction(
+      `{"memories":[{"kind":"fact","key":"k1","content":"c","confidence":0.95,"evidenceMessageIds":["m1"],"subject":"contact","explicit":true,"stable":true,"sensitive":false}]}`,
+    );
     expect(a?.confidence).toBe(95);
-    const [b] = parseMemoryExtraction(`{"memories":[{"kind":"fact","key":"k2","content":"c","confidence":"88","evidenceMessageIds":["m2"],"subject":"contact","explicit":true,"stable":true,"sensitive":false}]}`);
+    const [b] = parseMemoryExtraction(
+      `{"memories":[{"kind":"fact","key":"k2","content":"c","confidence":"88","evidenceMessageIds":["m2"],"subject":"contact","explicit":true,"stable":true,"sensitive":false}]}`,
+    );
     expect(b?.confidence).toBe(88);
-    const [c] = parseMemoryExtraction(`{"memories":[{"kind":"fact","key":"k3","content":"c","confidence":1,"evidenceMessageIds":["m3"],"subject":"contact","explicit":true,"stable":true,"sensitive":false}]}`);
+    const [c] = parseMemoryExtraction(
+      `{"memories":[{"kind":"fact","key":"k3","content":"c","confidence":1,"evidenceMessageIds":["m3"],"subject":"contact","explicit":true,"stable":true,"sensitive":false}]}`,
+    );
     expect(c?.confidence).toBe(100);
-    const [d] = parseMemoryExtraction(`{"memories":[{"kind":"fact","key":"k4","content":"c","confidence":120,"evidenceMessageIds":["m4"],"subject":"contact","explicit":true,"stable":true,"sensitive":false}]}`);
+    const [d] = parseMemoryExtraction(
+      `{"memories":[{"kind":"fact","key":"k4","content":"c","confidence":120,"evidenceMessageIds":["m4"],"subject":"contact","explicit":true,"stable":true,"sensitive":false}]}`,
+    );
     expect(d?.confidence).toBe(100);
   });
 

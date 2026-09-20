@@ -28,16 +28,21 @@ describe("knowledge connector settings", () => {
   });
 
   it("strips the knowledge-search suffix from retrieveUrl", () => {
-    expect(
-      retrieveUrlToBaseUrl("http://kb.test/api/v1/knowledge-search"),
-    ).toBe("http://kb.test/api/v1");
+    expect(retrieveUrlToBaseUrl("http://kb.test/api/v1/knowledge-search")).toBe(
+      "http://kb.test/api/v1",
+    );
     expect(retrieveUrlToBaseUrl("http://kb.test/api/v1/")).toBe(
       "http://kb.test/api/v1",
     );
   });
 
   it("parses comma and whitespace separated knowledge base ids", () => {
-    expect(parseKnowledgeBaseIdList("a, b；c\nd")).toEqual(["a", "b", "c", "d"]);
+    expect(parseKnowledgeBaseIdList("a, b；c\nd")).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ]);
     expect(parseKnowledgeBaseIdList("  ")).toBeUndefined();
     expect(parseKnowledgeBaseIdList(undefined)).toBeUndefined();
   });

@@ -209,7 +209,13 @@ describe("HttpChannelProvider protocol reconciliation", () => {
   // 协议 v5：出站移除受限 voice 转发（recall 保留）
   const matchingCapabilities = {
     protocolVersion: 6,
-    sendOperationStates: ["pending", "executing", "confirmed", "unknown", "failed"],
+    sendOperationStates: [
+      "pending",
+      "executing",
+      "confirmed",
+      "unknown",
+      "failed",
+    ],
     sendKinds: ["text", "file", "image", "reply", "mention", "poke", "recall"],
   };
 
@@ -243,7 +249,9 @@ describe("HttpChannelProvider protocol reconciliation", () => {
     await expect(provider.ensureProtocol()).rejects.toThrow(
       /missing sendOperationState: executing/,
     );
-    await expect(provider.ensureProtocol()).rejects.toThrow(/missing sendKind: file/);
+    await expect(provider.ensureProtocol()).rejects.toThrow(
+      /missing sendKind: file/,
+    );
   });
 
   it("unreachable host skips check instead of failing", async () => {
@@ -260,7 +268,12 @@ describe("HttpChannelProvider protocol reconciliation", () => {
       baseUrl: "https://host.test",
       token: "secret",
       fetch: (async (input: string | URL | Request) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.href
+              : input.url;
         if (url.includes("/api/v1/channel/send")) sendCalls += 1;
         return Response.json({ ...matchingCapabilities, protocolVersion: 9 });
       }) as unknown as typeof fetch,

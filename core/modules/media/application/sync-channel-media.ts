@@ -10,6 +10,7 @@
 import { Readable } from "node:stream";
 import { and, asc, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { Logger } from "pino";
 import type { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { ChannelMediaSource } from "../../channel/contracts/channel-media-source.js";
@@ -19,10 +20,15 @@ const SYSTEM_ACTOR = "system-channel-host";
 /** 参与同步的资产类型：图片（视觉描述）、视频/文件附件（无派生阶段）、语音（转写） */
 const SYNC_KINDS = ["image", "file", "voice", "video"] as const;
 
+const SILENT_LOGGER: Logger = {
+  error: () => undefined,
+} as unknown as Logger;
+
 export async function syncChannelMedia(
   db: NodePgDatabase<typeof schema>,
   storage: LocalFileStorage,
   source: ChannelMediaSource,
+  logger: Logger = SILENT_LOGGER,
 ): Promise<void> {
   const assets = await db
     .select()
@@ -63,7 +69,10 @@ export async function syncChannelMedia(
             ? await source.resolveAudio(asset.sourceMediaRef)
             : asset.kind === "video"
               ? await (source.resolveVideo?.(asset.sourceMediaRef) ??
-                Promise.resolve({ state: "failed" as const, errorCode: "media_unreadable" }))
+                  Promise.resolve({
+                    state: "failed" as const,
+                    errorCode: "media_unreadable",
+                  }))
               : await source.resolveImage(asset.sourceMediaRef);
       if (result.state === "pending") {
         await scheduleRetry(db, asset.mediaId, asset.attempt, "source_pending");
@@ -114,7 +123,10 @@ export async function syncChannelMedia(
             .set({
               // 文件/视频无派生阶段：落盘即可供人工查看。
               // 图片/语音仍需描述/转写，交给 media-processing-dispatcher。
-              status: asset.kind === "file" || asset.kind === "video" ? "ready" : "processing_queued",
+              status:
+                asset.kind === "file" || asset.kind === "video"
+                  ? "ready"
+                  : "processing_queued",
               originalFileId: file.fileId,
               // thumbnail=Host 缩略图回退（可升级原图）；缺省 original
               sourceVariant:
@@ -128,7 +140,13 @@ export async function syncChannelMedia(
         await storage.remove(file.storageKey);
         throw error;
       }
-    } catch {
+    } catch (error) {
+      // 吞错会掩盖下载故障（曾有存储写入失败被静默成 queued 重试）：
+      // 记录后按既有语义退避重试。
+      logger.error(
+        { err: error, mediaId: asset.mediaId, attempt: asset.attempt },
+        "channel media sync failed",
+      );
       await db
         .update(schema.mediaAssets)
         .set({

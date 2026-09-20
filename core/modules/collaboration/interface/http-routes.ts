@@ -7,9 +7,8 @@
  * - 请求的认领、回答和关闭
  */
 import type { FastifyInstance, FastifyReply } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { BusinessDb } from "../../identity/application/db.js";
 import { z } from "zod";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 import {
   answerCollaborationRequest,
@@ -41,7 +40,7 @@ const answerBody = z
 /** 注册协作模块的所有 HTTP 路由 */
 export function registerCollaborationRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
 ): void {
   server.get("/api/v1/specialist-queues", async (request, reply) => {
     if (!(await requireBusinessIdentity(db, request, reply))) return;

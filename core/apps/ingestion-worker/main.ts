@@ -150,22 +150,22 @@ await runProcess({
           );
           return;
         }
-        if (!visionEndpoint && !vision) {
+        if (!vision) {
           logger.error(
             { jobId: job.data.jobId },
             "image job received but no vision endpoint configured (slot or env)",
           );
           return;
         }
-        const fallbackName = vision?.name ?? "mimo-v2.5";
+        const fallbackName = vision.name;
         await processImageDescription(
           postgres.db,
           mediaStorage,
           new MimoVisionClient({
-            baseUrl: vision?.baseUrl ?? "",
-            apiKey: vision?.apiKey ?? "",
+            baseUrl: vision.baseUrl,
+            apiKey: vision.apiKey,
             model: fallbackName,
-            timeoutMs: vision?.timeoutMs ?? 60_000,
+            timeoutMs: vision.timeoutMs,
           }),
           fallbackName,
           job.data.businessEntityId,
@@ -199,7 +199,7 @@ await runProcess({
       }
     });
     return () => {
-      void mediaWorker?.close();
+      void mediaWorker.close();
       stopConversationEventBus();
     };
   },

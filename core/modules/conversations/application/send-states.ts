@@ -75,9 +75,7 @@ export const DELIVERED_SEND_STATES = [
 ] as const;
 
 export function isDeliveredSendState(state: string | null): boolean {
-  return (
-    state === SEND_STATE.confirmed || state === SEND_STATE.observed
-  );
+  return state === SEND_STATE.confirmed || state === SEND_STATE.observed;
 }
 
 /**
@@ -85,9 +83,7 @@ export function isDeliveredSendState(state: string | null): boolean {
  * executing（host 已认领、GUI 发送中）与 pending 一样属于在途，
  * 一律映射 submitting——不得把在途误报为已发送或失败。
  */
-export function sendStateFromHost(
-  state: ChannelSendOperationState,
-): SendState {
+export function sendStateFromHost(state: ChannelSendOperationState): SendState {
   switch (state) {
     case "pending":
     case "executing":

@@ -161,8 +161,9 @@ export function extractReasoning(payload: unknown): string | undefined {
   if (typeof payload !== "object" || payload === null) return undefined;
   const choices = (payload as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) return undefined;
-  const message = (choices[0] as { message?: { reasoning_content?: unknown } })
-    ?.message;
+  const message = // 防御畸形响应：choices[0] 运行时可能缺失，断言不改变实际数据
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    (choices[0] as { message?: { reasoning_content?: unknown } })?.message;
   const raw = message?.reasoning_content;
   if (typeof raw !== "string" || raw.trim() === "") return undefined;
   return raw.slice(0, REASONING_MAX_CHARS);
@@ -307,7 +308,7 @@ export class OpenAiCompatibleClient implements TextModel {
       const choice = parsed.choices[0];
       // FC 协议：原生工具调用请求——立即返回，不按空响应重试
       const nativeToolCalls: ChatToolCall[] = (choice?.message.tool_calls ?? [])
-        .filter((call) => Boolean(call.id) && Boolean(call.function?.name))
+        .filter((call) => Boolean(call.id) && Boolean(call.function.name))
         .map((call) => ({
           id: call.id,
           name: call.function.name,

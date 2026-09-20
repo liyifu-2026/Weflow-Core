@@ -18,7 +18,10 @@
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../../../infrastructure/postgres/schema.js";
-import { createCachedExtensionSettingsReader } from "../../../infrastructure/settings/extension-settings.js";
+import {
+  createCachedExtensionSettingsReader,
+  type ExtensionSettingsRef,
+} from "../../../infrastructure/settings/extension-settings.js";
 
 /** 轮窗摘要角色标签（round-window.ts 摘要行两端的角色词；ADR-0011）。 */
 export type RoundSummaryLabels = { customer: string; agent: string };
@@ -220,12 +223,18 @@ export function extractBehaviorSettings(raw: unknown): BehaviorSettings {
 /**
  * 创建带 TTL 缓存的行为参数读取器（供 agent-worker / api 进程装配）。
  * 底层复用通用扩展设置读取器（30s TTL + in-flight 合并）。
+ * 命名空间由部署配置绑定（BEHAVIOR_SETTINGS_REF）；未绑定时恒回落
+ * 出厂默认——纯平台模式下业务行为参数不存在，属预期形态。
  */
 export function createBehaviorSettingsReader(
   db: NodePgDatabase<typeof schema>,
-  input: { solutionId: string; extensionId: string; ttlMs?: number },
+  ref: ExtensionSettingsRef | undefined,
 ): () => Promise<BehaviorSettings> {
-  const readRaw = createCachedExtensionSettingsReader(db, input);
+  if (!ref) {
+    const defaults = { ...DEFAULT_BEHAVIOR_SETTINGS };
+    return () => Promise.resolve(defaults);
+  }
+  const readRaw = createCachedExtensionSettingsReader(db, ref);
   return async () => {
     try {
       return extractBehaviorSettings(await readRaw());

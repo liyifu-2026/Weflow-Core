@@ -47,7 +47,9 @@ describe("reply-policy buildSystemPrompt", () => {
 });
 
 describe("reply-policy resolveExecutionStrategy", () => {
-  function registryWith(entries: Record<string, unknown>): ExecutionStrategyRegistry {
+  function registryWith(
+    entries: Record<string, unknown>,
+  ): ExecutionStrategyRegistry {
     return {
       get: (ref: string) => entries[ref] as never,
       list: () => Object.values(entries) as never,
@@ -66,7 +68,10 @@ describe("reply-policy resolveExecutionStrategy", () => {
   });
 
   it("无 executionProfileId → 回退注册表首个策略", async () => {
-    const registry = registryWith({ a: { id: "strategy-a" }, b: { id: "strategy-b" } });
+    const registry = registryWith({
+      a: { id: "strategy-a" },
+      b: { id: "strategy-b" },
+    });
     const strategy = await resolveExecutionStrategy(
       {} as never,
       { executionProfileId: null },
@@ -125,7 +130,11 @@ describe("reply-policy collectSkillHints", () => {
   it("收集 beforeKnowledge 输出并带上 id@version 前缀", () => {
     const hints = collectSkillHints(
       fakeSkillRegistry([
-        { id: "kb-guide", version: "1.0.0", beforeKnowledge: () => ({ tip: "查错误 2272" }) },
+        {
+          id: "kb-guide",
+          version: "1.0.0",
+          beforeKnowledge: () => ({ tip: "查错误 2272" }),
+        },
       ]),
       history,
     );
@@ -136,17 +145,27 @@ describe("reply-policy collectSkillHints", () => {
     const hints = collectSkillHints(
       fakeSkillRegistry([
         { id: "no-hook", version: "1.0.0" },
-        { id: "throws", version: "1.0.0", beforeKnowledge: () => { throw new Error("boom"); } },
+        {
+          id: "throws",
+          version: "1.0.0",
+          beforeKnowledge: () => {
+            throw new Error("boom");
+          },
+        },
         { id: "ok", version: "2.0.0", beforeKnowledge: () => "hint" },
       ]),
       history,
     );
-    expect(hints).toEqual(["ok@2.0.0: \"hint\""]);
+    expect(hints).toEqual(['ok@2.0.0: "hint"']);
   });
 
   it("带命名空间的 Skill id 只保留末段（内部标识不进入模型上下文）", () => {
-    expect(skillHintLabel("weflow.customer-support/product-troubleshooting", "1.0.0"))
-      .toBe("product-troubleshooting@1.0.0");
+    expect(
+      skillHintLabel(
+        "weflow.customer-support/product-troubleshooting",
+        "1.0.0",
+      ),
+    ).toBe("product-troubleshooting@1.0.0");
     const hints = collectSkillHints(
       fakeSkillRegistry([
         {
@@ -157,7 +176,9 @@ describe("reply-policy collectSkillHints", () => {
       ]),
       history,
     );
-    expect(hints).toEqual(['product-troubleshooting@1.0.0: {"tip":"查错误 2272"}']);
+    expect(hints).toEqual([
+      'product-troubleshooting@1.0.0: {"tip":"查错误 2272"}',
+    ]);
     expect(hints.join("\n")).not.toContain("weflow.");
   });
 });
@@ -169,7 +190,11 @@ describe("reply-policy collectSkillHintsAfterKnowledge", () => {
   it("收集 afterKnowledge 输出（带 evidence）", () => {
     const hints = collectSkillHintsAfterKnowledge(
       fakeSkillRegistry([
-        { id: "kb-guide", version: "1.0.0", afterKnowledge: () => ({ evidenceCount: 1 }) },
+        {
+          id: "kb-guide",
+          version: "1.0.0",
+          afterKnowledge: () => ({ evidenceCount: 1 }),
+        },
       ]),
       evidence,
       history,

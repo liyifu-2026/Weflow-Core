@@ -31,7 +31,11 @@ export class AudioTranscriptionsClient {
    * 转写一段语音（MP3/WAV/OGG/FLAC/M4A；SILK 须先转码）。
    * @returns 转写文本（一行以内，最多 2000 字符）
    */
-  async transcribe(audio: Buffer, mimeType: string, fileName = "audio.mp3"): Promise<string> {
+  async transcribe(
+    audio: Buffer,
+    mimeType: string,
+    fileName = "audio.mp3",
+  ): Promise<string> {
     const form = new FormData();
     const blob = new Blob([audio], { type: mimeType });
     form.append("file", blob, fileName);
@@ -54,7 +58,7 @@ export class AudioTranscriptionsClient {
       );
     }
     const parsed = responseSchema.parse(await response.json());
-    const transcription = (parsed.text ?? "").trim();
+    const transcription = parsed.text.trim();
     if (!transcription) {
       throw new Error("audio transcriptions API returned an empty text");
     }

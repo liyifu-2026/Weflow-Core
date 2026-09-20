@@ -87,7 +87,9 @@ describe("agent turn scheduling policy", () => {
     );
 
     expect(result.ready.map(({ turnId }) => turnId)).toEqual(["turn:image"]);
-    expect(result.superseded.map(({ turnId }) => turnId)).toEqual(["turn:text"]);
+    expect(result.superseded.map(({ turnId }) => turnId)).toEqual([
+      "turn:text",
+    ]);
   });
 
   it("wake turns (no trigger message) yield to message turns in the same window", () => {

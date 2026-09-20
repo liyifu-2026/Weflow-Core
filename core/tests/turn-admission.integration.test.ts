@@ -37,14 +37,10 @@ integration("merge window（合并窗口开关行为）", () => {
       // FK 依赖顺序：登记/记忆窗口 → turns → messages → conversations → contacts
       await postgres.db
         .delete(schema.turnAdmissionStates)
-        .where(
-          eq(schema.turnAdmissionStates.conversationId, conversationId),
-        );
+        .where(eq(schema.turnAdmissionStates.conversationId, conversationId));
       await postgres.db
         .delete(schema.memoryCaptureStates)
-        .where(
-          eq(schema.memoryCaptureStates.conversationId, conversationId),
-        );
+        .where(eq(schema.memoryCaptureStates.conversationId, conversationId));
       await postgres.db
         .delete(schema.agentTurns)
         .where(eq(schema.agentTurns.conversationId, conversationId));

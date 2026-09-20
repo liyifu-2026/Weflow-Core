@@ -83,14 +83,17 @@ async function computeModelGatewayFingerprint(
 ): Promise<string> {
   try {
     const [registryRows, slotRows] = await Promise.all([
-      db.select().from(schema.modelRegistry).orderBy(schema.modelRegistry.modelId),
+      db
+        .select()
+        .from(schema.modelRegistry)
+        .orderBy(schema.modelRegistry.modelId),
       db.select().from(schema.runtimeSettings),
     ]);
     const slots = Object.fromEntries(
       slotRows
         .filter((row) => row.key.startsWith("model_slot_"))
-        .map((row) => [row.key, row.value])
-        .sort(([a], [b]) => (a ?? "").localeCompare(b ?? "")),
+        .map((row): [string, string] => [row.key, row.value])
+        .sort(([a], [b]) => a.localeCompare(b)),
     );
     const payload = JSON.stringify({
       registry: registryRows.map((row) => ({

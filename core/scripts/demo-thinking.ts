@@ -17,7 +17,10 @@ function env(name: string): string | undefined {
 }
 
 const client = new OpenAiCompatibleClient({
-  baseUrl: (env("MODEL_BASE_URL") ?? "https://api.deepseek.com").replace(/\/$/, ""),
+  baseUrl: (env("MODEL_BASE_URL") ?? "https://api.deepseek.com").replace(
+    /\/$/,
+    "",
+  ),
   apiKey: env("MODEL_API_KEY") ?? "",
   model: env("MODEL_NAME") ?? "deepseek-chat",
   timeoutMs: 180_000,
@@ -45,12 +48,9 @@ const MESSAGES = [
 async function run(label: string, thinking: boolean) {
   console.log(`\n===== ${label}（thinking=${thinking}）=====`);
   const started = Date.now();
-  const result = await completeAgentDecision(
-    client,
-    MESSAGES,
-    undefined,
-    { timeoutMs: 180_000 },
-  );
+  const result = await completeAgentDecision(client, MESSAGES, undefined, {
+    timeoutMs: 180_000,
+  });
   void thinking;
   const latency = Date.now() - started;
   console.log(
@@ -60,7 +60,8 @@ async function run(label: string, thinking: boolean) {
   if (result.reasoning) {
     console.log("----- 思维链原文（前 1200 字符）-----");
     console.log(result.reasoning.slice(0, 1200));
-    if (result.reasoning.length > 1200) console.log(`……（共 ${result.reasoning.length} 字符）`);
+    if (result.reasoning.length > 1200)
+      console.log(`……（共 ${result.reasoning.length} 字符）`);
     console.log("----- 思维链结束 -----");
   }
   console.log(`----- 决策 JSON -----`);

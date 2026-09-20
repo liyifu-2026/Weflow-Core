@@ -62,7 +62,9 @@ describe("dicebear avatars", () => {
 
   it("rejects non-svg upstream bodies", async () => {
     const fetchMock = (async () =>
-      new Response("<html>nope</html>", { status: 200 })) as unknown as typeof fetch;
+      new Response("<html>nope</html>", {
+        status: 200,
+      })) as unknown as typeof fetch;
     expect(await fetchDiceBearSvg("voxel-bot", "seed-c", fetchMock)).toBeNull();
   });
 

@@ -42,7 +42,6 @@ export async function pollChannelEventsOnce<Database>(
       },
       "Channel Host cursor rewound below the local checkpoint; replaying from 0",
     );
-    cursor = "0";
     page = await options.source.pullEvents({ afterCursor: "0", limit: 100 });
   }
   await options.dependencies.ingestEvents(

@@ -13,7 +13,10 @@ function env(name) {
   const m = envText.match(new RegExp(`^${name}=(.*)$`, "m"));
   return m ? m[1].trim().replace(/^"|"$/g, "") : undefined;
 }
-const BASE_URL = (env("MODEL_BASE_URL") ?? "https://api.deepseek.com").replace(/\/$/, "");
+const BASE_URL = (env("MODEL_BASE_URL") ?? "https://api.deepseek.com").replace(
+  /\/$/,
+  "",
+);
 const API_KEY = env("MODEL_API_KEY");
 const MODEL = env("MODEL_NAME") ?? "deepseek-chat";
 
@@ -26,10 +29,14 @@ const CONTACT = {
 };
 
 const KNOWLEDGE = {
-  "v9 是什么 产品介绍": "【V9 产品介绍】Weflow V9 是面向客服团队的智能客服系统（当前正式版本），提供：微信多账号接入、AI 自动回复、人工接管、知识库、会话分析等能力。V9 相比 V8 的核心升级：AI 员工可按客户绑定专属人设、支持定时回访、故障自诊断。",
-  "v9 打不开 启动 失败 排查": "【V9 启动故障排查】按顺序执行：1) 检查任务管理器是否残留 V9 进程，有则结束进程后重新启动；2) 右键快捷方式选'以管理员身份运行'；3) 确认操作系统为 Win10 及以上；4) 检查是否安装 Visual C++ 2015-2022 运行库（缺失会报缺 DLL）；5) 若仍失败，到安装目录 logs/ 下把最新日志发给客服。",
-  "v9 闪退 缺少 组件 报错": "【V9 缺组件报错】报错含 'VCRUNTIME140.dll' 或 'MSVCP140.dll'：安装 Microsoft Visual C++ 2015-2022 Redistributable (x64) 后重启电脑即可。报错含 'Node' 或 'Electron' 字样：属于安装包损坏，需卸载后到官网重新下载最新安装包。",
-  "v9 日志 位置 发日志": "【日志位置】默认安装目录 C:\\Program Files\\WeflowV9\\logs\\，文件名 v9-YYYYMMDD.log；绿色版在解压目录 logs\\ 下。发给客服时只需最新一天的日志文件。",
+  "v9 是什么 产品介绍":
+    "【V9 产品介绍】Weflow V9 是面向客服团队的智能客服系统（当前正式版本），提供：微信多账号接入、AI 自动回复、人工接管、知识库、会话分析等能力。V9 相比 V8 的核心升级：AI 员工可按客户绑定专属人设、支持定时回访、故障自诊断。",
+  "v9 打不开 启动 失败 排查":
+    "【V9 启动故障排查】按顺序执行：1) 检查任务管理器是否残留 V9 进程，有则结束进程后重新启动；2) 右键快捷方式选'以管理员身份运行'；3) 确认操作系统为 Win10 及以上；4) 检查是否安装 Visual C++ 2015-2022 运行库（缺失会报缺 DLL）；5) 若仍失败，到安装目录 logs/ 下把最新日志发给客服。",
+  "v9 闪退 缺少 组件 报错":
+    "【V9 缺组件报错】报错含 'VCRUNTIME140.dll' 或 'MSVCP140.dll'：安装 Microsoft Visual C++ 2015-2022 Redistributable (x64) 后重启电脑即可。报错含 'Node' 或 'Electron' 字样：属于安装包损坏，需卸载后到官网重新下载最新安装包。",
+  "v9 日志 位置 发日志":
+    "【日志位置】默认安装目录 C:\\Program Files\\WeflowV9\\logs\\，文件名 v9-YYYYMMDD.log；绿色版在解压目录 logs\\ 下。发给客服时只需最新一天的日志文件。",
 };
 
 const TOOLS = [
@@ -81,7 +88,7 @@ const SYSTEM = `你是智能客服"小V"，通过微信接待客户。你可以�
 - next_action=ask_for_information 表示需要客户补充信息才能继续，回复里明确说出需要什么
 - 涉及安装包损坏、多次排查无效等无法远程解决的问题，选 handoff 转人工，回复里说明已升级
 - 回复通俗、分步骤、有同理心；一次不要抛超过 4 个步骤，避免客户消化不了
-- 高难度场景先在心里梳理已知信息、缺失信息与排查路径，再决定说什么`
+- 高难度场景先在心里梳理已知信息、缺失信息与排查路径，再决定说什么`;
 
 const TURNS = [
   "麻烦问一下，你们说的这个 v9 软件到底是什么东西啊？我跟你们聊了半天工单，都没搞明白 v9 是啥。",
@@ -96,7 +103,10 @@ async function callModel(messages, allowTools) {
   try {
     const response = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
-      headers: { authorization: `Bearer ${API_KEY}`, "content-type": "application/json" },
+      headers: {
+        authorization: `Bearer ${API_KEY}`,
+        "content-type": "application/json",
+      },
       body: JSON.stringify({
         model: MODEL,
         messages,
@@ -108,10 +118,15 @@ async function callModel(messages, allowTools) {
       signal: controller.signal,
     });
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
+      throw new Error(
+        `HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`,
+      );
     }
     const payload = await response.json();
-    return { latency: Date.now() - started, message: payload.choices[0].message };
+    return {
+      latency: Date.now() - started,
+      message: payload.choices[0].message,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -150,7 +165,11 @@ const history = [{ role: "system", content: SYSTEM }];
           console.log(`🔧 调用 ${call.function.name}(${JSON.stringify(args)})`);
           const result = runTool(call.function.name, args);
           console.log(`   ↳ ${clip(result, 240)}`);
-          history.push({ role: "tool", tool_call_id: call.id, content: result });
+          history.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: result,
+          });
         }
         toolRounds += 1;
         continue;
@@ -160,18 +179,25 @@ const history = [{ role: "system", content: SYSTEM }];
       try {
         decision = JSON.parse(message.content);
       } catch {
-        console.log(`💬 原始输出（JSON 解析失败，真实链路会校验兜底）：${clip(message.content, 300)}`);
+        console.log(
+          `💬 原始输出（JSON 解析失败，真实链路会校验兜底）：${clip(message.content, 300)}`,
+        );
         history.push({ role: "assistant", content: message.content });
         break;
       }
-      console.log(`💬 决策：next_action=${decision.next_action}  risk=${decision.risk_level ?? "-"}`);
-      if (decision.reply_text) console.log(`   回复客户：${decision.reply_text}`);
+      console.log(
+        `💬 决策：next_action=${decision.next_action}  risk=${decision.risk_level ?? "-"}`,
+      );
+      if (decision.reply_text)
+        console.log(`   回复客户：${decision.reply_text}`);
       history.push({ role: "assistant", content: message.content });
       break;
     }
   }
   console.log(`\n${"═".repeat(56)}`);
-  console.log("演练结束。思维链与工具调用为真实模型输出；知识库与客户档案为演示假数据。");
+  console.log(
+    "演练结束。思维链与工具调用为真实模型输出；知识库与客户档案为演示假数据。",
+  );
 })().catch((error) => {
   console.error("ERR", error);
   process.exit(1);

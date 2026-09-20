@@ -93,7 +93,9 @@ export class FailoverTextModel implements TextModel {
     return this.#links;
   }
 
-  async generate(request: TextGenerationRequest): Promise<TextGenerationResult> {
+  async generate(
+    request: TextGenerationRequest,
+  ): Promise<TextGenerationResult> {
     let lastError: unknown;
     for (const link of this.#links) {
       try {
@@ -162,7 +164,11 @@ async function probeAsrConnection(
     let response: Response;
     if (endpoint.protocol === "audio_transcriptions") {
       const form = new FormData();
-      form.append("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "probe.wav");
+      form.append(
+        "file",
+        new Blob([new Uint8Array(wav)], { type: "audio/wav" }),
+        "probe.wav",
+      );
       form.append("model", endpoint.displayName);
       response = await fetch(
         `${endpoint.baseUrl.replace(/\/$/, "")}/audio/transcriptions`,
@@ -240,16 +246,16 @@ export async function probeModelConnection(
         baseUrl: endpoint.baseUrl,
         apiKey: endpoint.apiKey,
         displayName: endpoint.displayName,
-        protocol: endpoint.protocol === "audio_transcriptions"
-          ? "audio_transcriptions"
-          : "chat_inline",
+        protocol:
+          endpoint.protocol === "audio_transcriptions"
+            ? "audio_transcriptions"
+            : "chat_inline",
       },
       timeoutMs,
     );
   }
-  const { OpenAiCompatibleClient } = await import(
-    "../../../infrastructure/model_runtime/openai-compatible-client.js"
-  );
+  const { OpenAiCompatibleClient } =
+    await import("../../../infrastructure/model_runtime/openai-compatible-client.js");
   const client = new OpenAiCompatibleClient({
     baseUrl: endpoint.baseUrl,
     apiKey: endpoint.apiKey ?? "",
@@ -259,10 +265,9 @@ export async function probeModelConnection(
   });
   const startedAt = Date.now();
   try {
-    await client.complete(
-      [{ role: "user", content: "ping" }],
-      { maxTokens: 2_000 },
-    );
+    await client.complete([{ role: "user", content: "ping" }], {
+      maxTokens: 2_000,
+    });
     return { ok: true, latencyMs: Date.now() - startedAt };
   } catch (error) {
     return {

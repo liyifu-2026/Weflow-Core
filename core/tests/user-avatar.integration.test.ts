@@ -113,7 +113,12 @@ integration("staff avatar endpoint", () => {
     });
     expect(response.statusCode).toBe(200);
     const payload = response.json() as {
-      presets: Array<{ id: string; name: string; seed: string; svgUrl: string }>;
+      presets: Array<{
+        id: string;
+        name: string;
+        seed: string;
+        svgUrl: string;
+      }>;
     };
     expect(payload.presets).toHaveLength(USER_AVATAR_PRESETS.length);
     // 预设不再内嵌 SVG：返回平台代理 URL（DiceBear Blobs seed）

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  mediaAwareMessageText,
-} from "../modules/agent/application/media-context.js";
+import { mediaAwareMessageText } from "../modules/agent/application/media-context.js";
 
 describe("mediaAwareMessageText（媒体上下文装配规则）", () => {
   it("图片有描述（含模型自写 media_notes）→ 图片观察", () => {
@@ -48,8 +46,8 @@ describe("mediaAwareMessageText（媒体上下文装配规则）", () => {
   });
 
   it("非媒体消息原样透传", () => {
-    expect(
-      mediaAwareMessageText({ contentType: "text", text: "在吗" }),
-    ).toBe("在吗");
+    expect(mediaAwareMessageText({ contentType: "text", text: "在吗" })).toBe(
+      "在吗",
+    );
   });
 });

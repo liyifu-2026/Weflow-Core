@@ -33,7 +33,7 @@ export async function listManagedUsers(db: Database) {
     role: row.role,
     status: row.status,
     mustChangePassword: row.mustChangePassword,
-    avatarUrl: `/api/v1/users/${row.userId}/avatar?v=${Math.floor(row.updatedAt.getTime() / 1_000)}`,
+    avatarUrl: `/api/v1/users/${row.userId}/avatar?v=${String(Math.floor(row.updatedAt.getTime() / 1_000))}`,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }));
@@ -127,7 +127,7 @@ export async function updateManagedUser(
       role: updated.role,
       status: updated.status,
       mustChangePassword: updated.mustChangePassword,
-      avatarUrl: `/api/v1/users/${updated.userId}/avatar?v=${Math.floor(updated.updatedAt.getTime() / 1_000)}`,
+      avatarUrl: `/api/v1/users/${updated.userId}/avatar?v=${String(Math.floor(updated.updatedAt.getTime() / 1_000))}`,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
     };

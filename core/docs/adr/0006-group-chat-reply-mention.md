@@ -21,7 +21,7 @@ poke/recall/voice_call 的扩展契约（`channel-send-operations.ts`）与群�
      - `{ kind: "poke" }`（拍一拍）
    - `ChannelEvent` 增加可选 `mentioned?: boolean`（群聊中被 @ 标记）与
      `replyToChannelMessageId?: string | null`（入站引用）。
-   全部 additive，旧 Host 不带时行为不变；按 AGENTS.md 第 6 条以本 ADR 记录。
+     全部 additive，旧 Host 不带时行为不变；按 AGENTS.md 第 6 条以本 ADR 记录。
 2. **存储**：`messages` 表增加
    `reply_to_channel_message_id varchar(300)` 与 `mention_contact_refs jsonb`（默认 []）。
 3. **群聊策略**：移植 `group-chat-policy.ts` 到 `core/modules/agent/application/`；

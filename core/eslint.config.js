@@ -41,4 +41,37 @@ export default tseslint.config(
       "@typescript-eslint/consistent-type-imports": "error",
     },
   },
+  // TS 之外的文件（scripts/*.mjs、*.mts 等）不在 tsconfig 项目内，拿不到类型
+  // 信息；对它们关闭类型感知规则，否则 strictTypeChecked 的 typed 规则会让
+  // eslint 直接崩溃。
+  {
+    files: ["**/*"],
+    ignores: ["**/*.ts", "**/*.tsx"],
+    ...tseslint.configs.disableTypeChecked,
+  },
+  // 测试代码不做类型感知强约束：非空断言、宽松 any 是测试惯用法，
+  // 类型感知规则的增量收紧先在生产代码（apps/ modules/ infrastructure/）完成。
+  {
+    files: ["tests/**", "**/*.test.ts"],
+    ...tseslint.configs.disableTypeChecked,
+    rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
+      // 测试惯用法：直接断言非空 / 用 any 造桩都在测试里是合理的
+      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/no-explicit-any": "off",
+      // TS 自己做标识符解析，no-undef 对 TS 无效且误报 Node/测试全局
+      "no-undef": "off",
+    },
+  },
+  // 运维/演示脚本同样放宽（与 tests 同理；脚本允许快速胶水代码）。
+  {
+    files: ["scripts/**"],
+    ...tseslint.configs.disableTypeChecked,
+    rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
+      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/no-explicit-any": "off",
+      "no-undef": "off",
+    },
+  },
 );

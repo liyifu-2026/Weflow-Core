@@ -17,8 +17,6 @@ vi.mock("../modules/agent/application/agent-turn-outcome-command.js", () => ({
   persistAgentToolCheckpoint: vi.fn(async () => ({ status: "planned" })),
 }));
 
-
-
 function makeDb() {
   const wakes = [
     {
@@ -72,12 +70,10 @@ vi.mock("../modules/conversations/application/message-service.js", () => ({
 
 describe("processDueSessionWakes", () => {
   it("带 nudge 的到期 wake 走 createAgentReply 直发，无 nudge 的建续轮 turn", async () => {
-    const { processDueSessionWakes: realProcess } = await import(
-      "../modules/agent/application/process-session-wakes.js"
-    );
-    const { createAgentReply } = await import(
-      "../modules/conversations/application/message-service.js"
-    );
+    const { processDueSessionWakes: realProcess } =
+      await import("../modules/agent/application/process-session-wakes.js");
+    const { createAgentReply } =
+      await import("../modules/conversations/application/message-service.js");
     const deps = makeDb();
     vi.mocked(createAgentReply).mockClear();
 
@@ -105,15 +101,12 @@ describe("processDueSessionWakes", () => {
   });
 });
 
-
 describe("processDueSessionWakes 策略闸门", () => {
   it("Handoff 接管后到期的 wake 静默作废：不直发、不建轮，直接 done", async () => {
-    const { processDueSessionWakes } = await import(
-      "../modules/agent/application/process-session-wakes.js"
-    );
-    const { createAgentReply } = await import(
-      "../modules/conversations/application/message-service.js"
-    );
+    const { processDueSessionWakes } =
+      await import("../modules/agent/application/process-session-wakes.js");
+    const { createAgentReply } =
+      await import("../modules/conversations/application/message-service.js");
     vi.mocked(createAgentReply).mockClear();
     // makeDb 复用：闸门判定注入——isAgentPaused 返回 true
     const gateDeps = {

@@ -56,7 +56,8 @@ function makeDb(input: {
           where: () => ({
             limit: async () => (await resolveRows(table)).slice(0, 1),
           }),
-          then: (res: (v: unknown[]) => unknown) => resolveRows(table).then(res),
+          then: (res: (v: unknown[]) => unknown) =>
+            resolveRows(table).then(res),
         }),
       });
       return {
@@ -68,7 +69,8 @@ function makeDb(input: {
       const name = String(record[Symbol.for("drizzle:Name")] ?? "");
       return {
         values(value: unknown) {
-          if (name.includes("runtime_settings")) written.push(value as SettingsRow);
+          if (name.includes("runtime_settings"))
+            written.push(value as SettingsRow);
           if (name === "events") audit.push(value);
           return {
             onConflictDoUpdate() {
@@ -105,7 +107,10 @@ describe("bindModelSlot 能力校验", () => {
     const audit: unknown[] = [];
     const db = makeDb({
       registryRows: [
-        registry({ modelId: "deepseekVision", capabilities: ["text", "vision"] }),
+        registry({
+          modelId: "deepseekVision",
+          capabilities: ["text", "vision"],
+        }),
       ],
       writtenSettings: written,
       writtenAudit: audit,
@@ -179,9 +184,7 @@ describe("resolveSlotChainRuntime 运行时能力兜底", () => {
   it("protocol 缺省/非法值的旧条目回落 chat_inline", async () => {
     const db = makeDb({
       settingsRows: [{ key: "model_slot_asr", value: "legacy-mimo" }],
-      registryRows: [
-        registry({ modelId: "legacy-mimo", protocol: null }),
-      ],
+      registryRows: [registry({ modelId: "legacy-mimo", protocol: null })],
     });
     const chain = await resolveSlotChainRuntime(db as never, "asr");
     expect(chain[0]?.protocol).toBe("chat_inline");

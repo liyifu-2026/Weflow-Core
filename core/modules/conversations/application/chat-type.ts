@@ -14,8 +14,6 @@
 export type ChatType = "private" | "group";
 
 /** @deprecated 通道后缀回退推导；仅 ingest 与读取兜底可用（ADR-0010） */
-export function chatTypeFromConversationRef(
-  conversationRef: string,
-): ChatType {
+export function chatTypeFromConversationRef(conversationRef: string): ChatType {
   return conversationRef.endsWith("@chatroom") ? "group" : "private";
 }

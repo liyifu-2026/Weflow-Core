@@ -40,6 +40,7 @@ import { registerConsoleEventRoutes } from "../../modules/console-events/interfa
 import { startConversationEventBus } from "../../infrastructure/events/conversation-events.js";
 import { registerHandoffRoutes } from "../../modules/handoff/interface/http-routes.js";
 import { registerIdentityRoutes } from "../../modules/identity/interface/http-routes.js";
+import { configureSessionCookies } from "../../modules/identity/interface/request-authentication.js";
 import { registerContactProfileRoutes } from "../../modules/contacts/interface/http-routes.js";
 import { registerContactAvatarRoutes } from "../../modules/contacts/interface/avatar-routes.js";
 import { AvatarProxyService } from "../../modules/contacts/application/avatar-proxy-service.js";
@@ -63,7 +64,7 @@ import { startMemoryMaintenance } from "../../modules/memory/application/memory-
 import { routeMediaToHuman } from "../../modules/handoff/application/route-media-to-human.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
 import { resolveSlotChainRuntime } from "../../modules/operations/application/model-gateway.js";
-import { createCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
+import { createOptionalCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
 import { createBehaviorSettingsReader } from "../../modules/agent/application/behavior-settings.js";
 import {
   extractGroupChatSettings,
@@ -102,6 +103,11 @@ await runProcess({
     await server.register(multipart, {
       limits: { fileSize: 100 * 1_024 * 1_024, files: 1 },
     });
+    // Cookie 安全旗标单一事实源：注入已校验 config（domain 仅 env 提供）
+    configureSessionCookies({
+      domain: process.env.SESSION_COOKIE_DOMAIN?.trim() || undefined,
+      secure: config.sessionCookieSecure,
+    });
     registerIdentityRoutes(
       server,
       postgres.db,
@@ -130,7 +136,11 @@ await runProcess({
     registerHandoffRoutes(server, postgres.db);
     registerMemoryRoutes(server, postgres.db);
     registerScheduledSendRoutes(server, postgres.db);
-    registerMediaRoutes(server, postgres.db, `${config.fileStorageRoot}/media`);
+    registerMediaRoutes(
+      server,
+      postgres.db,
+      new LocalFileStorage(`${config.fileStorageRoot}/media`),
+    );
     registerAssetRoutes(
       server,
       postgres.db,
@@ -142,6 +152,7 @@ await runProcess({
     const knowledge = await createAdaptiveKnowledgeClient(
       postgres.db,
       config.weknora ?? undefined,
+      { settingsRef: config.behaviorSettingsRef },
     );
     registerKnowledgeRoutes(server, postgres.db, {
       weknora: knowledge.client,
@@ -239,7 +250,8 @@ await runProcess({
       channelKernel = new RuntimeKernel();
       channelKernel.register(httpChannelPlugin(channelProvider));
       await channelKernel.start();
-    }    const stopMobileHandoffMaintenance = startMobileHandoffMaintenance(
+    }
+    const stopMobileHandoffMaintenance = startMobileHandoffMaintenance(
       postgres.db,
       logger,
     );
@@ -265,8 +277,12 @@ await runProcess({
     const stopScheduledSendDispatcher = startTurnAdmissionDispatcher({
       process: async () =>
         processDueScheduledSends(postgres.db, undefined, {
-          error: (obj, msg) => logger.error(obj as object, msg),
-          info: (obj, msg) => logger.info(obj as object, msg),
+          error: (obj, msg) => {
+            logger.error(obj as object, msg);
+          },
+          info: (obj, msg) => {
+            logger.info(obj as object, msg);
+          },
         }),
       intervalMs: 5_000,
       logger,
@@ -282,13 +298,11 @@ await runProcess({
       logger,
     });
     // 转人工兜底提醒 dispatcher：pending 无人认领超时后系统代发一条轻提示。
-    // 文案/延迟来自客服 Solution 扩展设置 behavior 键；文案为空 = 功能关闭。
+    // 文案/延迟来自部署绑定的业务行为设置键；文案为空 = 功能关闭。
+    // 未绑定业务命名空间（纯平台模式）时恒为空 → 功能关闭。
     const readHandoffReminderSettings = createBehaviorSettingsReader(
       postgres.db,
-      {
-        solutionId: "weflow.customer-support",
-        extensionId: "support-pipeline",
-      },
+      config.behaviorSettingsRef,
     );
     const stopHandoffReminderDispatcher = startTurnAdmissionDispatcher({
       process: async () => {
@@ -342,14 +356,12 @@ await runProcess({
       const channelMedia = channelKernel.get(CHANNEL_MEDIA_CAPABILITY);
       const channelSendOperations = channelKernel.get(CHANNEL_SEND_CAPABILITY);
       const channelContacts = channelKernel.get(CHANNEL_CONTACTS_CAPABILITY);
-      // 群聊策略读取器：读客服 Solution 扩展设置（30s TTL 缓存），
-      // 群 override > 全局 > 平台默认（仅@）；读取失败逐项回落默认。
-      const readGroupChatSettings = createCachedExtensionSettingsReader(
+      // 群聊策略读取器：读部署绑定的业务行为设置（30s TTL 缓存），
+      // 群 override > 全局 > 平台默认（仅@）；读取失败逐项回落默认；
+      // 未绑定业务命名空间时全部回落平台默认。
+      const readGroupChatSettings = createOptionalCachedExtensionSettingsReader(
         postgres.db,
-        {
-          solutionId: "weflow.customer-support",
-          extensionId: "support-pipeline",
-        },
+        config.behaviorSettingsRef,
       );
       const stopChannelHostPoller = startChannelEventPoller({
         source: channelSource,
@@ -382,7 +394,9 @@ await runProcess({
           processOutboundMessages(db, channelSendOperations, {
             fileStorageRoot: config.fileStorageRoot,
             logger: {
-              warn: (obj, msg) => logger.warn(obj, msg),
+              warn: (obj, msg) => {
+                logger.warn(obj, msg);
+              },
             },
           }),
       });
@@ -433,7 +447,7 @@ await runProcess({
     logger.info(
       "Channel Host is not configured; background channel polling is disabled",
     );
-    return async () => {
+    return () => {
       stopMobileHandoffMaintenance();
       stopAgentTurnDispatcher();
       stopMemoryCaptureDispatcher();

@@ -139,7 +139,10 @@ integration("出站队列单条隔离", () => {
     };
 
     // 共享测试库存在其他套件的在途消息：过滤到本会话，隔离扫描窗口
-    await processOutboundMessages(postgres.db, client, { logger, conversationId });
+    await processOutboundMessages(postgres.db, client, {
+      logger,
+      conversationId,
+    });
 
     const [poison] = await postgres.db
       .select()

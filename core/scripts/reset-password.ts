@@ -10,16 +10,19 @@
 import { loadConfig } from "../infrastructure/config/config.js";
 import { createLogger } from "../infrastructure/observability/logger.js";
 import { createPostgres } from "../infrastructure/postgres/client.js";
+import { generateInitialPassword } from "../modules/identity/application/identity-service.js";
 import {
-  generateInitialPassword,
-} from "../modules/identity/application/identity-service.js";
-import { hashPassword, verifyPassword } from "../infrastructure/auth/password.js";
+  hashPassword,
+  verifyPassword,
+} from "../infrastructure/auth/password.js";
 import { eq } from "drizzle-orm";
 import * as schema from "../infrastructure/postgres/schema.js";
 
 const username = process.argv[2];
 if (!username) {
-  throw new Error("usage: pnpm reset-password <username> [--password=<password>]");
+  throw new Error(
+    "usage: pnpm reset-password <username> [--password=<password>]",
+  );
 }
 
 const passwordArg = process.argv.find((a) => a.startsWith("--password="));
@@ -55,7 +58,9 @@ try {
   // 验证哈希与明文匹配
   const verified = await verifyPassword(passwordHash, newPassword);
   if (!verified) {
-    throw new Error("FATAL: hash verification failed after creation — aborting");
+    throw new Error(
+      "FATAL: hash verification failed after creation — aborting",
+    );
   }
 
   // 更新数据库

@@ -12,6 +12,10 @@ import type { Logger } from "pino";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { createLogger } from "../../../infrastructure/observability/logger.js";
 import type { ChannelEvent } from "../../channel/contracts/channel-event-source.js";
+import {
+  BARE_CHANNEL_REF_RE,
+  CHANNEL_WIRE_TYPES,
+} from "../../channel/contracts/channel-wire.js";
 import { cancelPendingScheduledSendsOnInbound } from "../../agent/application/scheduled-sends.js";
 import { cancelPendingSessionWakesOnInbound } from "../../agent/application/session-wake.js";
 import {
@@ -23,10 +27,7 @@ import {
 import { scheduleMemoryCaptureInTransaction } from "../../memory/application/schedule-memory-capture.js";
 import { scheduleTurnAdmissionInTransaction } from "./turn-admission.js";
 import { chatTypeFromConversationRef } from "./chat-type.js";
-import {
-  OUTBOUND_LOOP_SEND_STATES,
-  SEND_STATE,
-} from "./send-states.js";
+import { OUTBOUND_LOOP_SEND_STATES, SEND_STATE } from "./send-states.js";
 import { enqueueAssigneeInboundNotification } from "../../notifications/application/notification-outbox.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
 import { createHandoff } from "../../handoff/application/handoff-service.js";
@@ -239,6 +240,7 @@ async function ingestNormalizedEvent(
   // ——后缀知识在此收敛为全 Core 唯一回退点，下游一律读落库事实。
   const chatType: "private" | "group" =
     event.conversationKind ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- ADR-0010 允许的兜底路径
     chatTypeFromConversationRef(event.conversationId);
 
   const account = normalizeChannelAccount(event.account);
@@ -378,8 +380,7 @@ async function ingestNormalizedEvent(
       text: event.content,
       isSelf: event.isSelf,
       processingState: direction === "inbound" ? "received" : "not_applicable",
-      sendState:
-        direction === "outbound" ? SEND_STATE.observed : null,
+      sendState: direction === "outbound" ? SEND_STATE.observed : null,
       replyToChannelMessageId: event.replyToChannelMessageId ?? null,
       mentionContactRefs: event.mentioned ? [event.senderId ?? "unknown"] : [],
       idempotencyKey: event.eventId,
@@ -462,6 +463,9 @@ async function ingestNormalizedEvent(
           sourceLocalId: event.sourceLocalId,
           sourceMediaRef: event.sourceMediaRef,
           kind: event.kind,
+          // 应用时钟写入：sync 的资格判断用 new Date() 比较，若依赖 DB
+          // defaultNow，宿主与容器时钟漂移会让新媒体行在漂移窗口内不可见
+          nextAttemptAt: new Date(),
         })
         .onConflictDoNothing();
     }
@@ -485,6 +489,7 @@ async function ingestNormalizedEvent(
           sourceLocalId: event.sourceLocalId,
           sourceMediaRef: event.sourceMediaRef,
           kind: event.kind,
+          nextAttemptAt: new Date(),
         })
         .onConflictDoNothing();
     }
@@ -561,7 +566,7 @@ async function ingestNormalizedEvent(
           .from(schema.turnAdmissionStates)
           .where(eq(schema.turnAdmissionStates.conversationId, conversationId))
           .limit(1);
-        await scheduleTurnAdmissionInTransaction(transaction as never, {
+        await scheduleTurnAdmissionInTransaction(transaction, {
           conversationId,
           contactId,
           messageId,
@@ -634,14 +639,8 @@ const IMAGE_LIKE_KINDS = new Set(["image", "emoji", "emotion"]);
 const MEDIA_KINDS = new Set([...IMAGE_LIKE_KINDS, "file", "voice", "video"]);
 /** 纯文本事件（不需要 mediaRef；emotion 已文本化为 [表情包]<含义>） */
 const TEXT_LIKE_KINDS = new Set(["text", "pat"]);
-/** Provider-neutral 通道类型映射（沿用源通道编号，业务层不解析） */
-const FILE_CHANNEL_TYPE = 49;
-const VOICE_CHANNEL_TYPE = 34;
-const VIDEO_CHANNEL_TYPE = 43;
-
-/** 整条消息就是一个通道内部 id 的形态（user_ 前缀 + 长 token） */
-const BARE_CHANNEL_REF_RE = /^user_[A-Za-z0-9_-]{16,}$/;
-/** 上游解析失败时以占位文案落库，替代裸 id（原始事件在 Host 事件库可查） */
+/** 上游解析失败时以占位文案落库，替代裸 id（原始事件在 Host 事件库可查）。
+ *  内嵌中文缺省是 ADR-0013 的裁决（占位文案不作运行时设置）；见该 ADR。 */
 export const UNKNOWN_CUSTOMER_TEXT = "（未知客户）";
 
 /** 剥除消息内嵌 HTML；<a href="url">文字</a> 保留为「文字 (url)」，不丢链接 */
@@ -716,14 +715,14 @@ function toNormalizedChannelEvent(event: ChannelEvent): NormalizedChannelEvent {
     sourceMediaRef: event.mediaRef ?? null,
     senderId: event.senderRef ?? null,
     type: imageLike
-      ? 3
+      ? CHANNEL_WIRE_TYPES.IMAGE
       : videoLike
-        ? VIDEO_CHANNEL_TYPE
+        ? CHANNEL_WIRE_TYPES.VIDEO
         : fileLike
-          ? FILE_CHANNEL_TYPE
+          ? CHANNEL_WIRE_TYPES.FILE
           : event.kind === "voice"
-            ? VOICE_CHANNEL_TYPE
-            : 1,
+            ? CHANNEL_WIRE_TYPES.VOICE
+            : CHANNEL_WIRE_TYPES.TEXT,
     kind: imageLike ? "image" : event.kind,
     content: sanitizeInboundContent(
       event.kind,
@@ -922,6 +921,8 @@ async function groupChatCooldownBlocks(
           gt(schema.messages.occurredAt, since),
         ),
       );
+    // 防御 DB 值与类型不符：count(*) 无 ::int 转型，pg 运行时返回 string
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion
     return Number(rows[0]?.value ?? 0) >= maxReplies;
   } catch {
     // 查询失败 fail-open：放行本轮（宁可多发不漏发）

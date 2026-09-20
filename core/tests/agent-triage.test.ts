@@ -296,19 +296,25 @@ integration("AgentTurnExecutor triage orchestration", () => {
       .where(like(schema.agentTurns.turnId, "triage-%"));
     await postgres.db
       .delete(schema.memoryCaptureStates)
-      .where(like(schema.memoryCaptureStates.conversationId, "channel:triage-%"));
+      .where(
+        like(schema.memoryCaptureStates.conversationId, "channel:triage-%"),
+      );
     await postgres.db
       .delete(schema.messages)
       .where(like(schema.messages.conversationId, "channel:triage-%"));
     await postgres.db
       .delete(schema.notificationOutbox)
-      .where(like(schema.notificationOutbox.conversationId, "channel:triage-%"));
+      .where(
+        like(schema.notificationOutbox.conversationId, "channel:triage-%"),
+      );
     await postgres.db
       .delete(schema.conversations)
       .where(like(schema.conversations.conversationId, "channel:triage-%"));
     await postgres.db
       .delete(schema.contactProfiles)
-      .where(like(schema.contactProfiles.contactId, "contact:channel:triage-%"));
+      .where(
+        like(schema.contactProfiles.contactId, "contact:channel:triage-%"),
+      );
     await postgres.close();
   });
 
@@ -324,18 +330,19 @@ integration("AgentTurnExecutor triage orchestration", () => {
       mainClient(extra?.mainContents ?? ["主力档回复"]),
       "main-fake",
       {
-      triage: {
-        classify: async () => verdict,
-        ...(extra?.fastContent
-          ? {
-              fastClient: fakeClient([extra.fastContent], () => {
-                fastModelCalls += 1;
-              }),
-              fastModel: "fast-fake",
-            }
-          : {}),
+        triage: {
+          classify: async () => verdict,
+          ...(extra?.fastContent
+            ? {
+                fastClient: fakeClient([extra.fastContent], () => {
+                  fastModelCalls += 1;
+                }),
+                fastModel: "fast-fake",
+              }
+            : {}),
+        },
       },
-    });
+    );
   };
 
   it("route=human 时转人工：不调用任何模型，落 triaged + handoff 事件", async () => {
@@ -375,9 +382,7 @@ integration("AgentTurnExecutor triage orchestration", () => {
       .from(schema.agentTurnEvents)
       .where(eq(schema.agentTurnEvents.turnId, turnId));
     expect(events.map((event) => event.eventType)).toContain("triaged");
-    expect(events.map((event) => event.eventType)).toContain(
-      "handoff_created",
-    );
+    expect(events.map((event) => event.eventType)).toContain("handoff_created");
   });
 
   it("simple+直答开启时走 fast 档：主力量零调用，回复经过全部闸门落库", async () => {

@@ -25,9 +25,7 @@ vi.mock("../modules/agent/application/agent-turn-outcome-command.js", () => ({
 vi.mock(
   "../modules/agent/application/turn-utils.js",
   async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("../modules/agent/application/turn-utils.js")
-    >()),
+    ...(await importOriginal<typeof turnUtilsModule>()),
     findNewerActiveTurnIds: vi.fn(async () => []),
   }),
 );
@@ -47,6 +45,7 @@ import {
   persistAgentToolCheckpoint,
 } from "../modules/agent/application/agent-turn-outcome-command.js";
 import { findNewerActiveTurnIds } from "../modules/agent/application/turn-utils.js";
+import type * as turnUtilsModule from "../modules/agent/application/turn-utils.js";
 import type { AgentDecision } from "../modules/agent/application/agent-decision.js";
 import * as schema from "../infrastructure/postgres/schema.js";
 
@@ -918,7 +917,10 @@ describe("commitDecisionDisposition — 群聊禁续步（2026-09-07 三连发�
     vi.mocked(commitAgentTurnOutcome).mockClear();
 
     const input = {
-      ...baseInput({ triggerMessageId: "msg-1", decision: groupReplyDecision() }),
+      ...baseInput({
+        triggerMessageId: "msg-1",
+        decision: groupReplyDecision(),
+      }),
       conversationId: "channel:wxid_test:45740750295@chatroom",
       chatType: "group" as const, // ADR-0010：会话类型由调用方透传事实
     };
@@ -935,7 +937,10 @@ describe("commitDecisionDisposition — 群聊禁续步（2026-09-07 三连发�
     vi.mocked(commitAgentTurnOutcome).mockClear();
 
     const result = await commitDecisionDisposition({
-      ...baseInput({ triggerMessageId: "msg-1", decision: groupReplyDecision() }),
+      ...baseInput({
+        triggerMessageId: "msg-1",
+        decision: groupReplyDecision(),
+      }),
       conversationId: "channel:x:room@chatroom",
       chatType: "group" as const, // 必填 Channel 事实（turn-runner 从 conversations.chat_type 透传）
     });
@@ -999,7 +1004,10 @@ describe("absorbVerdictFor 吸收策略矩阵", () => {
       absorbVerdictFor("tool_recovery", decisionOf("reply", ["查询结果：…"])),
     ).toBe("commit-as-step");
     expect(
-      absorbVerdictFor("tool_recovery", decisionOf("ask_for_information", ["…"])),
+      absorbVerdictFor(
+        "tool_recovery",
+        decisionOf("ask_for_information", ["…"]),
+      ),
     ).toBe("commit-as-step");
   });
 

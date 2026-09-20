@@ -14,12 +14,8 @@ import { and, eq, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
 import * as schema from "../../../infrastructure/postgres/schema.js";
-import {
-  isAgentPaused,
-} from "../../handoff/application/handoff-service.js";
-import {
-  resolveExecutionProfileForAdmission,
-} from "../../agent/application/execution-profile-service.js";
+import { isAgentPaused } from "../../handoff/application/handoff-service.js";
+import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
 import {
   claimDueTurnAdmission,
   type ClaimedAdmission,
@@ -52,10 +48,11 @@ export async function processTurnAdmissions(
 
   let processed = 0;
   for (const { conversationId, revision } of due) {
-    const claimed = await claimDueTurnAdmission(
-      db as unknown as Parameters<typeof claimDueTurnAdmission>[0],
-      { conversationId, revision, now },
-    );
+    const claimed = await claimDueTurnAdmission(db, {
+      conversationId,
+      revision,
+      now,
+    });
     if (!claimed) continue; // stale：已被其他实例认领或窗口被新消息重置
     try {
       await dispatchClaimedAdmission(db, claimed, now);
@@ -102,7 +99,7 @@ async function dispatchClaimedAdmission(
       conversationId: claimed.conversationId,
       status: "queued",
       executionProfileId: admission.profile.profileId,
-      traceId: `turn-admission:${claimed.conversationId}:${claimed.revision}`,
+      traceId: `turn-admission:${claimed.conversationId}:${String(claimed.revision)}`,
     })
     .onConflictDoNothing();
   await markDone(db, claimed.conversationId, null);

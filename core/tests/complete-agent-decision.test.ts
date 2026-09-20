@@ -80,10 +80,7 @@ describe("completeAgentDecision — 截断处置（决策 #2）", () => {
   });
 
   it("连续截断：重试一次后仍截断则抛出（转人工由失败协调器负责）", async () => {
-    const { model, generate } = fakeModel([
-      truncatedError(),
-      truncatedError(),
-    ]);
+    const { model, generate } = fakeModel([truncatedError(), truncatedError()]);
 
     await expect(completeAgentDecision(model, MESSAGES)).rejects.toThrow(
       /model_output_truncated/,
@@ -111,7 +108,10 @@ describe("completeAgentDecision — 视觉直读（Phase 4）", () => {
         role: "user" as const,
         content: [
           { type: "text", text: "看图" },
-          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+          {
+            type: "image_url",
+            image_url: { url: "data:image/png;base64,AAAA" },
+          },
         ],
       },
     ];

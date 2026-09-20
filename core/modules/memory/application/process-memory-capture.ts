@@ -197,7 +197,10 @@ async function captureMessages(
     if (row.contentType === "voice") {
       const hasChannelText = Boolean(row.text && row.text.trim() !== "");
       if (!hasChannelText && !row.mediaDescription) {
-        if (row.mediaStatus === "processing" || row.mediaStatus === "processing_queued") {
+        if (
+          row.mediaStatus === "processing" ||
+          row.mediaStatus === "processing_queued"
+        ) {
           // ASR 在途：批次在此截停，游标不越过该消息，本轮结束保持调度
           blockedByInFlightVoice = true;
           break;
@@ -209,7 +212,7 @@ async function captureMessages(
         messageId: row.messageId,
         direction: row.direction,
         actorType: row.actorType,
-        text: `语音转写：${hasChannelText ? row.text : row.mediaDescription}`,
+        text: `语音转写：${String(hasChannelText ? row.text : row.mediaDescription)}`,
       });
       continue;
     }
@@ -226,7 +229,7 @@ async function captureMessages(
       messageId: row.messageId,
       direction: row.direction,
       actorType: row.actorType,
-      text: row.text ?? "",
+      text: row.text,
     });
   }
   return {

@@ -12,10 +12,7 @@ if (!databaseUrl) {
   console.error("TEST_DATABASE_URL or DATABASE_URL not set");
   process.exit(1);
 }
-const logger = createLogger(
-  { logLevel: "silent" },
-  "test-db-migration",
-);
+const logger = createLogger({ logLevel: "silent" }, "test-db-migration");
 const postgres = createPostgres(databaseUrl, logger);
 try {
   await migrate(postgres.db, { migrationsFolder: resolve("migrations") });

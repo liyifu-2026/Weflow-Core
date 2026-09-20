@@ -532,9 +532,7 @@ integration("automatic memory capture", () => {
       }),
     ).resolves.toBe("completed");
     // 转写文本进入提取上下文；failed 语音的空文本不出现
-    expect(seenPrompt).toContain(
-      "语音转写：我对花生过敏，这个菜不能放花生。",
-    );
+    expect(seenPrompt).toContain("语音转写：我对花生过敏，这个菜不能放花生。");
 
     // in-flight ASR：批次在语音前截停，游标不推进，任务保持调度
     await postgres.db.insert(schema.messages).values({
