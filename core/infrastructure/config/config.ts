@@ -45,9 +45,9 @@ const environmentSchema = z.object({
   AVATAR_ALLOWED_HOSTS: z.string().trim().optional(),
   MODEL_BASE_URL: z.url().default("https://api.deepseek.com"),
   MODEL_API_KEY: z.string().min(1).optional(),
-  MODEL_NAME: z
-    .enum(["deepseek-v4-flash", "deepseek-v4-pro"])
-    .default("deepseek-v4-flash"),
+  // 仅作槽位未绑定时的启动兜底名；模型注册表（DB 槽位）是运行期唯一事实源，
+  // 因此放宽为任意字符串，不把具体厂商的模型名写死在引擎 schema 里。
+  MODEL_NAME: z.string().min(1).default("deepseek-v4-flash"),
   MODEL_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(60_000),
   MODEL_MAX_TOKENS: z.coerce.number().int().min(1_000).default(16_384),
   MODEL_DECISION_TIMEOUT_MS: z.coerce
@@ -94,6 +94,17 @@ const environmentSchema = z.object({
    */
   WEB_DIST_DIR: z.string().trim().optional(),
   /**
+   * 业务行为参数的设置中心命名空间绑定（"<solutionId>/<extensionId>"）。
+   * 业务部署指向自己的插件命名空间（如客服产品的 weflow.customer-support/support-pipeline）；
+   * 未配置 = 纯平台模式：转人工提醒/群聊策略/分流参数/知识连接器界面分节
+   * 全部回落引擎中立缺省。引擎源码不持有业务命名空间字面量。
+   */
+  BEHAVIOR_SETTINGS_REF: z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i)
+    .optional(),
+  /**
    * 会话 Cookie Secure 覆盖：production 默认 Secure（HTTPS only）。
    * 局域网 HTTP 部署需显式设为 false，否则浏览器不回传 Cookie 无法登录。
    */
@@ -139,7 +150,8 @@ export type RuntimeConfig = {
     | {
         baseUrl: string;
         apiKey: string;
-        name: "deepseek-v4-flash" | "deepseek-v4-pro";
+        /** 启动兜底模型名；运行期唯一事实源是模型注册表（DB 槽位） */
+        name: string;
         timeoutMs: number;
         /** 单次补全 token 预算（含思维链；THINKING-PIPELINE-PLAN B1） */
         maxTokens: number;
@@ -196,6 +208,8 @@ export type RuntimeConfig = {
   corsOrigins: string[];
   /** 前端静态托管目录（undefined = 不托管，开发态走 Vite dev server） */
   webDistDir: string | undefined;
+  /** 行为设置命名空间绑定（BEHAVIOR_SETTINGS_REF）；undefined = 纯平台模式 */
+  behaviorSettingsRef: { solutionId: string; extensionId: string } | undefined;
   /** 会话 Cookie 是否带 Secure（production 默认 true，可显式覆盖） */
   sessionCookieSecure: boolean;
   /** WeKnora 桥接配置（账号代管 + 界面嵌入的一次性登录交换） */
@@ -340,6 +354,15 @@ export function loadConfig(): RuntimeConfig {
       .map((origin) => origin.trim())
       .filter(Boolean),
     webDistDir: parsed.WEB_DIST_DIR,
+    behaviorSettingsRef: parsed.BEHAVIOR_SETTINGS_REF
+      ? (() => {
+          const separator = parsed.BEHAVIOR_SETTINGS_REF.indexOf("/");
+          return {
+            solutionId: parsed.BEHAVIOR_SETTINGS_REF.slice(0, separator),
+            extensionId: parsed.BEHAVIOR_SETTINGS_REF.slice(separator + 1),
+          };
+        })()
+      : undefined,
     sessionCookieSecure: parsed.SESSION_COOKIE_SECURE,
     knoraBridge: {
       encKey: parsed.KNORA_ACCOUNT_ENC_KEY,

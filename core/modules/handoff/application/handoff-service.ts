@@ -6,6 +6,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
+import { CHANNEL_WIRE_TYPES } from "../../channel/contracts/channel-wire.js";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
@@ -781,7 +782,7 @@ async function transitionInTransaction(
               actorType: "agent" as const,
               actorId: input.actorUserId,
               contentType: "text" as const,
-              channelType: 1,
+              channelType: CHANNEL_WIRE_TYPES.TEXT,
               text,
               isSelf: true,
               processingState: "not_applicable" as const,

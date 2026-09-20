@@ -6,6 +6,7 @@
  * Agent Turn, and Memory decisions.
  */
 import { and, asc, eq, inArray } from "drizzle-orm";
+import { CHANNEL_WIRE_TYPES } from "../../channel/contracts/channel-wire.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { MAX_REPLY_SEGMENTS } from "../../agent/application/decision-contract.js";
@@ -122,7 +123,7 @@ export async function createAgentReply(
       actorType: "agent" as const,
       actorId: input.actorId ?? null,
       contentType: "text" as const,
-      channelType: 1,
+      channelType: CHANNEL_WIRE_TYPES.TEXT,
       text,
       isSelf: true,
       processingState: "not_applicable" as const,

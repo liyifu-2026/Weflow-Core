@@ -64,7 +64,7 @@ import { startMemoryMaintenance } from "../../modules/memory/application/memory-
 import { routeMediaToHuman } from "../../modules/handoff/application/route-media-to-human.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
 import { resolveSlotChainRuntime } from "../../modules/operations/application/model-gateway.js";
-import { createCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
+import { createOptionalCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
 import { createBehaviorSettingsReader } from "../../modules/agent/application/behavior-settings.js";
 import {
   extractGroupChatSettings,
@@ -152,6 +152,7 @@ await runProcess({
     const knowledge = await createAdaptiveKnowledgeClient(
       postgres.db,
       config.weknora ?? undefined,
+      { settingsRef: config.behaviorSettingsRef },
     );
     registerKnowledgeRoutes(server, postgres.db, {
       weknora: knowledge.client,
@@ -297,13 +298,11 @@ await runProcess({
       logger,
     });
     // 转人工兜底提醒 dispatcher：pending 无人认领超时后系统代发一条轻提示。
-    // 文案/延迟来自客服 Solution 扩展设置 behavior 键；文案为空 = 功能关闭。
+    // 文案/延迟来自部署绑定的业务行为设置键；文案为空 = 功能关闭。
+    // 未绑定业务命名空间（纯平台模式）时恒为空 → 功能关闭。
     const readHandoffReminderSettings = createBehaviorSettingsReader(
       postgres.db,
-      {
-        solutionId: "weflow.customer-support",
-        extensionId: "support-pipeline",
-      },
+      config.behaviorSettingsRef,
     );
     const stopHandoffReminderDispatcher = startTurnAdmissionDispatcher({
       process: async () => {
@@ -357,14 +356,12 @@ await runProcess({
       const channelMedia = channelKernel.get(CHANNEL_MEDIA_CAPABILITY);
       const channelSendOperations = channelKernel.get(CHANNEL_SEND_CAPABILITY);
       const channelContacts = channelKernel.get(CHANNEL_CONTACTS_CAPABILITY);
-      // 群聊策略读取器：读客服 Solution 扩展设置（30s TTL 缓存），
-      // 群 override > 全局 > 平台默认（仅@）；读取失败逐项回落默认。
-      const readGroupChatSettings = createCachedExtensionSettingsReader(
+      // 群聊策略读取器：读部署绑定的业务行为设置（30s TTL 缓存），
+      // 群 override > 全局 > 平台默认（仅@）；读取失败逐项回落默认；
+      // 未绑定业务命名空间时全部回落平台默认。
+      const readGroupChatSettings = createOptionalCachedExtensionSettingsReader(
         postgres.db,
-        {
-          solutionId: "weflow.customer-support",
-          extensionId: "support-pipeline",
-        },
+        config.behaviorSettingsRef,
       );
       const stopChannelHostPoller = startChannelEventPoller({
         source: channelSource,

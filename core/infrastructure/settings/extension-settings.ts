@@ -65,6 +65,29 @@ export function createCachedExtensionSettingsReader(
   };
 }
 
+/** 行为设置命名空间绑定：由部署配置提供（BEHAVIOR_SETTINGS_REF），引擎不持字面量 */
+export type ExtensionSettingsRef = {
+  solutionId: string;
+  extensionId: string;
+};
+
+/**
+ * 可选命名的缓存读取器：部署未绑定命名空间（纯平台模式）时恒返回
+ * undefined——消费方各自回落中立默认，等价于"业务插件未安装"。
+ */
+export function createOptionalCachedExtensionSettingsReader(
+  db: Database,
+  ref: ExtensionSettingsRef | undefined,
+  ttlMs?: number,
+): () => Promise<unknown> {
+  if (!ref) return () => Promise.resolve(undefined);
+  return createCachedExtensionSettingsReader(db, {
+    solutionId: ref.solutionId,
+    extensionId: ref.extensionId,
+    ...(ttlMs !== undefined ? { ttlMs } : {}),
+  });
+}
+
 /** 写入（upsert）一份扩展设置；updatedBy 记录操作者 */
 export async function writeSolutionExtensionSettings(
   db: Database,

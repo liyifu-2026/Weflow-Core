@@ -16,6 +16,15 @@ import {
 } from "../infrastructure/postgres/client.js";
 import * as schema from "../infrastructure/postgres/schema.js";
 
+if (!process.env.TEST_DATABASE_URL) {
+  // 未配置测试库时集成测试整体跳过是预期行为，但必须显眼——
+  // 否则本地 `pnpm check` 会在零数据库覆盖的情况下静默全绿。
+  console.warn(
+    "\n⚠️  TEST_DATABASE_URL 未设置：全部集成测试已跳过（无数据库覆盖）。" +
+      "\n   完整门禁请用 `pnpm check:full`（需要本地 PostgreSQL 测试库）。\n",
+  );
+}
+
 beforeAll(async () => {
   const url = process.env.TEST_DATABASE_URL;
   if (!url) return;
