@@ -9,8 +9,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, ilike, isNull, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
-import { assertUploadAllowed } from "../../../infrastructure/file_storage/upload-policy.js";
+
+export type { FileStorage };
+import {
+  assertUploadAllowed,
+  UploadTypeBlockedError,
+} from "../../../infrastructure/file_storage/upload-policy.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
+
+// 上传策略错误是本服务的错误契约：interface 据此映射 415
+export { UploadTypeBlockedError };
 
 /** 出站媒体 kind 由 MIME 推导（与 media 模块 MIME_KIND 约定一致） */
 export const ASSET_MIME_KIND: Record<string, "image" | "file"> = {

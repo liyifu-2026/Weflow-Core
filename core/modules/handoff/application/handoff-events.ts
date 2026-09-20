@@ -12,8 +12,7 @@ import type { HandoffResult } from "./handoff-service.js";
 import type { claimMobileHandoff } from "./mobile-handoff-service.js";
 
 type HandoffOutcome =
-  | Awaited<ReturnType<typeof claimMobileHandoff>>
-  | HandoffResult;
+  Awaited<ReturnType<typeof claimMobileHandoff>> | HandoffResult;
 
 type HandoffRef = { conversationId?: string; status?: string };
 

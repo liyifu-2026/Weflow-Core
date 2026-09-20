@@ -6,10 +6,8 @@
  */
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { randomUUID } from "node:crypto";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
-import * as schema from "../../../infrastructure/postgres/schema.js";
+import type { BusinessDb } from "../../identity/application/db.js";
 import type {
   KnowledgeChatCompletionModel,
   KnowledgeProvider,
@@ -27,6 +25,7 @@ import {
   generateReplyDraft,
   generateClientKnowledgeDraft,
   getKnowledgeConversationContext,
+  getLatestInboundMessageText,
   getKnowledgeDocumentContent,
   getConversationKnowledgeEvidence,
   getKnowledgeEvidenceTray,
@@ -204,7 +203,7 @@ type KnowledgeRouteDependencies = {
 /** 注册知识模块的所有 HTTP 路由 */
 export function registerKnowledgeRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   dependencies: KnowledgeRouteDependencies,
 ): void {
   const activeStreams = new Map<string, ActiveKnowledgeStream>();
@@ -280,18 +279,10 @@ export function registerKnowledgeRoutes(
       if (!context)
         return reply.code(404).send({ error: "conversation_not_found" });
 
-      const [latest] = await db
-        .select({ text: schema.messages.text })
-        .from(schema.messages)
-        .where(
-          and(
-            eq(schema.messages.conversationId, params.data.conversationId),
-            eq(schema.messages.direction, "inbound"),
-          ),
-        )
-        .orderBy(desc(schema.messages.occurredAt))
-        .limit(1);
-      const query = latest?.text.trim();
+      const query = await getLatestInboundMessageText(
+        db,
+        params.data.conversationId,
+      );
       if (!query)
         return await reply.code(409).send({ error: "no_customer_question" });
 
@@ -976,7 +967,7 @@ function completeStatus(
 
 async function streamSelectedKnowledgeAnswer(
   reply: FastifyReply,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   dependencies: KnowledgeRouteDependencies,
   locks: Set<string>,
   input: {
@@ -1005,7 +996,7 @@ async function streamSelectedKnowledgeAnswer(
 
 async function streamSelectedKnowledgeAnswerLocked(
   reply: FastifyReply,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   dependencies: KnowledgeRouteDependencies,
   input: {
     userId: string;
@@ -1328,7 +1319,7 @@ function writeSse(reply: FastifyReply, value: Record<string, unknown>) {
  */
 async function streamFastPathSuggestion(
   reply: FastifyReply,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
   dependencies: KnowledgeRouteDependencies,
   input: {
     userId: string;

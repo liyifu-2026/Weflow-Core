@@ -5,9 +5,8 @@
  * 所有路由均需要业务身份认证，写操作支持幂等性。
  */
 import type { FastifyInstance } from "fastify";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { BusinessDb } from "../../identity/application/db.js";
 import { z } from "zod";
-import type * as schema from "../../../infrastructure/postgres/schema.js";
 import { requireBusinessIdentity } from "../../identity/interface/request-authentication.js";
 import {
   createManualMemory,
@@ -48,7 +47,7 @@ const transitionSchema = z
 /** 注册记忆模块的所有 HTTP 路由 */
 export function registerMemoryRoutes(
   server: FastifyInstance,
-  db: NodePgDatabase<typeof schema>,
+  db: BusinessDb,
 ): void {
   server.get(
     "/api/v1/conversations/:conversationId/memories",

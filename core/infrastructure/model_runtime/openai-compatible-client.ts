@@ -162,8 +162,8 @@ export function extractReasoning(payload: unknown): string | undefined {
   const choices = (payload as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) return undefined;
   const message = // 防御畸形响应：choices[0] 运行时可能缺失，断言不改变实际数据
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-  (choices[0] as { message?: { reasoning_content?: unknown } })?.message;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    (choices[0] as { message?: { reasoning_content?: unknown } })?.message;
   const raw = message?.reasoning_content;
   if (typeof raw !== "string" || raw.trim() === "") return undefined;
   return raw.slice(0, REASONING_MAX_CHARS);

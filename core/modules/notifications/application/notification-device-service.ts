@@ -10,9 +10,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 
 export type NotifyKind =
-  | "handoff_pending"
-  | "handoff_assigned"
-  | "assignee_inbound";
+  "handoff_pending" | "handoff_assigned" | "assignee_inbound";
 
 export type RegisterDeviceInput = {
   userId: string;

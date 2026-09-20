@@ -484,7 +484,10 @@ export async function listAllScheduledSends(
     .from(schema.scheduledSends)
     .innerJoin(
       schema.conversations,
-      eq(schema.conversations.conversationId, schema.scheduledSends.conversationId),
+      eq(
+        schema.conversations.conversationId,
+        schema.scheduledSends.conversationId,
+      ),
     )
     .leftJoin(
       schema.contactProfiles,

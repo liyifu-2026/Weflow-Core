@@ -130,7 +130,11 @@ await runProcess({
     registerHandoffRoutes(server, postgres.db);
     registerMemoryRoutes(server, postgres.db);
     registerScheduledSendRoutes(server, postgres.db);
-    registerMediaRoutes(server, postgres.db, `${config.fileStorageRoot}/media`);
+    registerMediaRoutes(
+      server,
+      postgres.db,
+      new LocalFileStorage(`${config.fileStorageRoot}/media`),
+    );
     registerAssetRoutes(
       server,
       postgres.db,

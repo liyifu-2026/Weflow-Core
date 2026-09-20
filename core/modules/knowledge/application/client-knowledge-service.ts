@@ -1566,3 +1566,22 @@ export async function generateClientKnowledgeDraft(
     },
   };
 }
+
+/** 会话最近一条入站消息文本（建议回复的查询来源）；无入站消息时 undefined */
+export async function getLatestInboundMessageText(
+  db: NodePgDatabase<typeof schema>,
+  conversationId: string,
+): Promise<string | undefined> {
+  const [latest] = await db
+    .select({ text: schema.messages.text })
+    .from(schema.messages)
+    .where(
+      and(
+        eq(schema.messages.conversationId, conversationId),
+        eq(schema.messages.direction, "inbound"),
+      ),
+    )
+    .orderBy(desc(schema.messages.occurredAt))
+    .limit(1);
+  return latest?.text.trim() || undefined;
+}
