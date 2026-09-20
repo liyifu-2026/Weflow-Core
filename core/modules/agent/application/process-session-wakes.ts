@@ -13,10 +13,7 @@ import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { Logger } from "pino";
-import {
-  claimDueSessionWakes,
-  markWakeDone,
-} from "./session-wake.js";
+import { claimDueSessionWakes, markWakeDone } from "./session-wake.js";
 import { createAgentReply } from "../../conversations/application/message-service.js";
 import { isAgentPaused } from "../../handoff/application/handoff-service.js";
 
@@ -40,7 +37,10 @@ export type WakeProcessorDeps = {
   /** 策略闸门复检（默认 isAgentPaused + contactProfiles.agentEnabled） */
   checkGates?: (input: {
     conversationId: string;
-  }) => Promise<{ blocked: boolean; reason: "handoff_active" | "agent_disabled" }>;
+  }) => Promise<{
+    blocked: boolean;
+    reason: "handoff_active" | "agent_disabled";
+  }>;
 };
 
 export async function processDueSessionWakes(

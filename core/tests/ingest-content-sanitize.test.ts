@@ -11,7 +11,7 @@ describe("stripInboundHtml", () => {
   });
 
   it("keeps link url alongside inner text for labelled anchors", () => {
-    expect(stripInboundHtml("看<a href=\"https://x.y\">这个</a>就知道")).toBe(
+    expect(stripInboundHtml('看<a href="https://x.y">这个</a>就知道')).toBe(
       "看这个 (https://x.y)就知道",
     );
   });

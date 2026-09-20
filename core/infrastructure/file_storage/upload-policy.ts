@@ -77,7 +77,8 @@ export function assertUploadAllowed(input: {
   mimeType: string;
 }): void {
   const extension = extensionOf(input.originalName);
-  const mimeType = (input.mimeType || "").toLowerCase().split(";")[0]?.trim() ?? "";
+  const mimeType =
+    (input.mimeType || "").toLowerCase().split(";")[0]?.trim() ?? "";
   if (BLOCKED_EXTENSIONS.has(extension) || BLOCKED_MIME_TYPES.has(mimeType)) {
     throw new UploadTypeBlockedError(input.originalName);
   }

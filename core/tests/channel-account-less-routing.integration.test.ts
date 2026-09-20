@@ -13,14 +13,20 @@
 import { and, eq, ne } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createLogger } from "../infrastructure/observability/logger.js";
-import { createPostgres, type Postgres } from "../infrastructure/postgres/client.js";
+import {
+  createPostgres,
+  type Postgres,
+} from "../infrastructure/postgres/client.js";
 import * as schema from "../infrastructure/postgres/schema.js";
 import { ingestChannelEvents } from "../modules/conversations/application/ingest-channel-events.js";
 import { contactIdForChannel } from "../modules/contacts/application/contact-profile-service.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const integration = databaseUrl ? describe : describe.skip;
-const logger = createLogger({ logLevel: "silent" }, "account-less-routing-test");
+const logger = createLogger(
+  { logLevel: "silent" },
+  "account-less-routing-test",
+);
 
 const CHANNEL_KIND = "channel";
 
@@ -78,7 +84,12 @@ integration("account-less 事件路由防护（ADR-0005 数据一致性）", () 
         .where(eq(schema.contactProfiles.contactId, mainContactId));
       await postgres.db
         .delete(schema.contactProfiles)
-        .where(eq(schema.contactProfiles.contactId, contactIdForChannel(CHANNEL_KIND, sourceRef)));
+        .where(
+          eq(
+            schema.contactProfiles.contactId,
+            contactIdForChannel(CHANNEL_KIND, sourceRef),
+          ),
+        );
     } finally {
       await postgres.close();
     }
@@ -89,46 +100,52 @@ integration("account-less 事件路由防护（ADR-0005 数据一致性）", () 
     await ingestChannelEvents(
       postgres.db,
       [
-      {
-        cursor: "1",
-        eventId: `${base}-with-account-1`,
-        conversationRef: sourceRef,
-        account,
-        channelMessageId: `channel-${base}-1`,
-        senderRef: sourceRef,
-        kind: "text",
-        content: "第一条（带账号）",
-        occurredAt: "2026-08-27T00:00:00.000Z",
-        observedAt: "2026-08-27T00:00:01.000Z",
-        isSelf: false,
-      },
+        {
+          cursor: "1",
+          eventId: `${base}-with-account-1`,
+          conversationRef: sourceRef,
+          account,
+          channelMessageId: `channel-${base}-1`,
+          senderRef: sourceRef,
+          kind: "text",
+          content: "第一条（带账号）",
+          occurredAt: "2026-08-27T00:00:00.000Z",
+          observedAt: "2026-08-27T00:00:01.000Z",
+          isSelf: false,
+        },
       ],
       "1",
       logger,
     );
-    created.push({ conversationId: mainConversationId, contactId: mainContactId });
+    created.push({
+      conversationId: mainConversationId,
+      contactId: mainContactId,
+    });
 
     // 2) 再来一条不带 account 的事件（历史 host 缺账号），应被防护路由进主会话
     await ingestChannelEvents(
       postgres.db,
       [
-      {
-        cursor: "2",
-        eventId: `${base}-no-account-1`,
-        conversationRef: sourceRef,
-        channelMessageId: `channel-${base}-2`,
-        senderRef: sourceRef,
-        kind: "text",
-        content: "第二条（缺账号）",
-        occurredAt: "2026-08-27T00:00:02.000Z",
-        observedAt: "2026-08-27T00:00:03.000Z",
-        isSelf: false,
-      },
+        {
+          cursor: "2",
+          eventId: `${base}-no-account-1`,
+          conversationRef: sourceRef,
+          channelMessageId: `channel-${base}-2`,
+          senderRef: sourceRef,
+          kind: "text",
+          content: "第二条（缺账号）",
+          occurredAt: "2026-08-27T00:00:02.000Z",
+          observedAt: "2026-08-27T00:00:03.000Z",
+          isSelf: false,
+        },
       ],
       "2",
       logger,
     );
-    created.push({ conversationId: mainConversationId, contactId: mainContactId });
+    created.push({
+      conversationId: mainConversationId,
+      contactId: mainContactId,
+    });
 
     // 3) 断言：缺账号那条消息落在主会话，没有新增 default 孤儿会话
     const mainMsgs = await postgres.db
@@ -136,7 +153,10 @@ integration("account-less 事件路由防护（ADR-0005 数据一致性）", () 
       .from(schema.messages)
       .where(eq(schema.messages.conversationId, mainConversationId))
       .orderBy(schema.messages.occurredAt);
-    expect(mainMsgs.map((m) => m.text)).toEqual(["第一条（带账号）", "第二条（缺账号）"]);
+    expect(mainMsgs.map((m) => m.text)).toEqual([
+      "第一条（带账号）",
+      "第二条（缺账号）",
+    ]);
 
     const orphanConv = await postgres.db
       .select({ conversationId: schema.conversations.conversationId })

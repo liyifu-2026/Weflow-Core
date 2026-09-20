@@ -16,10 +16,7 @@ import Fastify from "fastify";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { AuthenticatedUser } from "../../identity/application/identity-service.js";
-import {
-  registerKnoraBridgeRoutes,
-  resetLaunchCodes,
-} from "./http-routes.js";
+import { registerKnoraBridgeRoutes, resetLaunchCodes } from "./http-routes.js";
 import { makeSecretBox } from "../application/secret-box.js";
 
 vi.mock("../../identity/interface/request-authentication.js", () => ({
@@ -29,7 +26,10 @@ vi.mock("../../identity/interface/request-authentication.js", () => ({
     reply: { code: (n: number) => { send: (b: unknown) => unknown } },
   ) => {
     const cookie = request.headers.cookie;
-    if (typeof cookie !== "string" || !cookie.includes("weflow_session=valid")) {
+    if (
+      typeof cookie !== "string" ||
+      !cookie.includes("weflow_session=valid")
+    ) {
       await reply.code(401).send({ error: "authentication_required" });
       return undefined;
     }

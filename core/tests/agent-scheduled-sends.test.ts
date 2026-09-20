@@ -235,7 +235,9 @@ describe("parseAgentDecision — schedule_send 契约", () => {
           requires_human: false,
           risk_level: "low",
           scheduled_message: "太远了",
-          scheduled_send_at: new Date(Date.now() + 31 * 24 * 60 * 60_000).toISOString(),
+          scheduled_send_at: new Date(
+            Date.now() + 31 * 24 * 60 * 60_000,
+          ).toISOString(),
         }),
       ),
     ).toThrow();

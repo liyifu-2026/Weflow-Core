@@ -35,7 +35,15 @@ const contact = await client.query(
 );
 console.log("=== contact state ===");
 for (const r of contact.rows) {
-  console.log(" ", String(r.contact_id).slice(0, 46), "agentEnabled:", r.agent_enabled, "blocked:", r.blocked, r.channel_display_name);
+  console.log(
+    " ",
+    String(r.contact_id).slice(0, 46),
+    "agentEnabled:",
+    r.agent_enabled,
+    "blocked:",
+    r.blocked,
+    r.channel_display_name,
+  );
 }
 const runtime = await client.query(
   "SELECT key, value FROM operations.runtime_settings WHERE key IN ('agentEnabled','autoSendEnabled')",

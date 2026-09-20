@@ -44,7 +44,11 @@ integration("findNewerActiveTurnIds terminal-status filter", () => {
       traceId: messageId,
     });
 
-  const insertTurn = (turnId: string, triggerMessageId: string, status: string) =>
+  const insertTurn = (
+    turnId: string,
+    triggerMessageId: string,
+    status: string,
+  ) =>
     postgres.db.insert(schema.agentTurns).values({
       turnId,
       triggerMessageId,

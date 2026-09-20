@@ -40,7 +40,8 @@ export type OutboundStagingInput = {
   messageId: string;
   /** 同一消息内的去重序号（多个附件时区分，0 起） */
   mediaIndex: number;
-};export type OutboundStagingResult = {
+};
+export type OutboundStagingResult = {
   /** 供 send operation payload 使用的暂存文件绝对路径（原名+扩展名） */
   stagedPath: string;
   /** 实际写出的文件名（净化 + 兜底扩展名之后） */

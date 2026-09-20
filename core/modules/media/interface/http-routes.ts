@@ -263,7 +263,8 @@ export function registerMediaRoutes(
     const etag = `"${playable.checksum}"`;
     reply.header("etag", etag);
     reply.header("cache-control", "private, no-cache");
-    if (request.headers["if-none-match"] === etag) return reply.code(304).send();
+    if (request.headers["if-none-match"] === etag)
+      return reply.code(304).send();
     reply.header("content-type", playable.mimeType);
     reply.header("content-length", String(playable.size));
     reply.header("x-content-type-options", "nosniff");

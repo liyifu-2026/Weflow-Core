@@ -385,7 +385,7 @@ export async function resolveModelProbeEndpoint(
   const apiKey =
     overrides.apiKey && overrides.apiKey.trim() !== ""
       ? overrides.apiKey.trim()
-      : row?.apiKey ?? undefined;
+      : (row?.apiKey ?? undefined);
   return {
     modelId,
     displayName: overrides.displayName ?? row?.displayName ?? modelId,

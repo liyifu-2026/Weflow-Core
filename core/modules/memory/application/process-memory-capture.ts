@@ -197,7 +197,10 @@ async function captureMessages(
     if (row.contentType === "voice") {
       const hasChannelText = Boolean(row.text && row.text.trim() !== "");
       if (!hasChannelText && !row.mediaDescription) {
-        if (row.mediaStatus === "processing" || row.mediaStatus === "processing_queued") {
+        if (
+          row.mediaStatus === "processing" ||
+          row.mediaStatus === "processing_queued"
+        ) {
           // ASR 在途：批次在此截停，游标不越过该消息，本轮结束保持调度
           blockedByInFlightVoice = true;
           break;

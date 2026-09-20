@@ -236,7 +236,9 @@ async function searchChatHistoryInner(
 
   // 发送者昵称解析（成员/联系人资料），回给模型可读名字
   const actorIds = [
-    ...new Set(rows.map((row) => row.actorId).filter((id): id is string => Boolean(id))),
+    ...new Set(
+      rows.map((row) => row.actorId).filter((id): id is string => Boolean(id)),
+    ),
   ];
   const nameMap = new Map<string, string>();
   if (actorIds.length > 0) {

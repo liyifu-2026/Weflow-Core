@@ -63,7 +63,10 @@ export async function syncChannelMedia(
             ? await source.resolveAudio(asset.sourceMediaRef)
             : asset.kind === "video"
               ? await (source.resolveVideo?.(asset.sourceMediaRef) ??
-                Promise.resolve({ state: "failed" as const, errorCode: "media_unreadable" }))
+                  Promise.resolve({
+                    state: "failed" as const,
+                    errorCode: "media_unreadable",
+                  }))
               : await source.resolveImage(asset.sourceMediaRef);
       if (result.state === "pending") {
         await scheduleRetry(db, asset.mediaId, asset.attempt, "source_pending");
@@ -114,7 +117,10 @@ export async function syncChannelMedia(
             .set({
               // 文件/视频无派生阶段：落盘即可供人工查看。
               // 图片/语音仍需描述/转写，交给 media-processing-dispatcher。
-              status: asset.kind === "file" || asset.kind === "video" ? "ready" : "processing_queued",
+              status:
+                asset.kind === "file" || asset.kind === "video"
+                  ? "ready"
+                  : "processing_queued",
               originalFileId: file.fileId,
               // thumbnail=Host 缩略图回退（可升级原图）；缺省 original
               sourceVariant:

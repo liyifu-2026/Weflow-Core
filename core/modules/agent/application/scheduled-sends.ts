@@ -19,11 +19,7 @@ import { isAgentPaused } from "../../handoff/application/handoff-service.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
-export type ScheduledSendStatus =
-  | "pending"
-  | "fired"
-  | "cancelled"
-  | "frozen";
+export type ScheduledSendStatus = "pending" | "fired" | "cancelled" | "frozen";
 
 /** 一轮至多一条定时发送：幂等键从来源 turnId 派生。 */
 export function scheduledSendIdForTurn(turnId: string): string {
@@ -120,7 +116,11 @@ export async function cancelPendingScheduledSendsOnInbound(
   db: Database,
   conversationId: string,
 ): Promise<number> {
-  return cancelPendingScheduledSendsForConversation(db, conversationId, "new_inbound");
+  return cancelPendingScheduledSendsForConversation(
+    db,
+    conversationId,
+    "new_inbound",
+  );
 }
 
 /** 按原因作废会话全部 pending 定时发送（新入站 / 联系人开关关闭）。 */
@@ -149,7 +149,11 @@ export async function freezePendingScheduledSendsForHandoff(
 ): Promise<number> {
   const updated = await db
     .update(schema.scheduledSends)
-    .set({ status: "frozen", cancelReason: "handoff_active", updatedAt: new Date() })
+    .set({
+      status: "frozen",
+      cancelReason: "handoff_active",
+      updatedAt: new Date(),
+    })
     .where(
       and(
         eq(schema.scheduledSends.conversationId, conversationId),
@@ -200,9 +204,7 @@ export type ProcessDueScheduledSendsDeps = {
     },
   ) => Promise<{ messageId: string | null }>;
   /** 策略闸门（默认 isAgentPaused + contactProfiles.agentEnabled） */
-  checkGates?: (input: {
-    conversationId: string;
-  }) => Promise<{
+  checkGates?: (input: { conversationId: string }) => Promise<{
     blocked: boolean;
     reason: "handoff_active" | "agent_disabled";
   }>;
@@ -218,7 +220,10 @@ export type ProcessDueScheduledSendsDeps = {
 export async function processDueScheduledSends(
   db: Database,
   deps?: ProcessDueScheduledSendsDeps,
-  logger?: { error: (obj: unknown, msg: string) => void; info?: (obj: unknown, msg: string) => void },
+  logger?: {
+    error: (obj: unknown, msg: string) => void;
+    info?: (obj: unknown, msg: string) => void;
+  },
   now = new Date(),
 ): Promise<number> {
   const due = await db
@@ -277,13 +282,25 @@ export async function processDueScheduledSends(
           // 决策 #6：人工接入即冻结进待审，不放、不弃——由人工处置
           await db
             .update(schema.scheduledSends)
-            .set({ status: "frozen", cancelReason: "handoff_active", updatedAt: new Date() })
-            .where(eq(schema.scheduledSends.scheduledSendId, row.scheduledSendId));
+            .set({
+              status: "frozen",
+              cancelReason: "handoff_active",
+              updatedAt: new Date(),
+            })
+            .where(
+              eq(schema.scheduledSends.scheduledSendId, row.scheduledSendId),
+            );
         } else {
           await db
             .update(schema.scheduledSends)
-            .set({ status: "cancelled", cancelReason: "agent_disabled", updatedAt: new Date() })
-            .where(eq(schema.scheduledSends.scheduledSendId, row.scheduledSendId));
+            .set({
+              status: "cancelled",
+              cancelReason: "agent_disabled",
+              updatedAt: new Date(),
+            })
+            .where(
+              eq(schema.scheduledSends.scheduledSendId, row.scheduledSendId),
+            );
         }
         actioned += 1;
         continue;
@@ -295,9 +312,14 @@ export async function processDueScheduledSends(
         await db
           .update(schema.scheduledSends)
           .set({ sendAt: shifted, updatedAt: new Date() })
-          .where(eq(schema.scheduledSends.scheduledSendId, row.scheduledSendId));
+          .where(
+            eq(schema.scheduledSends.scheduledSendId, row.scheduledSendId),
+          );
         logger?.info?.(
-          { scheduledSendId: row.scheduledSendId, sendAt: shifted.toISOString() },
+          {
+            scheduledSendId: row.scheduledSendId,
+            sendAt: shifted.toISOString(),
+          },
           "scheduled send postponed out of quiet hours",
         );
         actioned += 1;
@@ -347,9 +369,7 @@ export async function operateScheduledSend(
   const rows = await db
     .select()
     .from(schema.scheduledSends)
-    .where(
-      eq(schema.scheduledSends.scheduledSendId, input.scheduledSendId),
-    )
+    .where(eq(schema.scheduledSends.scheduledSendId, input.scheduledSendId))
     .limit(1);
   const row = rows[0];
   if (!row) return { status: "not_found" };
@@ -428,7 +448,11 @@ export async function listScheduledSendsForConversation(
     .where(
       and(
         eq(schema.scheduledSends.conversationId, conversationId),
-        inArray(schema.scheduledSends.status, ["pending", "frozen", "cancelled"]),
+        inArray(schema.scheduledSends.status, [
+          "pending",
+          "frozen",
+          "cancelled",
+        ]),
       ),
     )
     .orderBy(desc(schema.scheduledSends.updatedAt))

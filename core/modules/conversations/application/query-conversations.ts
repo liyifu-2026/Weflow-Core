@@ -201,7 +201,8 @@ export async function listSharedConversations(
       },
       handoffStatus: schema.handoffStates.status,
       handoffReason: schema.handoffStates.reason,
-      handoffCreatedAt: schema.handoffStates.createdAt,      handoffAssignedUserId: schema.handoffStates.assignedUserId,
+      handoffCreatedAt: schema.handoffStates.createdAt,
+      handoffAssignedUserId: schema.handoffStates.assignedUserId,
       handoffAssignedQueueId: schema.handoffStates.assignedQueueId,
       handoffAgentPaused: schema.handoffStates.agentPaused,
       handoffTargetUserId: schema.handoffStates.targetUserId,
@@ -691,7 +692,12 @@ export async function getSharedTranscript(
         sharedAlias: schema.contactProfiles.sharedAlias,
       })
       .from(schema.contactProfiles)
-      .where(eq(schema.contactProfiles.channelAccount, conversation?.channelAccount ?? "default"));
+      .where(
+        eq(
+          schema.contactProfiles.channelAccount,
+          conversation?.channelAccount ?? "default",
+        ),
+      );
     for (const row of memberRows) {
       const resolved =
         row.sharedAlias?.trim() ||
@@ -769,9 +775,7 @@ export async function getSharedTranscript(
       // 群聊发送者昵称：入站消息 actorId（通道联系人 ID）解析为可读名；
       // 未同步的成员回落匿名缩写。私聊恒为 null。
       const senderName =
-        chatType === "group" &&
-        row.direction === "inbound" &&
-        row.actorId
+        chatType === "group" && row.direction === "inbound" && row.actorId
           ? (senderNames.get(row.actorId) ?? maskedSenderLabel(row.actorId))
           : null;
       return {
@@ -1056,7 +1060,9 @@ export async function listContactsWithLatestConversation(
     : undefined;
   const trimmedQuery = input.q?.trim() ?? "";
   const searchPattern =
-    trimmedQuery.length > 0 ? `%${trimmedQuery.replace(/[%_]/g, "\\$&")}%` : null;
+    trimmedQuery.length > 0
+      ? `%${trimmedQuery.replace(/[%_]/g, "\\$&")}%`
+      : null;
   const agentEnabledFilter = input.agentEnabled;
   const blockedFilter = input.blocked;
   const rows = await db.execute<{

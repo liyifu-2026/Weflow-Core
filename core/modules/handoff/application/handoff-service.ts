@@ -759,7 +759,11 @@ async function transitionInTransaction(
       "handoff_active",
       input.agentTurnId,
     );
-    await cancelPendingAgentOutbound(transaction, input.conversationId, "handoff_active");
+    await cancelPendingAgentOutbound(
+      transaction,
+      input.conversationId,
+      "handoff_active",
+    );
     if (type === "created") {
       // 告别话术由发起方自带（平台不持有任何业务文案）；插在 pending
       // agent 消息取消之后，保证它自身不被一起取消。缺省 = 静默转接。

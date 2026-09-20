@@ -262,9 +262,7 @@ export function registerIdentityRoutes(
             .returning({ updatedAt: databaseSchema.users.updatedAt });
           const updatedUser = updatedRows[0];
           if (!updatedUser) {
-            throw new Error(
-              `user ${identity.user.userId} does not exist`,
-            );
+            throw new Error(`user ${identity.user.userId} does not exist`);
           }
           avatarUpdatedAt = updatedUser.updatedAt;
           await transaction.insert(databaseSchema.auditEvents).values({
@@ -377,7 +375,11 @@ export function registerIdentityRoutes(
     const fallback = await resolvePresetSvg(
       defaultUserAvatarPreset(user.username).id,
     );
-    return sendUserAvatarSvg(reply, fallback?.svg ?? fallbackPresetSvg(defaultUserAvatarPreset(user.username)));
+    return sendUserAvatarSvg(
+      reply,
+      fallback?.svg ??
+        fallbackPresetSvg(defaultUserAvatarPreset(user.username)),
+    );
   });
 
   // DiceBear 头像代理（平台中立）：前端统一经此取确定性生成头像，
@@ -398,10 +400,7 @@ export function registerIdentityRoutes(
       if (!isDiceBearStyle(params.data.style)) {
         return reply.code(404).send({ error: "avatar_style_not_found" });
       }
-      const svg = await fetchDiceBearSvg(
-        params.data.style,
-        params.data.seed,
-      );
+      const svg = await fetchDiceBearSvg(params.data.style, params.data.seed);
       if (!svg) {
         return reply.code(502).send({ error: "avatar_upstream_unavailable" });
       }

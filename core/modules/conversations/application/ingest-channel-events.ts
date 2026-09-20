@@ -23,10 +23,7 @@ import {
 import { scheduleMemoryCaptureInTransaction } from "../../memory/application/schedule-memory-capture.js";
 import { scheduleTurnAdmissionInTransaction } from "./turn-admission.js";
 import { chatTypeFromConversationRef } from "./chat-type.js";
-import {
-  OUTBOUND_LOOP_SEND_STATES,
-  SEND_STATE,
-} from "./send-states.js";
+import { OUTBOUND_LOOP_SEND_STATES, SEND_STATE } from "./send-states.js";
 import { enqueueAssigneeInboundNotification } from "../../notifications/application/notification-outbox.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
 import { createHandoff } from "../../handoff/application/handoff-service.js";
@@ -238,8 +235,7 @@ async function ingestNormalizedEvent(
   // 会话类型（ADR-0010）：Host 上报优先；旧 Host 缺省时按通道约定推导
   // ——后缀知识在此收敛为全 Core 唯一回退点，下游一律读落库事实。
   const chatType: "private" | "group" =
-    event.conversationKind ??
-    chatTypeFromConversationRef(event.conversationId);
+    event.conversationKind ?? chatTypeFromConversationRef(event.conversationId);
 
   const account = normalizeChannelAccount(event.account);
   // default 账号保持旧格式 ID（channel:<ref>），兼容存量数据不回写；
@@ -378,8 +374,7 @@ async function ingestNormalizedEvent(
       text: event.content,
       isSelf: event.isSelf,
       processingState: direction === "inbound" ? "received" : "not_applicable",
-      sendState:
-        direction === "outbound" ? SEND_STATE.observed : null,
+      sendState: direction === "outbound" ? SEND_STATE.observed : null,
       replyToChannelMessageId: event.replyToChannelMessageId ?? null,
       mentionContactRefs: event.mentioned ? [event.senderId ?? "unknown"] : [],
       idempotencyKey: event.eventId,

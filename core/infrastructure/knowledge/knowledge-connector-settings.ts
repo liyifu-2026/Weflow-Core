@@ -23,9 +23,7 @@
  */
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type * as schema from "../postgres/schema.js";
-import {
-  createCachedExtensionSettingsReader,
-} from "../settings/extension-settings.js";
+import { createCachedExtensionSettingsReader } from "../settings/extension-settings.js";
 import {
   WeKnoraKnowledgeClient,
   type WeKnoraClientOptions,

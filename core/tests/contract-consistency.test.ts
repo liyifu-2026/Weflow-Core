@@ -23,11 +23,8 @@ import type {
 } from "@weflow-leaif/contracts";
 import { capability } from "@weflow-leaif/contracts";
 import type { HttpChannelProvider } from "../infrastructure/channel/http-channel-provider.js";
-import type {
-  MapExecutionStrategyRegistry} from "../modules/agent/contracts/execution-strategy.js";
-import {
-  type AgentAction,
-} from "../modules/agent/contracts/execution-strategy.js";
+import type { MapExecutionStrategyRegistry } from "../modules/agent/contracts/execution-strategy.js";
+import { type AgentAction } from "../modules/agent/contracts/execution-strategy.js";
 import type { AgentAction as AgentActionContract } from "@weflow-leaif/contracts";
 
 describe("contract consistency", () => {

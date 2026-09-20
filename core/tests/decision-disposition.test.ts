@@ -918,7 +918,10 @@ describe("commitDecisionDisposition — 群聊禁续步（2026-09-07 三连发�
     vi.mocked(commitAgentTurnOutcome).mockClear();
 
     const input = {
-      ...baseInput({ triggerMessageId: "msg-1", decision: groupReplyDecision() }),
+      ...baseInput({
+        triggerMessageId: "msg-1",
+        decision: groupReplyDecision(),
+      }),
       conversationId: "channel:wxid_test:45740750295@chatroom",
       chatType: "group" as const, // ADR-0010：会话类型由调用方透传事实
     };
@@ -935,7 +938,10 @@ describe("commitDecisionDisposition — 群聊禁续步（2026-09-07 三连发�
     vi.mocked(commitAgentTurnOutcome).mockClear();
 
     const result = await commitDecisionDisposition({
-      ...baseInput({ triggerMessageId: "msg-1", decision: groupReplyDecision() }),
+      ...baseInput({
+        triggerMessageId: "msg-1",
+        decision: groupReplyDecision(),
+      }),
       conversationId: "channel:x:room@chatroom",
       chatType: "group" as const, // 必填 Channel 事实（turn-runner 从 conversations.chat_type 透传）
     });
@@ -999,7 +1005,10 @@ describe("absorbVerdictFor 吸收策略矩阵", () => {
       absorbVerdictFor("tool_recovery", decisionOf("reply", ["查询结果：…"])),
     ).toBe("commit-as-step");
     expect(
-      absorbVerdictFor("tool_recovery", decisionOf("ask_for_information", ["…"])),
+      absorbVerdictFor(
+        "tool_recovery",
+        decisionOf("ask_for_information", ["…"]),
+      ),
     ).toBe("commit-as-step");
   });
 

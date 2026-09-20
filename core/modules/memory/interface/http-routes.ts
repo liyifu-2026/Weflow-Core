@@ -90,7 +90,9 @@ export function registerMemoryRoutes(
         kind: body.data.kind,
         memoryKey: body.data.key,
         content: body.data.content,
-        ...(body.data.importance === undefined ? {} : { importance: body.data.importance }),
+        ...(body.data.importance === undefined
+          ? {}
+          : { importance: body.data.importance }),
       });
       if (result.status === "conversation_not_found") {
         return reply.code(404).send({ error: "conversation_not_found" });

@@ -75,7 +75,10 @@ export function extractTriagePolicy(raw: unknown): TriagePolicy {
   }
   const t = triage as Record<string, unknown>;
   return {
-    enabled: typeof t.enabled === "boolean" ? t.enabled : DEFAULT_TRIAGE_POLICY.enabled,
+    enabled:
+      typeof t.enabled === "boolean"
+        ? t.enabled
+        : DEFAULT_TRIAGE_POLICY.enabled,
     riskKeywords: Array.isArray(t.riskKeywords)
       ? t.riskKeywords.filter(
           (keyword): keyword is string =>
@@ -142,9 +145,10 @@ export async function classifyForTriage(input: {
     return {
       route: "auto",
       tier: "standard",
-      reason: policy.systemPrompt === ""
-        ? "triage_prompt_unconfigured"
-        : "llm_classify_unavailable",
+      reason:
+        policy.systemPrompt === ""
+          ? "triage_prompt_unconfigured"
+          : "llm_classify_unavailable",
       degraded: false,
     };
   }
@@ -154,23 +158,27 @@ export async function classifyForTriage(input: {
       .slice(-3)
       .map((text) => `- ${text.slice(0, 120)}`);
     const response = await withTimeout(
-      completeAgentDecision(input.client, [
-        {
-          role: "system",
-          // 业务判定规则由设置下发（ADR-0011）；JSON 输出契约是解析器的
-          // 机制前提，由引擎追加——业务话术与机制格式在此拼合。
-          content: `${policy.systemPrompt}\n${TRIAGE_OUTPUT_CONTRACT}`,
-        },
-        {
-          role: "user",
-          content: [
-            `最新客户消息：${input.triggerText.slice(0, 300)}`,
-            ...(contextLines.length > 0
-              ? ["近期上下文（由旧到新）：", ...contextLines]
-              : []),
-          ].join("\n"),
-        },
-      ], input.model),
+      completeAgentDecision(
+        input.client,
+        [
+          {
+            role: "system",
+            // 业务判定规则由设置下发（ADR-0011）；JSON 输出契约是解析器的
+            // 机制前提，由引擎追加——业务话术与机制格式在此拼合。
+            content: `${policy.systemPrompt}\n${TRIAGE_OUTPUT_CONTRACT}`,
+          },
+          {
+            role: "user",
+            content: [
+              `最新客户消息：${input.triggerText.slice(0, 300)}`,
+              ...(contextLines.length > 0
+                ? ["近期上下文（由旧到新）：", ...contextLines]
+                : []),
+            ].join("\n"),
+          },
+        ],
+        input.model,
+      ),
       policy.timeoutMs,
     );
     const parsed = parseTriageResponse(response.text);
@@ -191,7 +199,10 @@ function parseTriageResponse(text: string): TriageVerdict | undefined {
   const end = text.lastIndexOf("}");
   if (start < 0 || end <= start) return undefined;
   try {
-    const value = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+    const value = JSON.parse(text.slice(start, end + 1)) as Record<
+      string,
+      unknown
+    >;
     if (value.route !== "human" && value.route !== "auto") return undefined;
     const tier =
       value.tier === "simple" ? ("simple" as const) : ("standard" as const);

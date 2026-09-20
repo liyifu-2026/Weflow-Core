@@ -48,14 +48,9 @@ import {
 import { recordAgentTurnEvent } from "./agent-turn-events.js";
 import { buildAgentContext } from "./agent-context.js";
 import { commitDecisionDisposition } from "./decision-disposition.js";
-import {
-  classifyError,
-  getAgentTurnConversationId,
-} from "./turn-utils.js";
+import { classifyError, getAgentTurnConversationId } from "./turn-utils.js";
 import { chatTypeFromConversationRef } from "../../conversations/application/chat-type.js";
-import {
-  acquireDecision,
-} from "./acquire-decision.js";
+import { acquireDecision } from "./acquire-decision.js";
 import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
 import type { imageToContentPart } from "./image-content.js";
 import type { AgentTurnExecutionInput } from "./agent-turn-executor.js";
@@ -345,10 +340,14 @@ export async function processAgentTurn(
     });
     return { continueLoop: disposition.action === "continue" };
   } catch (error) {
-    await recordTurnErrorAndRequeue(db, {
-      turnId: turn.turnId,
-      conversationId: turn.conversationId,
-    }, error);
+    await recordTurnErrorAndRequeue(
+      db,
+      {
+        turnId: turn.turnId,
+        conversationId: turn.conversationId,
+      },
+      error,
+    );
     throw error;
   }
 }
@@ -404,10 +403,14 @@ export async function processPlannedToolTurn(
     // 兜底契约与 fresh 路径一致：错误落事件（排错不依赖 stdout）、
     // running 重置为 queued 让队列重试/回收接管。事发时若缺这一层，
     // 异常静默退出会让 turn 假死到 STALE 兜底（2026-09-07 双 5min 回归）。
-    await recordTurnErrorAndRequeue(db, {
-      turnId: job.turnId,
-      conversationId: execution.conversationId,
-    }, error);
+    await recordTurnErrorAndRequeue(
+      db,
+      {
+        turnId: job.turnId,
+        conversationId: execution.conversationId,
+      },
+      error,
+    );
     throw error;
   }
 }

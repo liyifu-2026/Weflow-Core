@@ -42,8 +42,12 @@ describe("groupDisplayName", () => {
     expect(groupDisplayName("李工", "contact:channel:wxid_xxx", false)).toBe(
       "李工",
     );
-    expect(groupDisplayName("45868444838@chatroom", "contact:channel:45868444838@chatroom", false)).toBe(
-      "45868444838@chatroom",
-    );
+    expect(
+      groupDisplayName(
+        "45868444838@chatroom",
+        "contact:channel:45868444838@chatroom",
+        false,
+      ),
+    ).toBe("45868444838@chatroom");
   });
 });

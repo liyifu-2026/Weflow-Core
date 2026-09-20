@@ -96,7 +96,9 @@ export async function loadInstalledBackendPlugins(
   }
   let registered = 0;
   try {
-    const module = (await import(pathToFileURL(entry).href)) as BackendPluginModule;
+    const module = (await import(
+      pathToFileURL(entry).href
+    )) as BackendPluginModule;
     if (typeof module.registerRoutes !== "function") {
       logger.warn(
         { entry },

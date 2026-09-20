@@ -180,9 +180,7 @@ export function registerKnoraBridgeRoutes(
       typeof query.api === "string" && /^https?:\/\//.test(query.api)
         ? query.api
         : `${request.protocol}://${request.headers.host ?? ""}`;
-    const url = new URL(
-      `${options.origin}/bridge.html`,
-    );
+    const url = new URL(`${options.origin}/bridge.html`);
     url.searchParams.set("code", code);
     url.searchParams.set("target", target);
     url.searchParams.set("api", api);

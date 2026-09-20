@@ -246,7 +246,10 @@ export class AgentTurnExecutor {
           decisionClient,
           decisionModel,
           input,
-          { ...this.freshDependencies(), allowReplyContinuation: !fastDirectReply },
+          {
+            ...this.freshDependencies(),
+            allowReplyContinuation: !fastDirectReply,
+          },
         );
         // 真 ReAct 统一步进循环：首轮决策后，tool_planned → 工具恢复，
         // running + continue 信号（reply 不带 wait_ms 续步）→ 下一步决策。

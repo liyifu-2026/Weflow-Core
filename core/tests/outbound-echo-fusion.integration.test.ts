@@ -12,7 +12,10 @@
 import { desc, eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createLogger } from "../infrastructure/observability/logger.js";
-import { createPostgres, type Postgres } from "../infrastructure/postgres/client.js";
+import {
+  createPostgres,
+  type Postgres,
+} from "../infrastructure/postgres/client.js";
 import * as schema from "../infrastructure/postgres/schema.js";
 import { ingestChannelEvents } from "../modules/conversations/application/ingest-channel-events.js";
 import { contactIdForChannel } from "../modules/contacts/application/contact-profile-service.js";
@@ -144,11 +147,7 @@ integration("出站媒体自回声融合", () => {
     return messageId;
   }
 
-  function echoEvent(
-    label: string,
-    kind: "image" | "file",
-    atSeconds: number,
-  ) {
+  function echoEvent(label: string, kind: "image" | "file", atSeconds: number) {
     return {
       cursor: `${base}-cursor-${label}`,
       eventId: `${base}-echo-${label}`,
@@ -167,10 +166,20 @@ integration("出站媒体自回声融合", () => {
 
   it("image 回声融合：不插重复行，manual 行 confirmed + channelMessageId 回填", async () => {
     const sendAt = new Date("2026-08-31T08:00:00.000Z");
-    const messageId = await seedManualMediaRow("img1", "image", sendAt, "confirmed");
+    const messageId = await seedManualMediaRow(
+      "img1",
+      "image",
+      sendAt,
+      "confirmed",
+    );
     // Host 轮询回声：发送后 ~8s（GUI 发送 + 微信 DB 落库延迟）
     const echoAt = Math.floor(sendAt.getTime() / 1000) + 8;
-    await ingestChannelEvents(postgres.db, [echoEvent("e1", "image", echoAt)], "1", logger);
+    await ingestChannelEvents(
+      postgres.db,
+      [echoEvent("e1", "image", echoAt)],
+      "1",
+      logger,
+    );
 
     const rows = await postgres.db
       .select()
@@ -187,10 +196,25 @@ integration("出站媒体自回声融合", () => {
 
   it("file 回声融合：file 对 file，不误配 image 行", async () => {
     const sendAt = new Date("2026-08-31T08:05:00.000Z");
-    const imgId = await seedManualMediaRow("img2", "image", sendAt, "confirmed");
-    const fileId = await seedManualMediaRow("file1", "file", sendAt, "confirmed");
+    const imgId = await seedManualMediaRow(
+      "img2",
+      "image",
+      sendAt,
+      "confirmed",
+    );
+    const fileId = await seedManualMediaRow(
+      "file1",
+      "file",
+      sendAt,
+      "confirmed",
+    );
     const echoAt = Math.floor(sendAt.getTime() / 1000) + 10;
-    await ingestChannelEvents(postgres.db, [echoEvent("e2", "file", echoAt)], "2", logger);
+    await ingestChannelEvents(
+      postgres.db,
+      [echoEvent("e2", "file", echoAt)],
+      "2",
+      logger,
+    );
 
     const fileRow = await postgres.db
       .select()
@@ -211,7 +235,12 @@ integration("出站媒体自回声融合", () => {
     const sendAt = new Date("2026-08-31T08:10:00.000Z");
     await seedManualMediaRow("img3", "image", sendAt, "confirmed");
     const echoAt = Math.floor(sendAt.getTime() / 1000) + 6;
-    await ingestChannelEvents(postgres.db, [echoEvent("e3", "file", echoAt)], "3", logger);
+    await ingestChannelEvents(
+      postgres.db,
+      [echoEvent("e3", "file", echoAt)],
+      "3",
+      logger,
+    );
 
     const echoRows = await postgres.db
       .select()
@@ -233,7 +262,12 @@ integration("出站媒体自回声融合", () => {
       .limit(1);
     const sendAt = latest[0]!.occurredAt;
     const echoAt = Math.floor(sendAt.getTime() / 1000) + 11 * 60;
-    await ingestChannelEvents(postgres.db, [echoEvent("e4", "image", echoAt)], "4", logger);
+    await ingestChannelEvents(
+      postgres.db,
+      [echoEvent("e4", "image", echoAt)],
+      "4",
+      logger,
+    );
 
     const echoRows = await postgres.db
       .select()
@@ -244,10 +278,25 @@ integration("出站媒体自回声融合", () => {
 
   it("failed 终态行不被迟来回声复活；unknown 行可被融合", async () => {
     const sendAt = new Date("2026-08-31T08:20:00.000Z");
-    const failedId = await seedManualMediaRow("img5", "image", sendAt, "failed");
-    const unknownId = await seedManualMediaRow("img6", "image", sendAt, "unknown");
+    const failedId = await seedManualMediaRow(
+      "img5",
+      "image",
+      sendAt,
+      "failed",
+    );
+    const unknownId = await seedManualMediaRow(
+      "img6",
+      "image",
+      sendAt,
+      "unknown",
+    );
     const echoAt = Math.floor(sendAt.getTime() / 1000) + 9;
-    await ingestChannelEvents(postgres.db, [echoEvent("e5", "image", echoAt)], "5", logger);
+    await ingestChannelEvents(
+      postgres.db,
+      [echoEvent("e5", "image", echoAt)],
+      "5",
+      logger,
+    );
 
     const failedRow = await postgres.db
       .select()

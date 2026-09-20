@@ -424,10 +424,7 @@ export const sessionWakes = agentSchema.table(
   },
   (table) => [
     unique("agent_session_wakes_turn_unique").on(table.turnId),
-    index("agent_session_wakes_status_wake_idx").on(
-      table.status,
-      table.wakeAt,
-    ),
+    index("agent_session_wakes_status_wake_idx").on(table.status, table.wakeAt),
   ],
 );
 
@@ -436,18 +433,15 @@ export const sessionWakes = agentSchema.table(
  * 已尝试方案/未兑现承诺/待确认问题），由模型随决策以 facts_card 字段更新、
  * 下回合开头注入上下文。卡是咨询性上下文（非事务事实），整个对象替换语义。
  */
-export const conversationFacts = agentSchema.table(
-  "fact_cards",
-  {
-    conversationId: varchar("conversation_id", { length: 300 })
-      .primaryKey()
-      .references(() => conversations.conversationId),
-    card: jsonb("card").notNull().default({}),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-  },
-);
+export const conversationFacts = agentSchema.table("fact_cards", {
+  conversationId: varchar("conversation_id", { length: 300 })
+    .primaryKey()
+    .references(() => conversations.conversationId),
+  card: jsonb("card").notNull().default({}),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
 
 /**
  * 定时发送（SCHEDULED-SEND-PLAN）：schedule_send 决策的持久化执行计划。
@@ -1607,7 +1601,9 @@ export const modelRegistry = operationsSchema.table("model_registry", {
   apiKey: text("api_key"),
   capabilities: jsonb("capabilities").$type<string[]>().default([]).notNull(),
   /** asr 端点协议：chat_inline（chat/completions 内联）| audio_transcriptions（multipart） */
-  protocol: varchar("protocol", { length: 30 }).default("chat_inline").notNull(),
+  protocol: varchar("protocol", { length: 30 })
+    .default("chat_inline")
+    .notNull(),
   timeoutMs: integer("timeout_ms").default(60_000).notNull(),
   failoverTo: varchar("failover_to", { length: 120 }),
   enabled: boolean("enabled").default(true).notNull(),

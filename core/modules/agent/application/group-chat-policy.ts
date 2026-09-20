@@ -77,10 +77,7 @@ export function shouldRespondToGroupMessage(
 
 /** 群聊响应模式（配置枚举） */
 export type GroupChatMode =
-  | "mention_only"
-  | "mention_or_keyword"
-  | "accept_all"
-  | "off";
+  "mention_only" | "mention_or_keyword" | "accept_all" | "off";
 
 /** 冷却护栏：窗口内每个群最多 N 条 AI 回复 */
 export type GroupCooldownPolicy = {
@@ -142,7 +139,8 @@ function extractOne(raw: unknown): ResolvedGroupChatPolicy {
   const groupChat =
     typeof source.groupChat === "object" && source.groupChat !== null
       ? (source.groupChat as Record<string, unknown>)
-      : typeof raw === "object" && raw !== null &&
+      : typeof raw === "object" &&
+          raw !== null &&
           !("groupChat" in (raw as Record<string, unknown>)) &&
           "mode" in (raw as Record<string, unknown>)
         ? (raw as Record<string, unknown>)
@@ -157,12 +155,14 @@ function extractOne(raw: unknown): ResolvedGroupChatPolicy {
       : null;
   const keywords = Array.isArray(groupChat.keywords)
     ? groupChat.keywords.filter(
-        (word): word is string => typeof word === "string" && word.trim() !== "",
+        (word): word is string =>
+          typeof word === "string" && word.trim() !== "",
       )
     : [];
   const botNames = Array.isArray(groupChat.botNames)
     ? groupChat.botNames.filter(
-        (word): word is string => typeof word === "string" && word.trim() !== "",
+        (word): word is string =>
+          typeof word === "string" && word.trim() !== "",
       )
     : [];
   const threadTtlMinutes =
@@ -207,7 +207,8 @@ function extractOne(raw: unknown): ResolvedGroupChatPolicy {
   return {
     policy: {
       acceptAll,
-      replyWhenMentioned: modeValue === "mention_only" || modeValue === "mention_or_keyword",
+      replyWhenMentioned:
+        modeValue === "mention_only" || modeValue === "mention_or_keyword",
       botNames,
       keywords,
       responseProbability: acceptAll ? probability : 0,
@@ -227,7 +228,5 @@ export function resolveGroupChatPolicy(
   settings: ReturnType<typeof extractGroupChatSettings>,
   conversationRef: string,
 ): ResolvedGroupChatPolicy {
-  return (
-    settings.overrides.get(conversationRef.trim()) ?? settings.global
-  );
+  return settings.overrides.get(conversationRef.trim()) ?? settings.global;
 }

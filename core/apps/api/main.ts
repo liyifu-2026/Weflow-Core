@@ -239,7 +239,8 @@ await runProcess({
       channelKernel = new RuntimeKernel();
       channelKernel.register(httpChannelPlugin(channelProvider));
       await channelKernel.start();
-    }    const stopMobileHandoffMaintenance = startMobileHandoffMaintenance(
+    }
+    const stopMobileHandoffMaintenance = startMobileHandoffMaintenance(
       postgres.db,
       logger,
     );

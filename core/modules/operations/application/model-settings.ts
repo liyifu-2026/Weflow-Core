@@ -83,7 +83,10 @@ async function computeModelGatewayFingerprint(
 ): Promise<string> {
   try {
     const [registryRows, slotRows] = await Promise.all([
-      db.select().from(schema.modelRegistry).orderBy(schema.modelRegistry.modelId),
+      db
+        .select()
+        .from(schema.modelRegistry)
+        .orderBy(schema.modelRegistry.modelId),
       db.select().from(schema.runtimeSettings),
     ]);
     const slots = Object.fromEntries(

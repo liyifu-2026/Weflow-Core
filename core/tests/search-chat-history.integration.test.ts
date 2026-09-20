@@ -110,19 +110,27 @@ integration("search_chat_history tool", () => {
         channelNickname: "小白",
       },
     ]);
-    await postgres.db
-      .insert(schema.conversations)
-      .values({
-        conversationId,
-        contactId,
-        channel: "channel",
-        channelConversationId: `history-tool-${suffix}`,
-      });
+    await postgres.db.insert(schema.conversations).values({
+      conversationId,
+      contactId,
+      channel: "channel",
+      channelConversationId: `history-tool-${suffix}`,
+    });
     // Leaif 两条（一条命中关键词），小白一条，5 天前的一条旧消息（72h 窗外）
-    await insertInbound(`hist-${suffix}-1`, leaifWxid, "v9打不开，报错误码2272", 10);
+    await insertInbound(
+      `hist-${suffix}-1`,
+      leaifWxid,
+      "v9打不开，报错误码2272",
+      10,
+    );
     await insertInbound(`hist-${suffix}-2`, leaifWxid, "重启了还是不行", 8);
     await insertInbound(`hist-${suffix}-3`, otherWxid, "我也有这个问题", 5);
-    await insertInbound(`hist-${suffix}-4`, leaifWxid, "错误码12535又来了", 7200);
+    await insertInbound(
+      `hist-${suffix}-4`,
+      leaifWxid,
+      "错误码12535又来了",
+      7200,
+    );
   });
 
   afterAll(async () => {
@@ -141,12 +149,18 @@ integration("search_chat_history tool", () => {
     await postgres.db
       .delete(schema.contactProfiles)
       .where(
-        like(schema.contactProfiles.contactId, `contact:channel:history-tool-${suffix}%`),
+        like(
+          schema.contactProfiles.contactId,
+          `contact:channel:history-tool-${suffix}%`,
+        ),
       );
     await postgres.db
       .delete(schema.contactProfiles)
       .where(
-        like(schema.contactProfiles.channelContactId, `wxid_history_%${suffix}`),
+        like(
+          schema.contactProfiles.channelContactId,
+          `wxid_history_%${suffix}`,
+        ),
       );
     await postgres.close();
   });

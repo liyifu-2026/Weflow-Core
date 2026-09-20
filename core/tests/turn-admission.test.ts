@@ -43,7 +43,11 @@ describe("nextAdmissionAt", () => {
   });
 
   it("参数异常回落默认窗，绝不抛错", () => {
-    const at = nextAdmissionAt({ text: "在吗？", now: base, quietWindowMs: -5 });
+    const at = nextAdmissionAt({
+      text: "在吗？",
+      now: base,
+      quietWindowMs: -5,
+    });
     expect(at.getTime()).toBe(base.getTime() + 12_000);
   });
 });
@@ -162,4 +166,3 @@ describe("claimDueTurnAdmission", () => {
     expect(db.where).toHaveBeenCalledTimes(1);
   });
 });
-

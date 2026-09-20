@@ -6,16 +6,7 @@
  * Drizzle ORM directly. All DB access lives here; route handlers call
  * these functions and map the result to HTTP responses.
  */
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gte,
-  isNotNull,
-  lte,
-} from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, isNotNull, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { RuntimeCapabilities } from "./system-status.js";
@@ -148,9 +139,7 @@ export async function readAuditEvents(
         filters.eventType
           ? eq(schema.auditEvents.eventType, filters.eventType)
           : undefined,
-        filters.actor
-          ? eq(schema.users.username, filters.actor)
-          : undefined,
+        filters.actor ? eq(schema.users.username, filters.actor) : undefined,
         filters.from
           ? gte(schema.auditEvents.createdAt, new Date(filters.from))
           : undefined,

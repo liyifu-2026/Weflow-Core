@@ -24,10 +24,7 @@ export async function runMemoryMaintenance(
       asc(schema.memories.updatedAt),
     );
 
-  const byContact = new Map<
-    string,
-    typeof schema.memories.$inferSelect[]
-  >();
+  const byContact = new Map<string, (typeof schema.memories.$inferSelect)[]>();
   for (const row of rows) {
     const list = byContact.get(row.contactId) ?? [];
     list.push(row);

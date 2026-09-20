@@ -60,10 +60,7 @@ import {
   upsertConversationFacts,
 } from "./conversation-facts.js";
 import { findNewerActiveTurnIds } from "./turn-utils.js";
-import {
-  ensureSessionOnWait,
-  scheduleSessionWake,
-} from "./session-wake.js";
+import { ensureSessionOnWait, scheduleSessionWake } from "./session-wake.js";
 import {
   closeAgentSession,
   closeGroupThreadSessions,
@@ -358,7 +355,8 @@ async function commitToolRecoveryDisposition(
  */
 async function commitDispositionTail(
   input: DecisionDispositionInput,
-  mode: { kind: "fresh"; toolPlan: ToolPlan | null } | { kind: "tool_recovery" },
+  mode:
+    { kind: "fresh"; toolPlan: ToolPlan | null } | { kind: "tool_recovery" },
 ): Promise<DecisionDispositionResult> {
   const { db, decision, turnId, conversationId } = input;
   const fresh = mode.kind === "fresh";

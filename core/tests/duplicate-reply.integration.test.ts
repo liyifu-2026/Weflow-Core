@@ -210,7 +210,9 @@ integration("Agent duplicate reply guard", () => {
     // capture_states.watermark_message_id 反指 messages：先删记忆捕获排队行
     await postgres.db
       .delete(schema.memoryCaptureStates)
-      .where(eq(schema.memoryCaptureStates.conversationId, batchConversationId));
+      .where(
+        eq(schema.memoryCaptureStates.conversationId, batchConversationId),
+      );
     await postgres.db
       .delete(schema.agentTurns)
       .where(eq(schema.agentTurns.conversationId, batchConversationId));
@@ -395,7 +397,8 @@ integration("Agent duplicate reply guard", () => {
       .select()
       .from(schema.agentTurns)
       .where(eq(schema.agentTurns.conversationId, batchConversationId));
-    if (!turn) throw new Error("expected an agent turn on the batch conversation");
+    if (!turn)
+      throw new Error("expected an agent turn on the batch conversation");
     const executor = new AgentTurnExecutor(
       postgres.db,
       stubSegmentModelClient([
@@ -426,7 +429,7 @@ integration("Agent duplicate reply guard", () => {
     expect(persisted.map((row) => row.replySequence)).toEqual([1, 2]);
   });
 
-  /** 直接插入一条 agent 出站回复单段批次（判定只看 messages 表）。 */  async function insertAgentReply(input: {
+  /** 直接插入一条 agent 出站回复单段批次（判定只看 messages 表）。 */ async function insertAgentReply(input: {
     messageId: string;
     text: string;
     sendState: SendState | null;

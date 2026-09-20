@@ -37,7 +37,10 @@ import {
   MODEL_SLOTS,
   type ModelRegistryPatch,
 } from "../application/model-gateway.js";
-import { readModelHealth, probeModelAndRecord } from "../application/model-failover.js";
+import {
+  readModelHealth,
+  probeModelAndRecord,
+} from "../application/model-failover.js";
 import {
   readSolutionExtensionSettings,
   writeSolutionExtensionSettings,

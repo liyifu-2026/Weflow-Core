@@ -14,12 +14,8 @@ import { and, eq, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
 import * as schema from "../../../infrastructure/postgres/schema.js";
-import {
-  isAgentPaused,
-} from "../../handoff/application/handoff-service.js";
-import {
-  resolveExecutionProfileForAdmission,
-} from "../../agent/application/execution-profile-service.js";
+import { isAgentPaused } from "../../handoff/application/handoff-service.js";
+import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
 import {
   claimDueTurnAdmission,
   type ClaimedAdmission,

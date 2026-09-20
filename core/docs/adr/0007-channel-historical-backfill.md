@@ -50,7 +50,7 @@ Core `messages.idempotency_key` 语义不变。cursor 仍全局递增（AUTOINCR
   触发 Agent Turn / 记忆 / 通知，AI 可能回复一条陈年旧消息。
 - 新行为：回溯按 `hist:` eventId 合成事件，Core 摄取零副作用；回溯前先
   查每会话已捕获的 `channel_message_id` 集合并跳过（`message_ids_for_
-  conversation`），只补真正的漏捕消息，不为已入库消息造冗余事件。
+conversation`），只补真正的漏捕消息，不为已入库消息造冗余事件。
 - 实测（真实环境）：一次同步 rescue 出 100 条此前从未捕获的历史消息
   （store 91 → 191，Core 消息 110 → 210），0 条 Turn、0 条外发。
 

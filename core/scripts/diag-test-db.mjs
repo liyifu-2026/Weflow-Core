@@ -2,7 +2,8 @@
 import pg from "pg";
 
 const databaseUrl =
-  process.env.TEST_DATABASE_URL ?? "postgresql://weflow:weflow@127.0.0.1:5432/weflow_test";
+  process.env.TEST_DATABASE_URL ??
+  "postgresql://weflow:weflow@127.0.0.1:5432/weflow_test";
 const client = new pg.Client({ connectionString: databaseUrl });
 try {
   await client.connect();

@@ -122,9 +122,7 @@ export const GROUP_THREAD_SESSION_PREFIX = "session:group-thread:";
 /** 连接或事务均可（摄取闸门在摄取事务内调用）。 */
 type SessionDatabase =
   | NodePgDatabase<typeof schema>
-  | Parameters<
-      Parameters<NodePgDatabase<typeof schema>["transaction"]>[0]
-    >[0];
+  | Parameters<Parameters<NodePgDatabase<typeof schema>["transaction"]>[0]>[0];
 
 /** 查询某群当前活跃线程（未关闭且未超空闲 TTL 的最新线程行）。 */
 async function findOpenGroupThread(
@@ -137,10 +135,7 @@ async function findOpenGroupThread(
     .where(
       and(
         eq(schema.agentSessions.conversationId, input.conversationId),
-        like(
-          schema.agentSessions.sessionId,
-          `${GROUP_THREAD_SESSION_PREFIX}%`,
-        ),
+        like(schema.agentSessions.sessionId, `${GROUP_THREAD_SESSION_PREFIX}%`),
         ne(schema.agentSessions.state, "closed"),
       ),
     )
@@ -226,10 +221,7 @@ export async function closeGroupThreadSessions(
     .where(
       and(
         eq(schema.agentSessions.conversationId, input.conversationId),
-        like(
-          schema.agentSessions.sessionId,
-          `${GROUP_THREAD_SESSION_PREFIX}%`,
-        ),
+        like(schema.agentSessions.sessionId, `${GROUP_THREAD_SESSION_PREFIX}%`),
         ne(schema.agentSessions.state, "closed"),
       ),
     );

@@ -19,9 +19,7 @@ import {
 } from "../application/scheduled-sends.js";
 
 const listQuerySchema = z.object({
-  status: z
-    .enum(["pending", "fired", "cancelled", "frozen"])
-    .optional(),
+  status: z.enum(["pending", "fired", "cancelled", "frozen"]).optional(),
   conversationId: z.string().trim().min(1).max(300).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(100),
 });
@@ -48,13 +46,12 @@ export function registerScheduledSendRoutes(
     const identity = await requireBusinessIdentity(db, request, reply);
     if (!identity) return;
     const query = listQuerySchema.safeParse(request.query);
-    if (!query.success) return reply.code(400).send({ error: "invalid_request" });
+    if (!query.success)
+      return reply.code(400).send({ error: "invalid_request" });
 
     const conditions: SQL[] = [];
     if (query.data.status) {
-      conditions.push(
-        eq(schema.scheduledSends.status, query.data.status),
-      );
+      conditions.push(eq(schema.scheduledSends.status, query.data.status));
     }
     if (query.data.conversationId) {
       conditions.push(
@@ -84,14 +81,9 @@ export function registerScheduledSendRoutes(
       )
       .leftJoin(
         schema.contactProfiles,
-        eq(
-          schema.contactProfiles.contactId,
-          schema.conversations.contactId,
-        ),
+        eq(schema.contactProfiles.contactId, schema.conversations.contactId),
       )
-      .where(
-        conditions.length > 0 ? and(...conditions) : undefined,
-      )
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
       .orderBy(desc(schema.scheduledSends.sendAt))
       .limit(query.data.limit);
     return { scheduledSends: rows };
@@ -104,7 +96,8 @@ export function registerScheduledSendRoutes(
       const identity = await requireBusinessIdentity(db, request, reply);
       if (!identity) return;
       const params = conversationParamsSchema.safeParse(request.params);
-      if (!params.success) return reply.code(400).send({ error: "invalid_request" });
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
       const rows = await listScheduledSendsForConversation(
         db,
         params.data.conversationId,
@@ -133,58 +126,78 @@ export function registerScheduledSendRoutes(
     });
   }
 
-  server.post("/api/v1/scheduled-sends/:scheduledSendId/cancel", async (request, reply) => {
-    const identity = await requireBusinessIdentity(db, request, reply);
-    if (!identity) return;
-    const params = idParamsSchema.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "invalid_request" });
-    const result = await applyOperation(
-      "cancel",
-      params.data.scheduledSendId,
-      undefined,
-      identity.user.userId,
-    );
-    if (result.status === "not_found") return reply.code(404).send({ error: "scheduled_send_not_found" });
-    if (result.status === "invalid_state") return reply.code(409).send({ error: "scheduled_send_invalid_state" });
-    return { status: "ok" };
-  });
+  server.post(
+    "/api/v1/scheduled-sends/:scheduledSendId/cancel",
+    async (request, reply) => {
+      const identity = await requireBusinessIdentity(db, request, reply);
+      if (!identity) return;
+      const params = idParamsSchema.safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const result = await applyOperation(
+        "cancel",
+        params.data.scheduledSendId,
+        undefined,
+        identity.user.userId,
+      );
+      if (result.status === "not_found")
+        return reply.code(404).send({ error: "scheduled_send_not_found" });
+      if (result.status === "invalid_state")
+        return reply.code(409).send({ error: "scheduled_send_invalid_state" });
+      return { status: "ok" };
+    },
+  );
 
-  server.post("/api/v1/scheduled-sends/:scheduledSendId/reschedule", async (request, reply) => {
-    const identity = await requireBusinessIdentity(db, request, reply);
-    if (!identity) return;
-    const params = idParamsSchema.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "invalid_request" });
-    const body = rescheduleSchema.safeParse(request.body);
-    if (!body.success) return reply.code(400).send({ error: "invalid_request" });
-    const sendAt = new Date(body.data.sendAt);
-    if (!Number.isFinite(sendAt.getTime())) {
-      return reply.code(400).send({ error: "invalid_request" });
-    }
-    const result = await applyOperation(
-      "reschedule",
-      params.data.scheduledSendId,
-      sendAt,
-      identity.user.userId,
-    );
-    if (result.status === "not_found") return reply.code(404).send({ error: "scheduled_send_not_found" });
-    if (result.status === "invalid_state") return reply.code(409).send({ error: "scheduled_send_invalid_state" });
-    return { status: "ok" };
-  });
+  server.post(
+    "/api/v1/scheduled-sends/:scheduledSendId/reschedule",
+    async (request, reply) => {
+      const identity = await requireBusinessIdentity(db, request, reply);
+      if (!identity) return;
+      const params = idParamsSchema.safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const body = rescheduleSchema.safeParse(request.body);
+      if (!body.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const sendAt = new Date(body.data.sendAt);
+      if (!Number.isFinite(sendAt.getTime())) {
+        return reply.code(400).send({ error: "invalid_request" });
+      }
+      const result = await applyOperation(
+        "reschedule",
+        params.data.scheduledSendId,
+        sendAt,
+        identity.user.userId,
+      );
+      if (result.status === "not_found")
+        return reply.code(404).send({ error: "scheduled_send_not_found" });
+      if (result.status === "invalid_state")
+        return reply.code(409).send({ error: "scheduled_send_invalid_state" });
+      return { status: "ok" };
+    },
+  );
 
-  server.post("/api/v1/scheduled-sends/:scheduledSendId/fire-now", async (request, reply) => {
-    const identity = await requireBusinessIdentity(db, request, reply);
-    if (!identity) return;
-    const params = idParamsSchema.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "invalid_request" });
-    const result = await applyOperation(
-      "fire_now",
-      params.data.scheduledSendId,
-      undefined,
-      identity.user.userId,
-    );
-    if (result.status === "not_found") return reply.code(404).send({ error: "scheduled_send_not_found" });
-    if (result.status === "invalid_state") return reply.code(409).send({ error: "scheduled_send_invalid_state" });
-    if (result.status === "handoff_active") return reply.code(409).send({ error: "handoff_active" });
-    return { status: "ok" };
-  });
+  server.post(
+    "/api/v1/scheduled-sends/:scheduledSendId/fire-now",
+    async (request, reply) => {
+      const identity = await requireBusinessIdentity(db, request, reply);
+      if (!identity) return;
+      const params = idParamsSchema.safeParse(request.params);
+      if (!params.success)
+        return reply.code(400).send({ error: "invalid_request" });
+      const result = await applyOperation(
+        "fire_now",
+        params.data.scheduledSendId,
+        undefined,
+        identity.user.userId,
+      );
+      if (result.status === "not_found")
+        return reply.code(404).send({ error: "scheduled_send_not_found" });
+      if (result.status === "invalid_state")
+        return reply.code(409).send({ error: "scheduled_send_invalid_state" });
+      if (result.status === "handoff_active")
+        return reply.code(409).send({ error: "handoff_active" });
+      return { status: "ok" };
+    },
+  );
 }

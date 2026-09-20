@@ -24,9 +24,9 @@ function fakeFetch(
     if (captured.contentType.startsWith("application/json")) {
       captured.body = JSON.parse(String(init?.body));
     }
-    const hit =
-      Object.entries(statusByPath).find(([key]) => path.endsWith(key))?.[1] ??
-      { status: 404, body: "not found" };
+    const hit = Object.entries(statusByPath).find(([key]) =>
+      path.endsWith(key),
+    )?.[1] ?? { status: 404, body: "not found" };
     return new Response(hit.body, { status: hit.status });
   }) as unknown as typeof globalThis.fetch;
 }

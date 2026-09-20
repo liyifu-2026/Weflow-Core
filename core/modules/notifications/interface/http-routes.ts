@@ -37,7 +37,8 @@ const preferenceBody = z
       .optional(),
   })
   .refine(
-    (value) => value.showPreview !== undefined || value.notifyKinds !== undefined,
+    (value) =>
+      value.showPreview !== undefined || value.notifyKinds !== undefined,
     { message: "nothing_to_update" },
   );
 

@@ -8,9 +8,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
-import {
-  cancelPendingScheduledSendsForConversation,
-} from "../../agent/application/scheduled-sends.js";
+import { cancelPendingScheduledSendsForConversation } from "../../agent/application/scheduled-sends.js";
 import { AgentTurnService } from "../../agent/application/agent-turn-service.js";
 import { cancelPendingAgentOutbound } from "../../conversations/application/send-states.js";
 

@@ -90,7 +90,9 @@ export async function writeSolutionExtensionSettings(
       ],
       set: {
         settingsJson: input.settingsJson,
-        ...(input.updatedBy !== undefined ? { updatedBy: input.updatedBy } : {}),
+        ...(input.updatedBy !== undefined
+          ? { updatedBy: input.updatedBy }
+          : {}),
         updatedAt: new Date(),
       },
     });

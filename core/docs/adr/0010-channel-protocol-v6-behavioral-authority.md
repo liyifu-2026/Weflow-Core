@@ -31,7 +31,7 @@
      `channel_protocol.py` 常量构造（含 SQL 片段插值；terminal 状态集 =
      新增 `inFlightSendOperationStates` 的补集）；
    - `CHANNEL_PROTOCOL.errorCodes` 补全上述 8 个真实码。
-   从此 deletion test 成立：删掉权威 = 两端行为崩，权威为真。
+     从此 deletion test 成立：删掉权威 = 两端行为崩，权威为真。
 2. **协议 v6 内容（全 additive）**：
    - `errorCodes` 补全为真实全集（HTTP 层 8 码 + 发送层 payload/对账码，
      与 host 实际返回逐一对齐）；

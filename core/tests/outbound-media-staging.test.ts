@@ -9,7 +9,14 @@
  * 5. 原名中的危险字符被净化。
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+  mkdir,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,10 +26,7 @@ import {
 
 let root: string;
 
-async function makeSource(
-  name: string,
-  bytes: Buffer,
-): Promise<string> {
+async function makeSource(name: string, bytes: Buffer): Promise<string> {
   const dir = join(root, "source");
   await mkdir(dir, { recursive: true });
   const path = join(dir, name);
@@ -127,7 +131,10 @@ describe("stageOutboundMedia", () => {
     };
     await stageOutboundMedia(root, input);
     const second = await makeSource("uuid7", Buffer.from("new-content"));
-    const result = await stageOutboundMedia(root, { ...input, sourcePath: second });
+    const result = await stageOutboundMedia(root, {
+      ...input,
+      sourcePath: second,
+    });
     expect((await readFile(result.stagedPath)).toString()).toBe("new-content");
   });
 
@@ -167,7 +174,9 @@ describe("stageOutboundMedia", () => {
     });
     expect(result.stagedFileName).not.toContain("..\\");
     expect(result.stagedFileName).not.toContain(":");
-    expect(result.stagedPath.startsWith(join(root, "media-outbound"))).toBe(true);
+    expect(result.stagedPath.startsWith(join(root, "media-outbound"))).toBe(
+      true,
+    );
     await stat(result.stagedPath); // 文件确实存在
   });
 

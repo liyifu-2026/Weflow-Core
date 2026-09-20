@@ -158,7 +158,11 @@ describe("可配置群聊策略（extractGroupChatSettings / resolveGroupChatPol
 
   it("冷却参数容错提取", () => {
     const settings = extractGroupChatSettings({
-      groupChat: { mode: "mention_only", cooldownMinutes: 999, maxRepliesPerCooldown: 0 },
+      groupChat: {
+        mode: "mention_only",
+        cooldownMinutes: 999,
+        maxRepliesPerCooldown: 0,
+      },
     });
     const resolved = resolveGroupChatPolicy(settings, "1@chatroom");
     // 999 超上限回落 0（关冷却）；maxReplies < 1 回落 2
@@ -166,7 +170,8 @@ describe("可配置群聊策略（extractGroupChatSettings / resolveGroupChatPol
   });
 });
 
-describe("ADR-0006 出站 payload 构建", () => {  it("有引用 → reply payload", () => {
+describe("ADR-0006 出站 payload 构建", () => {
+  it("有引用 → reply payload", () => {
     const payload = buildOutboundPayload({
       operationId: "op-1",
       conversationId: "room-1",

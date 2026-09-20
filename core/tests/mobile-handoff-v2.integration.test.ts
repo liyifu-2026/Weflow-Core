@@ -986,7 +986,9 @@ integration("Mobile Handoff V2 real business scenarios", () => {
     });
     expect(transcript.statusCode, transcript.body).toBe(200);
     const echoed = transcript
-      .json<{ messages: Array<{ messageId: string; clientRequestId?: string | null }> }>()
+      .json<{
+        messages: Array<{ messageId: string; clientRequestId?: string | null }>;
+      }>()
       .messages.find((item) => item.messageId === firstBody.message.messageId);
     expect(echoed?.clientRequestId).toBe(firstRequestId);
 

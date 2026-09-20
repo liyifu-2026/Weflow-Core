@@ -13,7 +13,10 @@ function env(name) {
   const m = envText.match(new RegExp(`^${name}=(.*)$`, "m"));
   return m ? m[1].trim().replace(/^"|"$/g, "") : undefined;
 }
-const BASE_URL = (env("MODEL_BASE_URL") ?? "https://api.deepseek.com").replace(/\/$/, "");
+const BASE_URL = (env("MODEL_BASE_URL") ?? "https://api.deepseek.com").replace(
+  /\/$/,
+  "",
+);
 const API_KEY = env("MODEL_API_KEY");
 const MODEL = env("MODEL_NAME") ?? "deepseek-chat";
 

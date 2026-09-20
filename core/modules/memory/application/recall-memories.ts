@@ -40,10 +40,7 @@ export async function recallMemories(
         eq(schema.memories.status, "active"),
       ),
     )
-    .orderBy(
-      desc(schema.memories.importance),
-      desc(schema.memories.updatedAt),
-    )
+    .orderBy(desc(schema.memories.importance), desc(schema.memories.updatedAt))
     .limit(Math.min(Math.max(limit, 1), 50));
 
   if (rows.length > 0) {

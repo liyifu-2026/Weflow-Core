@@ -133,11 +133,10 @@ integration("planned tool turn recovery", () => {
           Response.json({ choices: [{ message: { content: response } }] }),
         ),
     });
-    await new AgentTurnExecutor(
-      postgres.db,
-      successClient,
-      "test",
-    ).execute({ turnId, traceId: turnId });
+    await new AgentTurnExecutor(postgres.db, successClient, "test").execute({
+      turnId,
+      traceId: turnId,
+    });
 
     const turns = await postgres.db
       .select({ status: schema.agentTurns.status })

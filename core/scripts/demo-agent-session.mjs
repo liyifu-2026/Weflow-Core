@@ -13,7 +13,10 @@ function env(name) {
   const m = envText.match(new RegExp(`^${name}=(.*)$`, "m"));
   return m ? m[1].trim().replace(/^"|"$/g, "") : undefined;
 }
-const BASE_URL = (env("MODEL_BASE_URL") ?? "https://api.deepseek.com").replace(/\/$/, "");
+const BASE_URL = (env("MODEL_BASE_URL") ?? "https://api.deepseek.com").replace(
+  /\/$/,
+  "",
+);
 const API_KEY = env("MODEL_API_KEY");
 const MODEL = env("MODEL_NAME") ?? "deepseek-chat";
 
@@ -23,15 +26,20 @@ const CONTACT = {
   memberSince: "2023-06",
   tier: "金牌会员",
   totalSpent: "¥8,600",
-  complaintHistory: "历史投诉 2 次（2026-03 发货延迟已安抚；2026-07-20 包装破损，补偿 12 元运费券）",
+  complaintHistory:
+    "历史投诉 2 次（2026-03 发货延迟已安抚；2026-07-20 包装破损，补偿 12 元运费券）",
   notes: "对物流时效敏感，情绪恢复快，认可主动补偿",
 };
 
 const KNOWLEDGE = {
-  "质量问题 退换货 政策": "【质量问题退换】签收后 15 天内凭照片凭证可申请质量退货退款，往返运费由商家承担；超 15 天进入保修流程。",
-  "补偿 权限 优惠券 上限": "【补偿权限】一线客服单笔补偿上限：50 元优惠券；全额退款需售后专员审核（24h 内出结果）；现金赔偿需主管审批。",
-  "运费 承担 运费险": "【运费规则】质量问题退换运费由商家承担（含客户先行垫付的返程运费，凭截图补偿）；非质量问题运费客户自理。",
-  "平台投诉 升级 时限": "【平台投诉红线】客户提及'投诉到平台'：须 24 小时内完成响应并升级主管挂关注件，避免平台介入考核扣分。",
+  "质量问题 退换货 政策":
+    "【质量问题退换】签收后 15 天内凭照片凭证可申请质量退货退款，往返运费由商家承担；超 15 天进入保修流程。",
+  "补偿 权限 优惠券 上限":
+    "【补偿权限】一线客服单笔补偿上限：50 元优惠券；全额退款需售后专员审核（24h 内出结果）；现金赔偿需主管审批。",
+  "运费 承担 运费险":
+    "【运费规则】质量问题退换运费由商家承担（含客户先行垫付的返程运费，凭截图补偿）；非质量问题运费客户自理。",
+  "平台投诉 升级 时限":
+    "【平台投诉红线】客户提及'投诉到平台'：须 24 小时内完成响应并升级主管挂关注件，避免平台介入考核扣分。",
 };
 
 const TOOLS = [
@@ -39,7 +47,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "query_contact_profile",
-      description: "查询客户档案：会员等级、累计消费、历史投诉与补偿记录。调用一次即返回当前客户王先生的完整档案。",
+      description:
+        "查询客户档案：会员等级、累计消费、历史投诉与补偿记录。调用一次即返回当前客户王先生的完整档案。",
       parameters: { type: "object", properties: {}, required: [] },
     },
   },
@@ -47,7 +56,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "retrieve_knowledge",
-      description: "检索客服知识库。query 用关键词，如：质量问题 退换货 政策 / 补偿 权限 上限 / 平台投诉 升级 时限 / 运费 承担",
+      description:
+        "检索客服知识库。query 用关键词，如：质量问题 退换货 政策 / 补偿 权限 上限 / 平台投诉 升级 时限 / 运费 承担",
       parameters: {
         type: "object",
         properties: { query: { type: "string", description: "检索关键词" } },
@@ -59,11 +69,16 @@ const TOOLS = [
 
 function runTool(name, args) {
   if (name === "query_contact_profile") {
-    return JSON.stringify({ ...CONTACT, reminder: "历史补偿仅 12 元运费券，本次为第三次投诉，请酌情提高安抚力度" });
+    return JSON.stringify({
+      ...CONTACT,
+      reminder: "历史补偿仅 12 元运费券，本次为第三次投诉，请酌情提高安抚力度",
+    });
   }
   if (name === "retrieve_knowledge") {
     const q = String(args.query ?? "");
-    const hit = Object.keys(KNOWLEDGE).find((k) => k.split(" ").some((word) => q.includes(word)));
+    const hit = Object.keys(KNOWLEDGE).find((k) =>
+      k.split(" ").some((word) => q.includes(word)),
+    );
     return JSON.stringify({
       found: Boolean(hit),
       content: hit ? KNOWLEDGE[hit] : "未命中，可换关键词重试",
@@ -80,7 +95,7 @@ const SYSTEM = `你是资深客服代理"小微"，正在微信上接待客户�
 - 一线补偿权限上限 50 元优惠券；全额退款需转人工审核；现金赔偿需主管审批
 - 客户提及"投诉到平台"= 高风险，须承诺 24 小时内响应并升级
 - 回复自然、有同理心、给具体行动；不承诺超权限的事
-- 高难度场景先在心里把各方约束和权限边界想清楚，再决定说什么`
+- 高难度场景先在心里把各方约束和权限边界想清楚，再决定说什么`;
 
 const TURNS = [
   "我第三次投诉了！商品拆开是坏的，马上全额退款，再赔我 200，不然我直接投诉到平台！",
@@ -96,7 +111,10 @@ async function callModel(messages, allowTools) {
   try {
     const response = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
-      headers: { authorization: `Bearer ${API_KEY}`, "content-type": "application/json" },
+      headers: {
+        authorization: `Bearer ${API_KEY}`,
+        "content-type": "application/json",
+      },
       body: JSON.stringify({
         model: MODEL,
         messages,
@@ -107,9 +125,16 @@ async function callModel(messages, allowTools) {
       }),
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    if (!response.ok)
+      throw new Error(
+        `HTTP ${response.status}: ${(await response.text()).slice(0, 200)}`,
+      );
     const payload = await response.json();
-    return { latency: Date.now() - started, message: payload.choices[0].message, usage: payload.usage };
+    return {
+      latency: Date.now() - started,
+      message: payload.choices[0].message,
+      usage: payload.usage,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -121,9 +146,7 @@ function clip(text, n) {
 }
 
 // ---------- 会话主循环 ----------
-const history = [
-  { role: "system", content: SYSTEM },
-];
+const history = [{ role: "system", content: SYSTEM }];
 const customerQueue = [...TURNS];
 
 (async () => {
@@ -144,7 +167,9 @@ const customerQueue = [...TURNS];
       const reasoningNote = reasoning
         ? `🧠 思考（${reasoning.length} 字）：${clip(reasoning, 320)}`
         : "🧠 思考：（本步无展开思维链）";
-      console.log(`   ${reasoningNote}  [${latency}ms, ${usage?.completion_tokens ?? "?"}tok]`);
+      console.log(
+        `   ${reasoningNote}  [${latency}ms, ${usage?.completion_tokens ?? "?"}tok]`,
+      );
 
       const toolCalls = message.tool_calls ?? [];
       if (toolCalls.length > 0 && allowTools) {
@@ -154,7 +179,11 @@ const customerQueue = [...TURNS];
           console.log(`🔧 调用 ${call.function.name}(${JSON.stringify(args)})`);
           const result = runTool(call.function.name, args);
           console.log(`   ↳ ${clip(result, 220)}`);
-          history.push({ role: "tool", tool_call_id: call.id, content: result });
+          history.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: result,
+          });
         }
         toolRounds += 1;
         continue;
@@ -165,21 +194,30 @@ const customerQueue = [...TURNS];
       try {
         decision = JSON.parse(message.content);
       } catch {
-        console.log(`💬 原始输出（JSON 解析失败）：${clip(message.content, 300)}`);
+        console.log(
+          `💬 原始输出（JSON 解析失败）：${clip(message.content, 300)}`,
+        );
         history.push({ role: "assistant", content: message.content });
         break;
       }
-      console.log(`💬 决策：next_action=${decision.next_action}  risk=${decision.risk_level ?? "-"}`);
-      if (decision.reply_text) console.log(`   回复客户：${decision.reply_text}`);
+      console.log(
+        `💬 决策：next_action=${decision.next_action}  risk=${decision.risk_level ?? "-"}`,
+      );
+      if (decision.reply_text)
+        console.log(`   回复客户：${decision.reply_text}`);
       if (decision.schedule_message) {
-        console.log(`⏰ 已排定定时消息："${decision.schedule_message}" @ ${decision.scheduled_send_at}`);
+        console.log(
+          `⏰ 已排定定时消息："${decision.schedule_message}" @ ${decision.scheduled_send_at}`,
+        );
       }
       history.push({ role: "assistant", content: message.content });
       break;
     }
   }
   console.log(`\n${"═".repeat(56)}`);
-  console.log("会话结束。以上思维链 / 工具调用 / 定时发送均为演示输出，未经过真实 Agent 链路。");
+  console.log(
+    "会话结束。以上思维链 / 工具调用 / 定时发送均为演示输出，未经过真实 Agent 链路。",
+  );
 })().catch((error) => {
   console.error("ERR", error);
   process.exit(1);

@@ -38,7 +38,12 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 describe("imageToContentPart", () => {
   it("读取原图字节并转成 data URI image_url 段", async () => {
     const storage = new FakeStorage({ "aa/orig": PNG });
-    const part = await imageToContentPart(storage, "aa/orig", null, "image/png");
+    const part = await imageToContentPart(
+      storage,
+      "aa/orig",
+      null,
+      "image/png",
+    );
     expect(part).toMatchObject({
       type: "image_url",
       image_url: { url: `data:image/png;base64,${PNG.toString("base64")}` },
@@ -87,7 +92,12 @@ describe("imageToContentPart", () => {
 
   it("mime 非 image/* 时回落默认 image/png 前缀", async () => {
     const storage = new FakeStorage({ "aa/orig": PNG });
-    const part = await imageToContentPart(storage, "aa/orig", null, "video/mp4");
+    const part = await imageToContentPart(
+      storage,
+      "aa/orig",
+      null,
+      "video/mp4",
+    );
     expect(part?.image_url.url.startsWith("data:image/png;base64,")).toBe(true);
   });
 });

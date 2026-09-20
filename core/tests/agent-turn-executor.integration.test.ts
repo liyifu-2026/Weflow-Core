@@ -332,10 +332,13 @@ integration("AgentTurnExecutor tool failure degradation", () => {
   });
 
   it("已持久化的失败工具执行走失败回执：模型直接作答，不转人工", async () => {
-    const { localConversationId } = await insertConversationFixture(
+    const { localConversationId } =
+      await insertConversationFixture("persisted");
+    const turnId = await insertToolTurn(
       "persisted",
+      localConversationId,
+      "failed",
     );
-    const turnId = await insertToolTurn("persisted", localConversationId, "failed");
     const decision = JSON.stringify({
       next_action: "reply",
       reply_text: "抱歉，该项查询暂时不可用，请稍后再试。",
@@ -380,7 +383,11 @@ integration("AgentTurnExecutor tool failure degradation", () => {
 
   it("检索工具执行时抛错同样走失败回执：不转人工", async () => {
     const { localConversationId } = await insertConversationFixture("fresh");
-    const turnId = await insertToolTurn("fresh", localConversationId, "planned");
+    const turnId = await insertToolTurn(
+      "fresh",
+      localConversationId,
+      "planned",
+    );
     const decision = JSON.stringify({
       next_action: "reply",
       reply_text: "抱歉，我暂时查不到相关资料，请您稍后再问或换个说法。",
@@ -427,10 +434,12 @@ integration("AgentTurnExecutor tool failure degradation", () => {
   // FC 出口闸门：目录外工具名 → 落 invalid_tool_call_retry 事件 +
   // 回喂无效工具回执 + 摘工具面重试一次 → 模型以 JSON 决策收尾。
   it("FC 出口闸门：幻觉工具名回喂重试后以 JSON 决策收尾，不落 checkpoint", async () => {
-    const { localConversationId } = await insertConversationFixture(
+    const { localConversationId } = await insertConversationFixture("fcgate");
+    const turnId = await insertToolTurn(
       "fcgate",
+      localConversationId,
+      "planned",
     );
-    const turnId = await insertToolTurn("fcgate", localConversationId, "planned");
 
     // 第 1 次调用：幻觉工具名 "none"（2026-09-07 私聊 395 实测形态）；
     // 第 2 次调用（摘工具面重试）：正常 JSON 决策收尾。
