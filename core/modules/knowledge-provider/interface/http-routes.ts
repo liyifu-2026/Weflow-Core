@@ -1,6 +1,6 @@
 import { Readable, Transform } from "node:stream";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { responseBodyStream } from "../../../infrastructure/http/response-body.js";
 import type { BusinessDb } from "../../identity/application/db.js";
 import {
   requireAdminIdentity,
@@ -131,9 +131,7 @@ export function registerKnowledgeProviderRoutes(
         });
       }
       if (!upstream.body) return await reply.send();
-      return await reply.send(
-        Readable.fromWeb(upstream.body as NodeReadableStream<Uint8Array>),
-      );
+      return await reply.send(responseBodyStream(upstream.body));
     },
   );
 }

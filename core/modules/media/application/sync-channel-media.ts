@@ -7,10 +7,10 @@
  * 图片与语音进入处理阶段（processing_queued：视觉描述 / 语音转写）；
  * 文件附件没有派生阶段，下载成功即 ready，人工可直接通过媒体端点查看。
  */
-import { Readable } from "node:stream";
 import { and, asc, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
+import { responseBodyStream } from "../../../infrastructure/http/response-body.js";
 import type { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { ChannelMediaSource } from "../../channel/contracts/channel-media-source.js";
@@ -107,7 +107,7 @@ export async function syncChannelMedia(
         ("fileName" in result && result.fileName) ||
         `${asset.mediaId}${extensionForMime(asset.kind, result.mimeType)}`;
       const file = await storage.write(
-        Readable.fromWeb(result.body),
+        responseBodyStream(result.body),
         diskName,
         result.mimeType,
       );

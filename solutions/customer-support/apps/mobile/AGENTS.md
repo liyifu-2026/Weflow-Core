@@ -51,7 +51,11 @@ Persist mobile tokens only in Expo SecureStore, never AsyncStorage, logs, URLs, 
 
 ## Commit & Pull Request Guidelines
 
-No Git history is present. Use concise imperative commits, e.g. `feat: add handoff claim screen`. PRs should describe behavior, link a spec or issue, list tests, include mobile screenshots for UI changes, and state Core dependencies.
+Mobile is part of the single `weflow` repo (git operations go through the in-repo
+junction path `weflow/solutions/customer-support/apps/mobile`, never `C:\dev\mobile`).
+Use concise imperative commits, e.g. `feat: add handoff claim screen`. PRs should
+describe behavior, link a spec or issue, list tests, include mobile screenshots for
+UI changes, and state Core dependencies.
 
 ## Versioning & Release Notes
 

@@ -62,7 +62,7 @@ npm run dev   # 打开壳窗口；前端仍是远程/同机地址
 
 ```powershell
 # 1. 重建 support-web 产物（core-api 托管的是磁盘目录，无需重启 api）
-cd weflow-solutions\solutions\customer-support\apps\support-web
+cd weflow\solutions\customer-support\apps\support-web
 npx vite build
 
 # 2. 桌面壳窗口 Ctrl+R（或关掉重开）

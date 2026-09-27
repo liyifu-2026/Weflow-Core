@@ -29,7 +29,7 @@ weflow/
 │  └─ channel-host-wechat/       # 微信通道参考实现（Python）
 ├─ solutions/                    # 业务代码（原 Weflow-Solutions 仓，2026-09 并入）
 │  ├─ customer-support/          # support-web / mobile / plugins / backend
-│  └─ weknora-connector/         # WeKnora 连接器（settings 页）
+│  └─ （旧 weknora-connector/ 已移除：WeKnora 对接内化为 core/infrastructure/knowledge/*）
 ├─ tooling/
 │  └─ weflowctl/                 # CLI：dev（doctor/up/down）、service（Windows 服务）、config、completion
 ├─ tools/

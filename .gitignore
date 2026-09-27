@@ -48,3 +48,7 @@ Thumbs.db
 
 # Windows 服务包装（weflowctl service fetch-host 下载的 WinSW host + 生成的配置/日志）
 tools/winsw/
+
+# 本机安装包与临时调试产物（不入库）
+apps/desktop/python-3.12.10-amd64.exe
+core/.tmp-*.jpg

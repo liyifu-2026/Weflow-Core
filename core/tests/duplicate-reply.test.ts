@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeReplyText } from "../modules/agent/application/duplicate-reply.js";
+import {
+  normalizeReplyText,
+  replyFingerprint,
+} from "../modules/agent/application/duplicate-reply.js";
 
 describe("normalizeReplyText", () => {
   it("trims surrounding whitespace", () => {
@@ -17,5 +20,35 @@ describe("normalizeReplyText", () => {
     expect(normalizeReplyText(original)).toBe(
       normalizeReplyText(` ${original} `),
     );
+  });
+});
+
+describe("replyFingerprint", () => {
+  it("同几句话换序 → 指纹相同（换序复读判重）", () => {
+    const first = "别急，先离屏幕远点。\n\n我拉技术同事一起看看。";
+    const restated = "我拉技术同事一起看看。\n\n别急，先离屏幕远点。";
+    expect(replyFingerprint(restated)).toBe(replyFingerprint(first));
+  });
+
+  it("逐字复读 → 指纹相同", () => {
+    const first = "好的，我明白了。";
+    expect(replyFingerprint(first)).toBe(replyFingerprint("好的，我明白了。"));
+  });
+
+  it("空白差异被归一化", () => {
+    expect(replyFingerprint("  好的。  \n\n收到。\n")).toBe(
+      replyFingerprint("好的。\n\n收到。"),
+    );
+  });
+
+  it("内容不同 → 指纹不同", () => {
+    expect(replyFingerprint("好的。")).not.toBe(replyFingerprint("收到。"));
+    expect(replyFingerprint("好的。\n\n收到。")).not.toBe(
+      replyFingerprint("好的。"),
+    );
+  });
+
+  it("空段与全空白 → 空指纹", () => {
+    expect(replyFingerprint("  \n\n  ")).toBe("");
   });
 });

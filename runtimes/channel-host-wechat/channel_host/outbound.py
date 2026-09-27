@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from concurrent.futures import (
+    Future,
+    ThreadPoolExecutor,
+    TimeoutError as FuturesTimeoutError,
+)
 from dataclasses import dataclass
+import os
+import threading
 import time
 from typing import Callable, Optional, Protocol
 
@@ -19,6 +26,22 @@ class SendAttempt:
 
 class ContactResolutionError(RuntimeError):
     """The durable channel identity could not be mapped to a GUI target."""
+
+
+# 单条发送操作的墙钟上限（秒）。UI 自动化里的 WinRT/UIA/剪贴板调用存在不可
+# 中断的阻塞点（Python 无法取消已进入 C 调用的线程），单靠 send_msg 内部的重试
+# 预算兜不住：2026-09-20 X230 卡在 click_send 的 OCR 上 38 分钟，整个宿主轮询
+# （含入站摄取）一起静止。超时后按 unknown 记账并继续轮询——已发出但未确认的
+# 消息不重发，避免重复消息。
+SEND_EXECUTION_TIMEOUT_SECONDS = float(
+    os.getenv("CHANNEL_HOST_SEND_TIMEOUT_SECONDS", "180")
+)
+
+# 发送执行器固定单线程：GUI 自动化不可并发。上一次操作仍卡着时，新操作不再
+# 进入 UI（排队只会连带卡住轮询），直接判 unknown 并继续后续轮询。
+_SEND_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="send-op")
+_SEND_LOCK = threading.Lock()
+_SEND_PENDING: Optional[Future] = None
 
 
 # A GUI send may already have succeeded while the WeChat database is still
@@ -502,7 +525,7 @@ def process_send_operations(
                 processed += 1
                 continue
 
-        attempt = _dispatch_send(sender, conversation_ref, payload)
+        attempt = _dispatch_send_bounded(sender, conversation_ref, payload)
         if attempt.state == "confirmed":
             # For text sends, try to find the channel message ID via DB.
             # For non-text sends, the GUI verify=True already confirmed.
@@ -642,6 +665,43 @@ def _gui_result_to_attempt(result: object) -> SendAttempt:
 
 # 协议 v3 已移除出站 voice；此处从协议常量派生（ADR-0010），不再手抄。
 _SUPPORTED_SEND_KINDS = frozenset(SEND_KINDS)
+
+
+def _dispatch_send_bounded(
+    sender: MessageSender,
+    conversation_ref: str,
+    payload: dict,
+    timeout_seconds: Optional[float] = None,
+) -> SendAttempt:
+    """给单条发送加墙钟上限：卡死的 UI 自动化不能冻结整条轮询。
+
+    GUI 自动化里的阻塞点（WinRT OCR、UIA 热激活、剪贴板）无法从 Python 侧
+    取消，超时只能放弃等待、按 unknown 记账（已发出但未确认的消息不重发）。
+    单线程执行器 + 挂起探针保证：上一次仍卡着时，这一次立刻判 unknown，
+    既不进 UI 也不让轮询陪着一起等。
+    """
+    global _SEND_PENDING
+    timeout = (
+        SEND_EXECUTION_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    )
+    with _SEND_LOCK:
+        if _SEND_PENDING is not None and not _SEND_PENDING.done():
+            return SendAttempt("unknown", "send_execution_in_progress")
+        _SEND_PENDING = _SEND_EXECUTOR.submit(
+            _dispatch_send, sender, conversation_ref, payload
+        )
+        pending = _SEND_PENDING
+    try:
+        return pending.result(timeout=timeout)
+    except FuturesTimeoutError:
+        # 超时只意味着“等不下去了”，不代表发送失败：按 unknown 记账并交给
+        # 既有歧义对账（有库证据→confirmed，无证据→unknown），绝不重发。
+        # 卡死的 UI 线程仍在后台，由挂起探针拦住后续操作。
+        print(
+            f"[send] operation exceeded {timeout:g}s and was marked unknown; "
+            "UI automation thread is still running"
+        )
+        return SendAttempt("unknown", "send_execution_timeout")
 
 
 def _dispatch_send(

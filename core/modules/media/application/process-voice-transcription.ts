@@ -18,6 +18,7 @@ import type { AudioTranscriptionsClient } from "../../../infrastructure/model_ru
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
 import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
+import { terminalizeNonInboundMedia } from "./terminalize-non-inbound-media.js";
 
 /** ASR 客户端统一接缝（MiMo 内联音频 / 标准 audio/transcriptions 均可） */
 export type VoiceTranscriptionClient = Pick<
@@ -72,7 +73,10 @@ export async function processVoiceTranscription(
     .from(schema.messages)
     .where(eq(schema.messages.messageId, row.media.messageId))
     .limit(1);
-  if (directionRows[0]?.direction !== "inbound") return;
+  if (directionRows[0]?.direction !== "inbound") {
+    await terminalizeNonInboundMedia(db, mediaId);
+    return;
+  }
 
   const claimed = await db
     .update(schema.mediaAssets)

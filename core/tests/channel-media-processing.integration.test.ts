@@ -131,4 +131,76 @@ integration("Channel Host image media synchronization", () => {
       readFile(join(root, file[0]?.storageKey ?? "")),
     ).resolves.toEqual(Buffer.from(imageBytes));
   });
+
+  // 2026-09-20 事故回归：几百 KB 以上的图片会让裸 Readable.fromWeb 的管道
+  // 早早对上游施加背压（undici 解析器暂停 → 对端 FIN 触发断言杀进程）。
+  // 这里用 1.5 MiB 的真实体量跑通同步路径，并校验字节完全一致。
+  it("persists a multi-megabyte channel image without stalling the response body", async () => {
+    const bigRef = `channel-media:v1:${suffix}-large`;
+    const largeImage = Buffer.alloc(1_500_000, 0x5a);
+    largeImage.set([0xff, 0xd8, 0xff], 0);
+    await ingestChannelEvents(
+      postgres.db,
+      [
+        {
+          eventId: `${eventId}-large`,
+          cursor: "9",
+          conversationRef,
+          channelMessageId: "opaque-message-id-large",
+          senderRef: "wxid-contact",
+          kind: "image",
+          content: "[image]",
+          mediaRef: bigRef,
+          occurredAt: "2026-08-17T00:00:02Z",
+          observedAt: "2026-08-17T00:00:03Z",
+          isSelf: false,
+        },
+      ],
+      "9",
+    );
+    const source: ChannelMediaSource = {
+      resolveImage: () => {
+        // 分块产出：模拟 HTTP 响应体按 64 KiB 到达
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (let offset = 0; offset < largeImage.length; offset += 65_536) {
+              controller.enqueue(
+                new Uint8Array(largeImage.subarray(offset, offset + 65_536)),
+              );
+            }
+            controller.close();
+          },
+        });
+        return Promise.resolve({
+          state: "ready",
+          body,
+          mimeType: "image/jpeg",
+        });
+      },
+      resolveFile: () => {
+        throw new Error("image assets must not use resolveFile");
+      },
+      resolveAudio: () => {
+        throw new Error("image assets must not use resolveAudio");
+      },
+    };
+    const storage = new LocalFileStorage(root);
+
+    await syncChannelMedia(postgres.db, storage, source);
+
+    const assets = await postgres.db
+      .select()
+      .from(schema.mediaAssets)
+      .where(eq(schema.mediaAssets.sourceMediaRef, bigRef));
+    expect(assets).toHaveLength(1);
+    expect(assets[0]?.status).toBe("processing_queued");
+    const file = await postgres.db
+      .select()
+      .from(schema.storedFiles)
+      .where(eq(schema.storedFiles.fileId, assets[0]?.originalFileId ?? ""));
+    expect(file).toHaveLength(1);
+    expect(file[0]?.size).toBe(largeImage.length);
+    const onDisk = await readFile(join(root, file[0]?.storageKey ?? ""));
+    expect(onDisk.equals(largeImage)).toBe(true);
+  });
 });

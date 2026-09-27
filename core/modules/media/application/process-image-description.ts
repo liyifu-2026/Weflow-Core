@@ -13,6 +13,7 @@ import type { MimoVisionClient } from "../../../infrastructure/model_runtime/mim
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
 import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
+import { terminalizeNonInboundMedia } from "./terminalize-non-inbound-media.js";
 
 /** 视觉描述用原图字节上限：超过则回退缩略图（防模型超时与账单暴涨） */
 const MAX_DESCRIPTION_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -54,12 +55,17 @@ export async function processImageDescription(
   // 回声护栏：outbound/unknown 方向的媒体（自消息回声融合失败插入的
   // 独立行）描述完成后绝不建 Turn，与 ingest 的 inbound 闸门对齐——
   // 否则 AI 会把客服自己发的图片/文件当成客户输入自动回复。
+  // 这些媒体必须在这里落终态：留着 processing_queued 会被 dispatcher 每秒
+  // 重投一次（见 terminalizeNonInboundMedia）。
   const directionRows = await db
     .select({ direction: schema.messages.direction })
     .from(schema.messages)
     .where(eq(schema.messages.messageId, row.media.messageId))
     .limit(1);
-  if (directionRows[0]?.direction !== "inbound") return;
+  if (directionRows[0]?.direction !== "inbound") {
+    await terminalizeNonInboundMedia(db, mediaId);
+    return;
+  }
 
   const claimed = await db
     .update(schema.mediaAssets)

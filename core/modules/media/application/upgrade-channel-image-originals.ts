@@ -7,9 +7,9 @@
  * 尚未完成，processImageDescription 会自动优先使用新原图；已完成则保留
  * 既有描述，避免双倍视觉成本。
  */
-import { Readable } from "node:stream";
 import { and, asc, eq, isNotNull, isNull, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { responseBodyStream } from "../../../infrastructure/http/response-body.js";
 import type { LocalFileStorage } from "../../../infrastructure/file_storage/local-file-storage.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { ChannelMediaSource } from "../../channel/contracts/channel-media-source.js";
@@ -73,7 +73,7 @@ export async function upgradeChannelImageOriginals(
         (result.variant ?? "original") === "original"
       ) {
         const file = await storage.write(
-          Readable.fromWeb(result.body),
+          responseBodyStream(result.body),
           `${asset.mediaId}-original${extensionForMime(result.mimeType)}`,
           result.mimeType,
         );

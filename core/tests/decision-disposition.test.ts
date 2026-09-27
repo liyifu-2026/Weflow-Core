@@ -30,6 +30,21 @@ vi.mock(
   }),
 );
 
+vi.mock(
+  "../modules/agent/application/duplicate-reply.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<typeof duplicateReplyModule>()),
+    // 默认直通（无上一条回复的常规形态）；告别语守卫用例按需覆盖返回值
+    dropSegmentsDuplicateOfLastReply: vi.fn(
+      async (
+        _db: unknown,
+        _conversationId: string,
+        segments: string[],
+      ) => segments,
+    ),
+  }),
+);
+
 import {
   commitDecisionDisposition,
   absorbVerdictFor,
@@ -45,6 +60,8 @@ import {
   persistAgentToolCheckpoint,
 } from "../modules/agent/application/agent-turn-outcome-command.js";
 import { findNewerActiveTurnIds } from "../modules/agent/application/turn-utils.js";
+import { dropSegmentsDuplicateOfLastReply } from "../modules/agent/application/duplicate-reply.js";
+import type * as duplicateReplyModule from "../modules/agent/application/duplicate-reply.js";
 import type * as turnUtilsModule from "../modules/agent/application/turn-utils.js";
 import type { AgentDecision } from "../modules/agent/application/agent-decision.js";
 import * as schema from "../infrastructure/postgres/schema.js";
@@ -676,6 +693,56 @@ describe("commitDecisionDisposition — handoff 告别话术", () => {
     expect(commitAgentTurnHandoff).toHaveBeenCalledTimes(1);
     const call = vi.mocked(commitAgentTurnHandoff).mock.calls[0]?.[1];
     expect(call).not.toHaveProperty("farewellSegments");
+  });
+
+  it("告别语整批复读上一条回复：守卫剔除后为空 → 静默转接", async () => {
+    vi.mocked(findNewerActiveTurnIds).mockResolvedValue([]);
+    vi.mocked(commitAgentTurnHandoff).mockClear();
+    vi.mocked(dropSegmentsDuplicateOfLastReply).mockResolvedValueOnce([]);
+
+    await commitDecisionDisposition(
+      baseInput({
+        triggerMessageId: "msg-1",
+        decision: handoffDecision({
+          replySegments: ["别急，先离屏幕远点。", "我拉技术同事一起看看。"],
+          replyText: "别急，先离屏幕远点。\n\n我拉技术同事一起看看。",
+        }),
+      }),
+    );
+
+    // 守卫收到的是 trim 后的告别语候选（顺序保持原样）
+    expect(dropSegmentsDuplicateOfLastReply).toHaveBeenCalledWith(
+      expect.anything(),
+      "conv-test",
+      ["别急，先离屏幕远点。", "我拉技术同事一起看看。"],
+    );
+    expect(commitAgentTurnHandoff).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(commitAgentTurnHandoff).mock.calls[0]?.[1];
+    expect(call).not.toHaveProperty("farewellSegments");
+  });
+
+  it("告别语部分重复：只发送未重复的剩余分段", async () => {
+    vi.mocked(findNewerActiveTurnIds).mockResolvedValue([]);
+    vi.mocked(commitAgentTurnHandoff).mockClear();
+    vi.mocked(dropSegmentsDuplicateOfLastReply).mockResolvedValueOnce([
+      "技术同事稍后联系你。",
+    ]);
+
+    await commitDecisionDisposition(
+      baseInput({
+        triggerMessageId: "msg-1",
+        decision: handoffDecision({
+          replySegments: ["别急，先离屏幕远点。", "技术同事稍后联系你。"],
+          replyText: "别急，先离屏幕远点。\n\n技术同事稍后联系你。",
+        }),
+      }),
+    );
+
+    expect(commitAgentTurnHandoff).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(commitAgentTurnHandoff).mock.calls[0]?.[1];
+    expect(call).toMatchObject({
+      farewellSegments: ["技术同事稍后联系你。"],
+    });
   });
 });
 

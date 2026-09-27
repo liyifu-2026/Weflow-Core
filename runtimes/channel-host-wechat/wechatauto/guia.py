@@ -50,6 +50,7 @@ import re
 import tempfile
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from ctypes import wintypes
 from typing import Dict, List, Optional, Tuple
 
@@ -347,6 +348,15 @@ class WinInput:
 # OCR 封装（WinRT）
 # ---------------------------------------------------------------------------
 
+# OCR 硬上限：单次识别的墙钟上限（秒）。必须大于内部 8s 的协程超时，
+# 用于兜住「WinRT 同步调用阻塞、协程超时无法中断」的情形。
+OCR_HARD_TIMEOUT_SECONDS = 12.0
+
+_OCR_LOCK = threading.Lock()
+_OCR_EXECUTOR: Optional[ThreadPoolExecutor] = None
+_OCR_PENDING: Optional[Future] = None
+
+
 class ScreenOCR:
     """Windows 自带 OCR（WinRT Windows.Media.Ocr）封装。
 
@@ -355,13 +365,47 @@ class ScreenOCR:
     """
 
     @staticmethod
+    def _temp_path() -> str:
+        """OCR 临时 PNG 路径。
+
+        WinRT ``StorageFile`` 不接受 8.3 短路径，而服务/SYSTEM 计划任务上下文里
+        ``TEMP`` 常是短名（``C:\\Users\\REMOTE~1\\AppData\\Local\\Temp``），
+        直接落盘会以 ``[Errno 22] Invalid argument`` 失败——OCR 从此永远返回空，
+        发送路径失去输入框/发送按钮判据只能反复重试（2026-09-20 宿主卡死）。
+        这里用 ``GetLongPathNameW`` 还原长路径，并按线程区分文件名避免并发互踩。
+        """
+        base = os.environ.get("TEMP") or os.environ.get("TMP") or tempfile.gettempdir()
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            if ctypes.windll.kernel32.GetLongPathNameW(base, buf, 1024):
+                resolved = buf.value or base
+            else:
+                resolved = base
+        except Exception:
+            resolved = base
+        os.makedirs(resolved, exist_ok=True)
+        return os.path.join(
+            resolved, f"wechatauto_ocr_{os.getpid()}_{threading.get_ident()}.png"
+        )
+
+    @staticmethod
     def recognize(image: Image.Image) -> List[Tuple[str, int, int, int, int]]:
+        """OCR 识别（硬超时）。
+
+        ``asyncio.wait_for`` 只能取消协程，无法中断已经阻塞在 WinRT/COM 的
+        同步调用；一旦 ``recognize_async`` 卡住，``asyncio.run`` 会永久等待
+        ——2026-09-20 宿主就是卡在这里 38 分钟无日志（发送路径 OCR 输入框/
+        发送按钮后整机静止）。因此整段 OCR 放到单工作线程里跑，调用方用
+        ``future.result(timeout)`` 拿真正的墙钟上限；上一个任务还没结束
+        （引擎疑似卡死）时直接返回空结果，避免每次重试都再叠一个僵尸线程。
+        """
+        global _OCR_EXECUTOR, _OCR_PENDING
         from winsdk.windows.media.ocr import OcrEngine
         from winsdk.windows.graphics.imaging import BitmapDecoder
         from winsdk.windows.storage import StorageFile
 
         async def _run() -> List[Tuple[str, int, int, int, int]]:
-            tmp = os.path.join(tempfile.gettempdir(), 'wechatauto_ocr_tmp.png')
+            tmp = ScreenOCR._temp_path()
             image.save(tmp)
             f = await StorageFile.get_file_from_path_async(tmp)
             s = await f.open_async(0)
@@ -380,13 +424,32 @@ class ScreenOCR:
                 out.append((text, int(r.x), int(r.y), int(r.width), int(r.height)))
             return out
 
+        with _OCR_LOCK:
+            if _OCR_EXECUTOR is None:
+                _OCR_EXECUTOR = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix='wechatauto-ocr'
+                )
+            executor = _OCR_EXECUTOR
+            if _OCR_PENDING is not None and not _OCR_PENDING.done():
+                wxlog.debug('OCR 引擎疑似卡死（上一次识别未返回），本轮跳过')
+                return []
+            _OCR_PENDING = executor.submit(ScreenOCR._recognize_blocking, _run)
+            pending = _OCR_PENDING
         try:
-            return asyncio.run(asyncio.wait_for(_run(), timeout=8))
-        except asyncio.TimeoutError:
-            wxlog.debug('OCR 识别超时（8s）')
+            return pending.result(timeout=OCR_HARD_TIMEOUT_SECONDS)
+        except FuturesTimeoutError:
+            wxlog.debug(f'OCR 识别超时（{OCR_HARD_TIMEOUT_SECONDS:g}s，硬上限）')
             return []
         except Exception as e:
             wxlog.debug(f'OCR 识别失败：{e}')
+            return []
+
+    @staticmethod
+    def _recognize_blocking(run) -> List[Tuple[str, int, int, int, int]]:
+        try:
+            return asyncio.run(asyncio.wait_for(run(), timeout=8))
+        except asyncio.TimeoutError:
+            wxlog.debug('OCR 识别超时（8s）')
             return []
 
 

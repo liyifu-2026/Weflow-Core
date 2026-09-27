@@ -53,7 +53,10 @@ import {
   persistAgentToolCheckpoint,
 } from "./agent-turn-outcome-command.js";
 import { DEFAULT_BEHAVIOR_SETTINGS } from "./behavior-settings.js";
-import { isDuplicateOfLastReply } from "./duplicate-reply.js";
+import {
+  dropSegmentsDuplicateOfLastReply,
+  isDuplicateOfLastReply,
+} from "./duplicate-reply.js";
 import {
   isEmptyFactCard,
   sanitizeFactCard,
@@ -239,12 +242,22 @@ export async function commitDecisionDisposition(
     const withBriefing = input.path === "fresh";
     // 告别语只在模型显式选择 handoff 时携带：requiresHuman/high-risk 触发
     // 闸门时的 reply/ask 文本不是告别语，可能是被拦下的内容，不得代发。
-    const farewellSegments =
+    let farewellSegments =
       decision.nextAction === "handoff"
         ? decision.replySegments
             .map((segment) => segment.trim())
             .filter((segment) => segment.length > 0)
         : [];
+    // 告别语复读守卫：模型转接时常把刚说过的话当告别语再复述一遍（含换序），
+    // 客户侧就是同一句话连收两遍（2026-09-23 X230 实测）。与上一条已送达
+    // 批次逐段比对剔除重复段；全部重复时静默转接（不携带告别语）。
+    if (farewellSegments.length > 0) {
+      farewellSegments = await dropSegmentsDuplicateOfLastReply(
+        db,
+        conversationId,
+        farewellSegments,
+      );
+    }
     await commitAgentTurnHandoff(db, {
       conversationId,
       turnId,
