@@ -14,7 +14,10 @@
 import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
-import { createAgentReply } from "../../conversations/application/message-service.js";
+import {
+  createAgentReply,
+  latestAgentEmployeeActorId,
+} from "../../conversations/application/message-service.js";
 import { isAgentPaused } from "../../handoff/application/handoff-service.js";
 
 type Database = NodePgDatabase<typeof schema>;
@@ -201,6 +204,7 @@ export type ProcessDueScheduledSendsDeps = {
       conversationId: string;
       scheduledSendId: string;
       content: string;
+      actorId?: string | undefined;
     },
   ) => Promise<{ messageId: string | null }>;
   /** 策略闸门（默认 isAgentPaused + contactProfiles.agentEnabled） */
@@ -267,6 +271,7 @@ export async function processDueScheduledSends(
         traceId: `scheduled-send:${input.scheduledSendId}`,
         segments: [input.content],
         variant: "direct" as const,
+        ...(input.actorId ? { actorId: input.actorId } : {}),
       });
       return {
         messageId: result.messages.at(-1)?.messageId ?? null,
@@ -325,16 +330,64 @@ export async function processDueScheduledSends(
         actioned += 1;
         continue;
       }
-      const result = await fire(db, {
-        conversationId: row.conversationId,
-        scheduledSendId: row.scheduledSendId,
-        content: row.content,
-      });
+      // CAS 抢占（pending → fired）：与「新入站作废/Handoff 冻结」（两者
+      // 都只改 pending 行）互斥。先抢到 fired 才发消息，杜绝「作废与发送
+      // 竞态导致已作废内容直发」；抢占后发送失败则回滚 pending 由下个
+      // tick 重试。
+      const claimed = await db
+        .update(schema.scheduledSends)
+        .set({ status: "fired", updatedAt: new Date() })
+        .where(
+          and(
+            eq(schema.scheduledSends.scheduledSendId, row.scheduledSendId),
+            eq(schema.scheduledSends.status, "pending"),
+          ),
+        )
+        .returning({ scheduledSendId: schema.scheduledSends.scheduledSendId });
+      if (!claimed.length) continue; // 已被作废/冻结/其他实例处理
+      let sendError: unknown = null;
+      let messageId: string | null = null;
+      try {
+        const actorId = await latestAgentEmployeeActorId(
+          db,
+          row.conversationId,
+        );
+        const result = await fire(db, {
+          conversationId: row.conversationId,
+          scheduledSendId: row.scheduledSendId,
+          content: row.content,
+          actorId,
+        });
+        messageId = result.messageId;
+      } catch (error) {
+        sendError = error;
+      }
+      if (sendError !== null) {
+        await db
+          .update(schema.scheduledSends)
+          .set({
+            status: "pending",
+            firedMessageId: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(
+                schema.scheduledSends.scheduledSendId,
+                row.scheduledSendId,
+              ),
+              eq(schema.scheduledSends.status, "fired"),
+            ),
+          );
+        if (sendError instanceof Error) throw sendError;
+        throw new Error(
+          typeof sendError === "string" ? sendError : JSON.stringify(sendError),
+        );
+      }
       await db
         .update(schema.scheduledSends)
         .set({
-          status: "fired",
-          firedMessageId: result.messageId,
+          firedMessageId: messageId,
           updatedAt: new Date(),
         })
         .where(eq(schema.scheduledSends.scheduledSendId, row.scheduledSendId));

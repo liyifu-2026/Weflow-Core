@@ -194,8 +194,8 @@ export async function listMobileHandoffInbox(
       h.reason AS "reason",
       cycle.briefing AS "briefing",
       cycle.transfer_context AS "transferContext",
-      owner.username AS "ownerName",
-      target_user.username AS "targetUserName",
+      COALESCE(NULLIF(BTRIM(COALESCE(owner.display_name, '')), ''), owner.username) AS "ownerName",
+      COALESCE(NULLIF(BTRIM(COALESCE(target_user.display_name, '')), ''), target_user.username) AS "targetUserName",
       assigned_queue.display_name AS "assignedQueueName",
       target_queue.display_name AS "targetQueueName"
     FROM handoff.states h
@@ -1468,14 +1468,20 @@ async function presentState(
 ): Promise<MobileHandoffState> {
   const [owner] = state.assignedUserId
     ? await db
-        .select({ username: schema.users.username })
+        .select({
+          username: schema.users.username,
+          displayName: schema.users.displayName,
+        })
         .from(schema.users)
         .where(eq(schema.users.userId, state.assignedUserId))
         .limit(1)
     : [];
   const [targetUser] = state.targetUserId
     ? await db
-        .select({ username: schema.users.username })
+        .select({
+          username: schema.users.username,
+          displayName: schema.users.displayName,
+        })
         .from(schema.users)
         .where(eq(schema.users.userId, state.targetUserId))
         .limit(1)
@@ -1490,8 +1496,10 @@ async function presentState(
     : [];
   return {
     ...snapshotState(state),
-    ownerDisplayName: owner?.username ?? null,
-    targetDisplayName: targetUser?.username ?? queue?.displayName ?? null,
+    ownerDisplayName: owner ? (owner.displayName?.trim() || owner.username) : null,
+    targetDisplayName: targetUser
+      ? (targetUser.displayName?.trim() || targetUser.username)
+      : (queue?.displayName ?? null),
     canClaim: await canClaim(db, state, actorUserId),
     canRejectTransfer:
       state.status === "transfer_pending" && state.targetUserId === actorUserId,

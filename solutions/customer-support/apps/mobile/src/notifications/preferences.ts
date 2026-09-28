@@ -106,3 +106,18 @@ export async function saveNotifyKinds(
   }
   await sensitiveStorage.setItemAsync(key, value);
 }
+
+/**
+ * 清除该账号在本机的全部通知偏好（预览策略确认记录 + 提醒类型订阅）。
+ * 供「退出并清除本机数据」调用，避免键名规则外泄到 session 模块重复书写。
+ */
+export async function clearNotificationPreferences(
+  accountId: string,
+): Promise<void> {
+  const digest = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    accountId,
+  );
+  await sensitiveStorage.deleteItemAsync(`${KEY_PREFIX}${digest}`);
+  await sensitiveStorage.deleteItemAsync(`${KINDS_KEY_PREFIX}${digest}`);
+}

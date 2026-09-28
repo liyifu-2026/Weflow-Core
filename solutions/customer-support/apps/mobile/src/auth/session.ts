@@ -5,7 +5,9 @@
  */
 import { Image } from "expo-image";
 import { clearAccountDrafts } from "@/conversations/draft-store";
+import { clearBriefReadState } from "@/conversations/brief-read-state";
 import { clearAccountTranscriptCache } from "@/conversations/transcript-cache";
+import { clearNotificationPreferences } from "@/notifications/preferences";
 import { resetSyncStore } from "@/conversations/sync-store";
 import { sensitiveStorage } from "@/storage/sensitive-storage";
 
@@ -69,6 +71,11 @@ export async function clearSession(options: { clearLocalData?: boolean } = {}): 
       if (options.clearLocalData && session.user?.userId) {
         await clearAccountDrafts(session.user.userId);
         await clearAccountTranscriptCache(session.user.userId);
+        // 本机通知偏好（预览策略 + 提醒类型订阅，按账号哈希隔离）与 Brief
+        // 已读记录同属「本机数据」：只在显式清除本机数据时删除；
+        // invalidateSession()（token 失效保留数据）不触发这些清理。
+        await clearNotificationPreferences(session.user.userId);
+        await clearBriefReadState();
       }
     } catch {
       // The session is already invalid; continue clearing the token.

@@ -29,7 +29,6 @@ const emit = defineEmits<{
   "pick-file": [event: Event];
   "open-assets": [];
   "clear-reply": [];
-  "focus-input": [];
 }>();
 
 const text = defineModel<string>("text", { default: "" });
@@ -186,7 +185,7 @@ defineExpose({ textareaRef, imageInputRef, fileInputRef });
       class="min-h-11 resize-none border-0 bg-transparent px-0 py-1 shadow-none focus-visible:ring-0"
       :placeholder="placeholder"
       :disabled="disabled"
-      @focus="emojiPickerOpen = false; $emit('focus-input')"
+      @focus="emojiPickerOpen = false"
       @input="onReplyInput"
       @keydown.meta.enter.prevent="$emit('send')"
       @keydown.ctrl.enter.prevent="$emit('send')"

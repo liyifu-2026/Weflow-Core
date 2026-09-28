@@ -17,7 +17,7 @@ const UNFINISHED_TAIL_RE =
 const UNFINISHED_PUNCT_RE = /[，、；：,;:]$/;
 
 /** 明确以终止标点/省略号结尾的消息视为说完。 */
-const FINISHED_TAIL_RE = /[。！？!?…～~]+$/;
+const FINISHED_TAIL_RE = /[。！？!?…～~.]+$/;
 
 /** 判断一条消息文本是否"话没说完"（用于延长合并窗口）。 */
 export function looksLikeUnfinished(text: unknown): boolean {
@@ -130,6 +130,7 @@ export type ClaimedAdmission = {
   messageCount: number;
   revision: number;
   status: string;
+  attempt: number;
 };
 
 /**
@@ -163,6 +164,7 @@ export async function claimDueTurnAdmission(
     messageCount: row.messageCount,
     revision: row.revision,
     status: row.status,
+    attempt: row.attempt,
   };
 }
 

@@ -32,18 +32,22 @@ function makeDb(due: ReturnType<typeof dueRow>[]) {
   const setCalls: Array<{ patch: Record<string, unknown> }> = [];
   const db = {
     select: () => ({
-      from: () => ({
-        where: () => ({
+      from: () => {
+        const w = {
           limit: () => Promise.resolve(due),
-        }),
-      }),
+          orderBy: () => ({ limit: () => Promise.resolve(due) }),
+          returning: () => Promise.resolve(due),
+        };
+        return { where: () => w };
+      },
     }),
     update: () => ({
       set: (patch: Record<string, unknown>) => {
         setCalls.push({ patch });
         const chain: any = {};
         chain.where = () => chain;
-        chain.returning = () => Promise.resolve([]);
+        // CAS 认领（pending→fired）返回 pending 行；其余调用不使用 returning
+        chain.returning = () => Promise.resolve(due);
         chain.then = (resolve: (v: unknown) => void) => resolve(undefined);
         return chain;
       },
@@ -86,9 +90,10 @@ describe("processDueScheduledSends", () => {
         content: row.content,
       }),
     );
-    expect(setCalls).toHaveLength(1);
-    expect(setCalls[0]!.patch).toMatchObject({
-      status: "fired",
+    // CAS 两段写：抢占 fired + 回填 messageId
+    expect(setCalls).toHaveLength(2);
+    expect(setCalls[0]!.patch).toMatchObject({ status: "fired" });
+    expect(setCalls[1]!.patch).toMatchObject({
       firedMessageId: "agent-message:scheduled:turn-1:fire:1",
     });
   });

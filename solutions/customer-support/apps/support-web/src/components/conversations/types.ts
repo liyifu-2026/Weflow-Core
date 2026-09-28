@@ -44,6 +44,8 @@ export type Message = {
   sendState?: string;
   occurredAt: string;
   actorId?: string;
+  /** 操作者展示名（后端 transcript 提供）：人工回复=操作者名，AI 回复=AI 员工名；缺失时前端回退默认文案 */
+  actorName?: string | null;
   /** AI 员工头像（平台 DiceBear 代理 URL）；人工/客户消息为 null */
   actorAvatarUrl?: string | null;
   /** 群聊消息的发送者昵称（Core 由联系人资料解析；私聊恒为 null） */
@@ -127,11 +129,10 @@ export function rowTimeLabel(value?: string): string {
 }
 
 export function actorLabel(message: Message) {
-  return message.actorType === "agent"
-    ? "Agent"
-    : message.direction === "outbound"
-      ? "人工客服"
-      : "客户";
+  if (message.actorType === "agent") return message.actorName || "Agent";
+  if (message.direction === "outbound")
+    return message.actorName || "人工客服";
+  return "客户";
 }
 
 // ---------- 微信客户端式消息渲染 ----------

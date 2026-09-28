@@ -62,13 +62,13 @@ const quoted = computed(() =>
 );
 const segments = computed(() => mentionSegments(bubbleText(props.message)));
 const hasMention = computed(() => segments.value.some((s) => s.mention));
-// 气泡 meta 降噪：客户只显示时间；Agent 显示身份；人工显示本人用户名
+// 气泡 meta 降噪：客户只显示时间；Agent 显示身份（后端提供 actorName 时显示
+// AI 员工名）；人工显示本人用户名，他人人工优先显示操作者名（actorName）
 function bubbleMetaLabel(message: Message): string {
-  if (message.actorType === "agent") return "Agent";
+  if (message.actorType === "agent") return message.actorName || "Agent";
   if (message.direction === "inbound") return "";
-  return message.actorId === auth.user?.userId
-    ? (auth.user?.username ?? "我")
-    : "其他客服";
+  if (message.actorId === auth.user?.userId) return auth.user?.username ?? "我";
+  return message.actorName || "其他客服";
 }
 
 // 出站人工头像按发送者绑定：本人消息复用 auth 缓存的 avatarUrl（省一次
@@ -242,14 +242,22 @@ const staffAvatarFallback = computed(() =>
             >
               重试
             </button>
-            <button
-              v-else-if="message.actorType !== 'agent' && message.direction === 'outbound' && message.sendState === 'unknown'"
-              class="text-primary hover:underline"
-              :disabled="retryBusy"
-              @click="emit('retry', message)"
-            >
-              重新发送
-            </button>
+            <template v-else-if="message.actorType !== 'agent' && message.direction === 'outbound' && message.sendState === 'unknown'">
+              <button
+                class="text-primary hover:underline"
+                :disabled="retryBusy"
+                @click="emit('retry', message)"
+              >
+                重新发送
+              </button>
+              <button
+                class="text-primary hover:underline"
+                :disabled="outcomeBusy"
+                @click="emit('check-outcome', message)"
+              >
+                查询结果
+              </button>
+            </template>
           </div>
         </div>
       </div>

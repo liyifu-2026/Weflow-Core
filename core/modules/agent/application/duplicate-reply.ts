@@ -23,14 +23,17 @@ export { normalizeReplyText, replyFingerprint };
 
 /**
  * 「确定没送达」的终态：被扣留（发送期插话闸门 / kill switch）、被取消、
- * 发送失败。这些行不得充当「上一条已回复」——否则新回合对未送达分段的
- * 原样补发会被守卫判成复读而永久不发（ADR-0012 把补发决定交给模型，
- * 靠的就是这个守卫别误判）。NULL 为 send-state 机制前的历史行，视为已发出。
+ * 发送失败，以及 **unknown**（对账丢失——send-states 词表明确规定 unknown
+ * 终态「同 key 重试无效，须补发」）。这些行不得充当「上一条已回复」——
+ * 否则新回合对未送达分段的原样补发会被守卫判成复读而永久不发
+ * （ADR-0012 把补发决定交给模型，靠的就是这个守卫别误判）。
+ * NULL 为 send-state 机制前的历史行，视为已发出。
  */
 const UNDELIVERED_TERMINAL_SEND_STATES = [
   SEND_STATE.held,
   SEND_STATE.cancelled,
   SEND_STATE.failed,
+  SEND_STATE.unknown,
 ] as const;
 
 /** 参与「上一条已回复」比较的行过滤：已送达或历史行；排除确定未送达的终态。 */

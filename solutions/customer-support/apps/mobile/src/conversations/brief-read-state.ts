@@ -57,3 +57,8 @@ export async function markBriefRead(
   }
   await sensitiveStorage.setItemAsync(BRIEF_READ_KEY, JSON.stringify(next));
 }
+
+/** 清除全部 Brief 已读记录（「退出并清除本机数据」时调用；键为全局单键） */
+export async function clearBriefReadState(): Promise<void> {
+  await sensitiveStorage.deleteItemAsync(BRIEF_READ_KEY);
+}

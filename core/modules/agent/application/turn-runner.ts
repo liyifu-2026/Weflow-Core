@@ -38,6 +38,7 @@ import {
   type TextModelMessage,
 } from "../../model/contracts/text-generation-request.js";
 import { decisionFieldContractText } from "./decision-contract.js";
+import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
 import { executeToolPlan } from "./execute-tool-plan.js";
 import { toNativeToolDefinitions } from "./tool-catalog.js";
 import { AgentTurnTransitionNotApplied } from "./agent-turn-service.js";
@@ -243,10 +244,17 @@ export async function processAgentTurn(
         )) ?? null)
       : null;
 
+    const runtimeSettings = await readRuntimeSettings(db);
+    const knowledgeEnabled = runtimeSettings.knowledgeEnabled;
     // FC 协议：原生工具面从 availableTools 派生（单一事实源，目录外忽略）。
     // 群聊/私聊对 availableTools 的增删自动反映到原生工具面。
+    // 知识开关（runtime_settings.knowledge_enabled）必须同时作用于工具面：
+    // 只在 execute-tool-plan 拦截会造成「提示词宣称可用 → 模型选检索 →
+    // 执行层拒绝」的空转（live 实测会连环浪费模型调用甚至整轮失败）。
+    const knowledgeOffered =
+      Boolean(dependencies.knowledgeSearch) && knowledgeEnabled;
     const availableTools = [
-      ...(dependencies.knowledgeSearch ? ["retrieve_knowledge"] : []),
+      ...(knowledgeOffered ? ["retrieve_knowledge"] : []),
       "query_contact_profile",
       "fetch_url",
       // 群历史筛选仅群聊下发（私聊 20 条窗口 + 记忆已覆盖）
@@ -262,7 +270,7 @@ export async function processAgentTurn(
           availableTools,
           chatType,
         }).system
-      : buildSystemPrompt(Boolean(dependencies.knowledgeSearch), chatType, {
+      : buildSystemPrompt(knowledgeOffered, chatType, {
           scheduleSendEnabled: contactProfileRow?.scheduledSendEnabled === true,
         });
 
@@ -594,10 +602,13 @@ async function runPlannedToolTurnBody(
 
   // 恢复路径的 availableTools 与预算对齐：预算未耗尽且检索能力在位时
   // 如实上报（策略插件据此生成「知识库可用」提示），耗尽则禁用工具。
+  const recoveryRuntime = await readRuntimeSettings(db);
   const recoveryAvailableTools = budgetExhausted
     ? []
     : [
-        ...(dependencies.knowledgeSearch ? ["retrieve_knowledge"] : []),
+        ...(dependencies.knowledgeSearch && recoveryRuntime.knowledgeEnabled
+          ? ["retrieve_knowledge"]
+          : []),
         "query_contact_profile",
         "fetch_url",
         ...(chatType === "group" ? ["search_chat_history"] : []),
@@ -613,7 +624,7 @@ async function runPlannedToolTurnBody(
         chatType,
       }).system
     : buildSystemPrompt(
-        !budgetExhausted && Boolean(dependencies.knowledgeSearch),
+        !budgetExhausted && recoveryRuntime.knowledgeEnabled && Boolean(dependencies.knowledgeSearch),
         chatType,
       );
 

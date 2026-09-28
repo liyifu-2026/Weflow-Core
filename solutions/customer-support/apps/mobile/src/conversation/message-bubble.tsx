@@ -66,6 +66,9 @@ export function TranscriptMessage({
   const right = kind !== "customer";
   const label =
     kind === "agent" ? "Agent" : kind === "manual" ? "人工客服" : "客户";
+  // 群聊入站消息的发送者昵称（Core 仅群聊下发，私聊恒为 null）：有值才在气泡上方显示
+  const senderLabel =
+    kind === "customer" ? (message.senderName ?? "").trim() : "";
   const isImageMessage = message.contentType === "image";
   // 文件消息：contentType=file（回声行）或 mediaKind=file（融合后的 manual 行）
   const isFileMessage =
@@ -130,122 +133,127 @@ export function TranscriptMessage({
             sessionToken={session?.sessionToken}
           />
         ) : null}
-        <Pressable
-          accessibilityLabel={isImageMessage ? "查看图片" : undefined}
-          onPress={() => setShowTime((visible) => !visible)}
-          onLongPress={onLongPress}
-          delayLongPress={450}
-          style={[
-            styles.bubble,
-            kind === "customer"
-              ? styles.customer
-              : kind === "manual"
-                ? styles.me
-                : styles.agent,
-            // 图片/文件/视频/表情裸渲染：去掉聊天气泡底（微信式）
-            ((isImageMessage && message.mediaId && session) ||
-              (isFileMessage && message.mediaId && session) ||
-              (isVideoMessage && message.mediaId && session) ||
-              (stickerText !== null && Boolean(message.mediaId))
-              ? styles.bubbleBare
-              : null),
-          ]}
-        >
-          {quotedMsg ? (
-            <View style={styles.quoteCard}>
-              <Text style={styles.quoteAuthor}>{quotedLabel}</Text>
-              <Text style={styles.quoteText} numberOfLines={1}>
-                {quotedText}
-              </Text>
-            </View>
+        <View style={styles.bubbleWrap}>
+          {senderLabel ? (
+            <Text style={styles.senderName}>{senderLabel}</Text>
           ) : null}
-          {isImageMessage && message.mediaId && session ? (
-            <MediaImage
-              session={session}
-              mediaId={message.mediaId}
-              offline={Boolean(offline)}
-              onOpen={() => setImageOpen(true)}
-            />
-          ) : isFileMessage && message.mediaId && session ? (
-            <MediaFileBubble
-              session={session}
-              mediaId={message.mediaId}
-              fileName={message.mediaFileName}
-              align={right ? "right" : "left"}
-            />
-          ) : isVideoMessage && message.mediaId && session ? (
-            <MediaFileBubble
-              session={session}
-              mediaId={message.mediaId}
-              // 入站视频可能没有原始文件名：给 .mp4 兜底，保证走视频预览而非分享面板
-              fileName={message.mediaFileName ?? "video.mp4"}
-              align={right ? "right" : "left"}
-            />
-          ) : message.contentType === "voice" && message.mediaId && session ? (
-            <VoiceBubble
-              session={session}
-              mediaId={message.mediaId}
-              offline={Boolean(offline)}
-            />
-          ) : stickerText !== null ? (
-            <Text
-              style={[styles.messageText, kind === "manual" && styles.meText]}
-            >
-              {stickerText}
-            </Text>
-          ) : hasMentions ? (
-            <Text
-              style={[styles.messageText, kind === "manual" && styles.meText]}
-            >
-              {segments.map((seg, i) =>
-                seg.mention ? (
-                  <Text key={i} style={[styles.mentionText, kind === "manual" && styles.mentionTextOnDark]}>
-                    {seg.text}
-                  </Text>
-                ) : (
-                  <Text key={i}>{seg.text}</Text>
-                ),
-              )}
-            </Text>
-          ) : (
-            <Text
-              style={[styles.messageText, kind === "manual" && styles.meText]}
-            >
-              {isImageMessage
-                ? "图片需联网查看"
-                : isVideoMessage
-                  ? message.mediaFileName || "视频"
-                  : isFileMessage
-                    ? message.mediaFileName || "文件"
-                    : message.text || "[非文本消息]"}
-            </Text>
-          )}
-          {kind === "manual" && message.sendState && (
-            <Pressable onPress={onRetry} disabled={!onRetry}>
+            <Pressable
+            accessibilityLabel={isImageMessage ? "查看图片" : undefined}
+            onPress={() => setShowTime((visible) => !visible)}
+            onLongPress={onLongPress}
+            delayLongPress={450}
+            style={[
+              styles.bubble,
+              kind === "customer"
+                ? styles.customer
+                : kind === "manual"
+                  ? styles.me
+                  : styles.agent,
+              // 图片/文件/视频/表情裸渲染：去掉聊天气泡底（微信式）
+              ((isImageMessage && message.mediaId && session) ||
+                (isFileMessage && message.mediaId && session) ||
+                (isVideoMessage && message.mediaId && session) ||
+                (stickerText !== null && Boolean(message.mediaId))
+                ? styles.bubbleBare
+                : null),
+            ]}
+          >
+            {quotedMsg ? (
+              <View style={styles.quoteCard}>
+                <Text style={styles.quoteAuthor}>{quotedLabel}</Text>
+                <Text style={styles.quoteText} numberOfLines={1}>
+                  {quotedText}
+                </Text>
+              </View>
+            ) : null}
+            {isImageMessage && message.mediaId && session ? (
+              <MediaImage
+                session={session}
+                mediaId={message.mediaId}
+                offline={Boolean(offline)}
+                onOpen={() => setImageOpen(true)}
+              />
+            ) : isFileMessage && message.mediaId && session ? (
+              <MediaFileBubble
+                session={session}
+                mediaId={message.mediaId}
+                fileName={message.mediaFileName}
+                align={right ? "right" : "left"}
+              />
+            ) : isVideoMessage && message.mediaId && session ? (
+              <MediaFileBubble
+                session={session}
+                mediaId={message.mediaId}
+                // 入站视频可能没有原始文件名：给 .mp4 兜底，保证走视频预览而非分享面板
+                fileName={message.mediaFileName ?? "video.mp4"}
+                align={right ? "right" : "left"}
+              />
+            ) : message.contentType === "voice" && message.mediaId && session ? (
+              <VoiceBubble
+                session={session}
+                mediaId={message.mediaId}
+                offline={Boolean(offline)}
+              />
+            ) : stickerText !== null ? (
+              <Text
+                style={[styles.messageText, kind === "manual" && styles.meText]}
+              >
+                {stickerText}
+              </Text>
+            ) : hasMentions ? (
+              <Text
+                style={[styles.messageText, kind === "manual" && styles.meText]}
+              >
+                {segments.map((seg, i) =>
+                  seg.mention ? (
+                    <Text key={i} style={[styles.mentionText, kind === "manual" && styles.mentionTextOnDark]}>
+                      {seg.text}
+                    </Text>
+                  ) : (
+                    <Text key={i}>{seg.text}</Text>
+                  ),
+                )}
+              </Text>
+            ) : (
+              <Text
+                style={[styles.messageText, kind === "manual" && styles.meText]}
+              >
+                {isImageMessage
+                  ? "图片需联网查看"
+                  : isVideoMessage
+                    ? message.mediaFileName || "视频"
+                    : isFileMessage
+                      ? message.mediaFileName || "文件"
+                      : message.text || "[非文本消息]"}
+              </Text>
+            )}
+            {kind === "manual" && message.sendState && (
+              <Pressable onPress={onRetry} disabled={!onRetry}>
+                <Text
+                  style={[
+                    styles.pending,
+                    // 媒体裸渲染后无深色底：状态文字改用可读的次级色
+                    (isImageMessage || isFileMessage || isVideoMessage) && styles.pendingOnBare,
+                  ]}
+                >
+                  {message.sendState === "failed"
+                    ? failureCopy(message.sendErrorCode)
+                    : sendStateCopy(message.sendState)}
+                </Text>
+              </Pressable>
+            )}
+            {showTime ? (
               <Text
                 style={[
-                  styles.pending,
-                  // 媒体裸渲染后无深色底：状态文字改用可读的次级色
-                  (isImageMessage || isFileMessage || isVideoMessage) && styles.pendingOnBare,
+                  styles.messageTime,
+                  kind === "manual" && styles.messageTimeOnDark,
                 ]}
               >
-                {message.sendState === "failed"
-                  ? failureCopy(message.sendErrorCode)
-                  : sendStateCopy(message.sendState)}
+                {formatTime(message.occurredAt)}
               </Text>
-            </Pressable>
-          )}
-          {showTime ? (
-            <Text
-              style={[
-                styles.messageTime,
-                kind === "manual" && styles.messageTimeOnDark,
-              ]}
-            >
-              {formatTime(message.occurredAt)}
-            </Text>
-          ) : null}
-        </Pressable>
+            ) : null}
+          </Pressable>
+        </View>
         {kind === "agent" ? (
           <MessageAvatar
             kind="agent"

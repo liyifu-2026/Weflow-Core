@@ -93,7 +93,7 @@ export function builtinPacingRules(): string {
 - 需要动手查证时，在同一 JSON 里先给过程性短讯再发工具动作，例如 {"next_action":"retrieve_knowledge","knowledge_query":"导出失败 排查","reply_segments":["稍等，我看下后台。"]}——系统会先把短讯发给对方，再执行检索。
 - 若上下文标注"本Turn由等待超时唤醒"（对方在你上次回复后一直没说话）：不要重复已说过的内容；仅在问题确实没解决且值得追问时，发一条简短的轻量追问并再次 wait（wait_ms 加倍）；否则选择 end_session 收尾。连续唤醒 2 次后必须 end_session。
 - 对方明确表示结束（如"好的谢谢""明白了"）、寒暄类无需跟进的消息：直接 end_session（可选带一句简短收尾话术）。
-- wait 单独使用表示本轮不说话纯等待（例如对方说"稍等我去试试"）；end_session 提供 closure_summary（内部收尾摘要，不发给对方），可另附 reply_segments 作为发给对方的收尾话术。`;
+- wait 单独使用表示本轮不说话纯等待（例如对方说"稍等我去试试"）；wait 不得携带 reply_segments（带了系统也会丢弃——想说话就用 reply 带 wait_ms）；end_session 提供 closure_summary（内部收尾摘要，不发给对方），可另附 reply_segments 作为发给对方的收尾话术。`;
 }
 
 export function builtinOutputFormatRules(): string {

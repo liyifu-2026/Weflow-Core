@@ -74,6 +74,8 @@ export type AgentTurnHandoffInput = {
    * 消息落库发送。缺省 = 转人工不发送任何客户可见文案。
    */
   farewellSegments?: string[];
+  /** 告别话术归属（AI 员工 definition_id）；缺省 = system-agent。 */
+  aiEmployeeId?: string;
 };
 
 export type AgentTurnHandoffResult =
@@ -225,6 +227,10 @@ export async function commitAgentTurnFailure(
         conversationId: input.conversationId,
         turnId: input.turnId,
         reason: input.handoffReason,
+        // 客户可见安抚话术：失败转人工此前全程静默（客户只看到 AI 沉默、
+        // 没有任何告知）。话术取自内部原因的友好化映射（平台机制文案，
+        // 非 业务话术），随简报一起让交接不冷场。
+        farewellSegments: [humanizeHandoffSummary(input.handoffReason)],
         ...(input.briefing ? { briefing: input.briefing } : {}),
       });
       if (handoff === "created") {
@@ -272,6 +278,16 @@ export async function commitAgentTurnOutcome(
       await suppressPolicy(transaction, input.turnId);
       return { status: "suppressed_policy", reason: "agent_disabled" };
     }
+    // 全局 Agent 开关（Kill Switch）硬闸：只挡准入不够——窗口开启期间
+    // 翻转、媒体补建轮、在途回合走到这里时必须再拦一次，否则「关闭后
+    // 新消息不再触发 AI 回复」的承诺不成立（回复会照常落库发出）。
+    const runtime = await readRuntimeSettings(transaction, undefined, {
+      fresh: true,
+    });
+    if (!runtime.agentEnabled) {
+      await suppressPolicy(transaction, input.turnId);
+      return { status: "suppressed_policy", reason: "agent_disabled" };
+    }
 
     if (
       await isDuplicateOfLastReply(
@@ -284,9 +300,6 @@ export async function commitAgentTurnOutcome(
       return { status: "suppressed_policy", reason: "duplicate_reply" };
     }
 
-    const runtime = await readRuntimeSettings(transaction, undefined, {
-      fresh: true,
-    });
     if (!runtime.autoSendEnabled) {
       await createAgentHandoffInTransaction(transaction, {
         conversationId: input.conversationId,
@@ -695,6 +708,7 @@ async function createAgentHandoffInTransaction(
     ...(input.farewellSegments
       ? { farewellSegments: input.farewellSegments }
       : {}),
+    farewellActorId: input.aiEmployeeId ?? null,
   });
   if (result.status === "ok")
     return result.replayed ? "already_active" : "created";

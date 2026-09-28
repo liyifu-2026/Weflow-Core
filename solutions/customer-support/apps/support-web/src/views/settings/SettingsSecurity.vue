@@ -286,13 +286,15 @@ onMounted(load);
             <Label for="group-probability">
               响应概率：{{ Math.round(config.probability * 100) }}%
             </Label>
+            <!-- 概率口径：后端 group-chat-policy 只接受 0..1（越界回落 0），
+                 滑杆与存储同口径，标签按百分比展示 -->
             <input
               id="group-probability"
               v-model.number="config.probability"
               type="range"
               min="0"
-              max="100"
-              step="5"
+              max="1"
+              step="0.05"
               class="w-full accent-[var(--primary)]"
             />
             <p class="text-xs text-muted-foreground">每条群消息有此概率回复。</p>

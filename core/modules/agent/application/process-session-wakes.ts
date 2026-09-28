@@ -7,14 +7,21 @@
  *   超时提醒不需要模型参与，省掉沉默唤醒的空转轮；
  * - 无 nudge_text：建一个 queued Agent Turn（唤醒续轮，模型面对
  *   上下文自行判断说什么或收尾）。
- * 消费后一律置 done；动作失败不阻断标记，避免重复发送。
+ *
+ * 认领即 CAS（scheduled → firing，见 session-wake.claimDueSessionWakes）：
+ * 与「新入站作废」互斥；双保险是认领后再查一次「唤醒登记之后客户是否
+ * 已开口」，开口则放弃 nudge（提醒绝不追着客户的新消息发）。
+ * 消费后 firing → done；动作失败不阻断标记，避免重复发送。
  */
-import { eq } from "drizzle-orm";
+import { and, desc, eq, gt, like, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { Logger } from "pino";
 import { claimDueSessionWakes, markWakeDone } from "./session-wake.js";
-import { createAgentReply } from "../../conversations/application/message-service.js";
+import {
+  createAgentReply,
+  latestAgentEmployeeActorId,
+} from "../../conversations/application/message-service.js";
 import { isAgentPaused } from "../../handoff/application/handoff-service.js";
 
 export type WakeProcessorDeps = {
@@ -26,7 +33,8 @@ export type WakeProcessorDeps = {
       turnId: string;
       traceId: string;
       segments: string[];
-      variant: "direct";
+      variant: "nudge";
+      actorId?: string | undefined;
     },
   ) => Promise<{ created: boolean }>;
   /** 无 nudge 时建续轮 turn（默认直接 insert agentTurns；测试可注入） */
@@ -52,14 +60,56 @@ export async function processDueSessionWakes(
     deps?.createAgentReply ??
     (async (mdb, input) => {
       const result = await createAgentReply(mdb, {
-        ...input,
-        variant: "direct",
+        conversationId: input.conversationId,
+        turnId: input.turnId,
+        traceId: input.traceId,
+        segments: input.segments,
+        variant: "nudge",
+        ...(input.actorId ? { actorId: input.actorId } : {}),
       });
       return { created: result.created };
     });
   const createTurn =
     deps?.createTurn ??
     (async (input) => {
+      // 连续唤醒封顶（提示词对模型的「连续唤醒 2 次后 end_session」约定，
+      // 代码侧兜底）：自该会话最后一条入站消息以来已建过 >=2 个唤醒轮仍无
+      // 客户动静时，不再建轮空转——静默关闭会话片段（对方开口会开新会话）。
+      const [lastInbound] = await db
+        .select({ occurredAt: schema.messages.occurredAt })
+        .from(schema.messages)
+        .where(
+          and(
+            eq(schema.messages.conversationId, input.conversationId),
+            eq(schema.messages.direction, "inbound"),
+          ),
+        )
+        .orderBy(desc(schema.messages.occurredAt))
+        .limit(1);
+      const since = lastInbound?.occurredAt ?? new Date(0);
+      const wakeRounds = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(schema.agentTurns)
+        .where(
+          and(
+            eq(schema.agentTurns.conversationId, input.conversationId),
+            like(schema.agentTurns.traceId, "session-wake:%"),
+            gt(schema.agentTurns.createdAt, since),
+          ),
+        );
+      const wakeRoundCount = wakeRounds[0]?.count ?? 0;
+      if (wakeRoundCount >= 2) {
+        await db
+          .update(schema.agentSessions)
+          .set({ state: "closed", closedAt: new Date(), updatedAt: new Date() })
+          .where(
+            and(
+              eq(schema.agentSessions.conversationId, input.conversationId),
+              eq(schema.agentSessions.state, "waiting"),
+            ),
+          );
+        return false;
+      }
       await db
         .insert(schema.agentTurns)
         .values({
@@ -107,12 +157,38 @@ export async function processDueSessionWakes(
         continue;
       }
       if (wake.nudgeText) {
+        // 双保险：唤醒登记之后客户已开口（本条入站尚未走到作废——例如
+        // 与认领同刻竞态），这条提醒就是过时的，放弃。
+        const [latestInbound] = await db
+          .select({ occurredAt: schema.messages.occurredAt })
+          .from(schema.messages)
+          .where(
+            and(
+              eq(schema.messages.conversationId, wake.conversationId),
+              eq(schema.messages.direction, "inbound"),
+            ),
+          )
+          .orderBy(desc(schema.messages.occurredAt))
+          .limit(1);
+        if (
+          latestInbound &&
+          latestInbound.occurredAt.getTime() > wake.createdAt.getTime()
+        ) {
+          await markWakeDone(db, wake.wakeId);
+          continue;
+        }
+        // 延续该会话最近一次 AI 回复的员工身份（无历史则 null=通用 Agent）
+        const actorId = await latestAgentEmployeeActorId(
+          db,
+          wake.conversationId,
+        );
         await sendNudge(db, {
           conversationId: wake.conversationId,
           turnId: wake.turnId,
           traceId: `session-wake:${String(wake.wakeId)}`,
           segments: [wake.nudgeText],
-          variant: "direct",
+          variant: "nudge",
+          actorId,
         });
       } else {
         await createTurn({
@@ -138,8 +214,5 @@ export async function markWakeDoneById(
   db: NodePgDatabase<typeof schema>,
   wakeId: number,
 ): Promise<void> {
-  await db
-    .update(schema.sessionWakes)
-    .set({ status: "done" })
-    .where(eq(schema.sessionWakes.wakeId, wakeId));
+  await markWakeDone(db, wakeId);
 }

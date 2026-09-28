@@ -220,7 +220,7 @@ export function createStrategyApi(options: { now?: () => number } = {}) {
       }
       // 2. Workspace default
       const defaultResult = await db.execute(
-        db.sql`SELECT default_definition_id FROM customer_support.ai_employee_workspace_default WHERE id = 1`,
+        db.sql`SELECT d.definition_id AS default_definition_id FROM customer_support.ai_employee_workspace_default w JOIN customer_support.ai_employee_definitions d ON d.definition_id = w.default_definition_id AND d.status = 'active' WHERE w.id = 1`,
       );
       const defaultId = defaultResult.rows?.[0]?.default_definition_id;
       if (typeof defaultId === "string") {

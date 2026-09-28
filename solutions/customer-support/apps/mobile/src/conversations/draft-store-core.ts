@@ -17,9 +17,7 @@ export type LocalDraft = {
   reviewedAtRevision: number | null;
   content: string;
   source: DraftSource;
-  origin?: "manual" | "ai_suggestion";
   edited?: boolean;
-  suggestionId?: string;
   sourceRevision?: number;
   evidenceIds?: string[];
   evidenceId?: string;

@@ -514,6 +514,9 @@ onMounted(load);
       </CardContent>
 
       <CardContent v-else-if="data && data.models.length" class="border-t">
+        <p class="pb-3 text-xs text-muted-foreground">
+          健康状态仅记录本页「测试连接」的手动探测结果，不代表 worker 实际调用成败。
+        </p>
         <div class="divide-y">
           <div
             v-for="model in data.models"

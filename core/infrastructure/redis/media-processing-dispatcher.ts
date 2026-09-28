@@ -216,6 +216,7 @@ export async function createDegradedTurns(
       conversationId: schema.mediaAssets.conversationId,
       agentPaused: schema.handoffStates.agentPaused,
       agentEnabled: schema.contactProfiles.agentEnabled,
+      blocked: schema.contactProfiles.blocked,
     })
     .from(schema.mediaAssets)
     .leftJoin(
@@ -266,7 +267,7 @@ export async function createDegradedTurns(
   const eligible = candidates.filter((candidate) => {
     if (seen.has(candidate.messageId)) return false;
     seen.add(candidate.messageId);
-    return candidate.agentEnabled && !candidate.agentPaused;
+    return candidate.agentEnabled && !candidate.blocked && !candidate.agentPaused;
   });
   if (eligible.length === 0) return 0;
 

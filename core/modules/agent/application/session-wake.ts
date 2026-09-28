@@ -103,25 +103,30 @@ export async function ensureSessionOnWait(
     .onConflictDoNothing();
 }
 
-/** dispatcher 扫描到期唤醒行。 */
+/** dispatcher 认领到期唤醒行（CAS：scheduled → firing）。 */
 export async function claimDueSessionWakes(
   db: NodePgDatabase<typeof schema>,
   now: Date,
   limit = 100,
 ) {
-  return db
-    .select()
-    .from(schema.sessionWakes)
+  // CAS 认领：与「新入站作废」（cancelled 只改 scheduled 行）互斥。
+  // 原先纯 SELECT 认领会在 dispatcher 手持快照期间被入站作废绕过——
+  // nudge 追着客户刚发的消息发出。认领失败的行（已作废/已被其他实例
+  // 处理）自然不出现在结果里。
+  const claimed = await db
+    .update(schema.sessionWakes)
+    .set({ status: "firing" })
     .where(
       and(
         eq(schema.sessionWakes.status, "scheduled"),
         lte(schema.sessionWakes.wakeAt, now),
       ),
     )
-    .limit(limit);
+    .returning();
+  return claimed.slice(0, limit);
 }
 
-/** 消费完成标记。 */
+/** 消费完成标记（仅 firing → done；被作废/已取消的行绝不复活）。 */
 export async function markWakeDone(
   db: NodePgDatabase<typeof schema>,
   wakeId: number,
@@ -129,7 +134,12 @@ export async function markWakeDone(
   await db
     .update(schema.sessionWakes)
     .set({ status: "done" })
-    .where(eq(schema.sessionWakes.wakeId, wakeId));
+    .where(
+      and(
+        eq(schema.sessionWakes.wakeId, wakeId),
+        eq(schema.sessionWakes.status, "firing"),
+      ),
+    );
 }
 
 /**

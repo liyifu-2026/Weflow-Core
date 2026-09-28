@@ -160,7 +160,11 @@ async function cleanup() {
     console.log(`[e2e-gate] --keep: seeded rows left in DB (conversation ${conversationId})`);
     return;
   }
-  // Foreign-key order: handoff/memory rows reference the conversation first.
+  // Foreign-key order: notification/handoff/memory rows reference the
+  // conversation first. outbox 此前被漏掉——推送 outbox 行会挡住会话删除，
+  // 清理整体崩掉（2026-09-28 live 实测）。
+  await client.query(`DELETE FROM notification.outbox WHERE conversation_id = $1`, [conversationId]);
+  await client.query(`DELETE FROM handoff.resolution_summary_jobs WHERE conversation_id = $1`, [conversationId]);
   await client.query(`DELETE FROM handoff.states WHERE conversation_id = $1`, [conversationId]);
   await client.query(`DELETE FROM handoff.events WHERE conversation_id = $1`, [conversationId]);
   await client.query(`DELETE FROM handoff.cycles WHERE conversation_id = $1`, [conversationId]);

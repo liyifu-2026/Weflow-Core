@@ -12,6 +12,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  inArray,
   max,
   not,
   or,
@@ -787,6 +788,9 @@ export async function getSharedTranscript(
   const hasMore = rows.length > limit;
   const page = rows.slice(0, limit).reverse();
   const oldest = page[0];
+  // 消息归属名（人工=客服名片名/用户名；AI=员工名）：前端用其替换
+  // 「Agent / 其他客服」常量，让「谁在回复」在转录里可读。
+  const actorNames = await resolveActorNames(db, page);
   return {
     messages: page.map((row) => {
       // 群聊发送者昵称：入站消息 actorId（通道联系人 ID）解析为可读名；
@@ -803,6 +807,7 @@ export async function getSharedTranscript(
           row.actorType === "agent" && row.actorId
             ? `/api/v1/avatars/dicebear/voxel-bot/${encodeURIComponent(row.actorId)}`
             : null,
+        actorName: row.actorId ? (actorNames.get(row.actorId) ?? null) : null,
         senderName,
       };
     }),
@@ -1240,4 +1245,58 @@ export async function listContactsWithLatestConversation(
     })),
     nextCursor,
   };
+}
+
+
+/**
+ * 批量解析消息归属名（P0 展示修复：此前前端只能渲染「Agent / 其他客服」
+ * 两个常量）。人工消息 actor_id=user_id → users.display_name||username；
+ * AI 消息 actor_id=ai_employee:<uuid> → customer_support.ai_employee_
+ * definitions.name（业务表，经 raw SQL 访问；表不存在时静默回退）。
+ * 其余（客户/系统）无归属名 → null。
+ */
+async function resolveActorNames(
+  db: NodePgDatabase<typeof schema>,
+  page: Array<{ actorType: string; actorId: string | null }>,
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  const userIds = new Set<string>();
+  const employeeIds = new Set<string>();
+  for (const row of page) {
+    if (!row.actorId) continue;
+    if (row.actorType === "user") userIds.add(row.actorId);
+    else if (row.actorType === "agent" && row.actorId.startsWith("ai_employee:"))
+      employeeIds.add(row.actorId);
+  }
+  if (userIds.size > 0) {
+    const userRows = await db
+      .select({
+        userId: schema.users.userId,
+        displayName: schema.users.displayName,
+        username: schema.users.username,
+      })
+      .from(schema.users)
+      .where(inArray(schema.users.userId, [...userIds]));
+    for (const row of userRows) {
+      const name = row.displayName?.trim() || row.username;
+      if (name) names.set(row.userId, name);
+    }
+  }
+  if (employeeIds.size > 0) {
+    try {
+      const idList = sql.join(
+        [...employeeIds].map((id) => sql`${id}`),
+        sql`, `,
+      );
+      const result = await db.execute(
+        sql`select definition_id, name from customer_support.ai_employee_definitions where definition_id in (${idList})`,
+      );
+      for (const row of result.rows as Array<{ definition_id: string; name: string }>) {
+        if (row.name) names.set(row.definition_id, row.name);
+      }
+    } catch {
+      // 表缺失（老库）/权限问题：归属名缺席，前端回退常量文案
+    }
+  }
+  return names;
 }

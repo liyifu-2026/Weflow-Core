@@ -1,9 +1,9 @@
 /**
  * 通知与隐私设置页面
  * 管理两层独立的通知控制：
- * 1. Server2 预览策略：控制通知中是否显示消息正文（跨设备生效）
+ * 1. 服务器预览策略：控制通知中是否显示消息正文（跨设备生效）
  * 2. 系统通知权限：控制是否允许推送通知（仅当前设备）
- * 两者互不影响：关闭系统通知不会修改 Server2 策略，反之亦然。
+ * 两者互不影响：关闭系统通知不会修改服务器策略，反之亦然。
  */
 import { router } from "expo-router";
 import * as Notifications from "expo-notifications";
@@ -104,7 +104,7 @@ export default function NotificationSettingsScreen() {
       setShowPreview(confirmed.showPreview);
       setConfirmedAt(new Date().toISOString());
       if (!confirmed.cachedLocally) {
-        setError("Server2 已保存设置，但本机无法保存确认记录；下次启动前请再次检查。");
+        setError("服务器已保存设置，但本机无法保存确认记录；下次启动前请再次检查。");
       }
     } catch {
       setError("通知隐私设置没有保存，请检查网络后重试。");
@@ -173,7 +173,7 @@ export default function NotificationSettingsScreen() {
       try {
         await registerPushDevice(session);
       } catch {
-        setError("系统已允许通知，但设备暂时无法向 Server2 注册。");
+        setError("系统已允许通知，但设备暂时无法向服务器注册。");
       }
     }
   }
@@ -215,7 +215,7 @@ export default function NotificationSettingsScreen() {
             tone="warning"
             onPress={() => choosePreview(true)}
           />
-          {saving && <View style={styles.savingLine}><ActivityIndicator size="small" color={colors.blue} /><Text style={styles.savingText}>正在同步到 Server2</Text></View>}
+          {saving && <View style={styles.savingLine}><ActivityIndicator size="small" color={colors.blue} /><Text style={styles.savingText}>正在同步到服务器</Text></View>}
           {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
           <Text style={styles.confirmedText}>{confirmedAt ? `最近确认 · ${formatConfirmedAt(confirmedAt)}` : "默认采用隐藏消息正文"}</Text>
           <Text style={styles.sectionLabel}>提醒类型</Text>
@@ -364,12 +364,12 @@ function permissionDescription(permission: PermissionState) {
   if (permission === "granted") return "等待接手和我处理中的会话可通过系统通知提醒。";
   if (permission === "denied") return "需要前往系统设置重新开启。";
   if (permission === "unsupported") return "请在 iOS 或 Android 客户端中管理此权限。";
-  return "允许后设备会向 Server2 注册 Push Token。";
+  return "允许后设备会向服务器注册 Push Token。";
 }
 
 function formatConfirmedAt(value: string) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Server2 已确认";
+  if (Number.isNaN(date.getTime())) return "服务器已确认";
   return date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 

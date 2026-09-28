@@ -461,17 +461,9 @@ function revalidateFromChunkEdit() {
   });
 }
 
-/** 跳转到「平台管理」模式，在外部知识库完整界面中深链当前知识库 */
+/** 跳转到外部知识库完整管理界面：走后端 302 跳转端点（Cookie 同源自动携带） */
 function openPlatformManage() {
-  if (!selectedBase.value) return;
-  void router.push({
-    path: "/knowledge",
-    query: {
-      mode: "platform",
-      kb: selectedBase.value.id,
-      ...originQuery(props.origin),
-    },
-  });
+  window.open("/api/v1/knora/redirect", "_blank", "noopener");
 }
 
 function duplicateSelectedBase() {

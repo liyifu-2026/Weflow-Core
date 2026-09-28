@@ -154,11 +154,9 @@ const note = defineModel<string>("note", { default: "" });
 const tags = defineModel<string>("tags", { default: "" });
 
 function historyActorLabel(message: Message) {
-  return message.actorType === "agent"
-    ? "Agent"
-    : message.direction === "outbound"
-      ? "人工客服"
-      : "客户";
+  if (message.actorType === "agent") return message.actorName || "Agent";
+  if (message.direction === "outbound") return message.actorName || "人工客服";
+  return "客户";
 }
 </script>
 

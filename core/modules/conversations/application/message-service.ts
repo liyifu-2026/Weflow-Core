@@ -5,7 +5,7 @@
  * outbound messages. Callers remain responsible for policy, ownership,
  * Agent Turn, and Memory decisions.
  */
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { CHANNEL_WIRE_TYPES } from "../../channel/contracts/channel-wire.js";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
@@ -24,8 +24,15 @@ type MessageDatabase = NodePgDatabase<typeof schema> | DatabaseTransaction;
  * - tool_result：工具结果回喂后的最终回复
  * - tool_note：工具执行前附带的过程性短讯（"稍等，我看下后台。"）
  * - step：回合内续步回复（reply 不带 wait_ms 继续循环时，第 N 步说的话）
+ * - nudge：wait 超时的预承诺提醒（session wake 直发；与同 turn 的
+ *   direct 回复批 ID 必须不同，否则幂等冲突导致提醒永远发不出）
  */
-export type AgentReplyVariant = "direct" | "tool_result" | "tool_note" | "step";
+export type AgentReplyVariant =
+  | "direct"
+  | "tool_result"
+  | "tool_note"
+  | "step"
+  | "nudge";
 
 /**
  * 解析 agent 回复批次 ID（createAgentReply 构造格式的唯一镜像；格式
@@ -49,6 +56,9 @@ export function parseAgentReplyBatchId(
       turnId: rest.slice(0, -":tool-note".length),
       variant: "tool_note",
     };
+  }
+  if (rest.endsWith(":nudge")) {
+    return { turnId: rest.slice(0, -":nudge".length), variant: "nudge" };
   }
   const stepMarker = ":step:";
   const stepIndex = rest.lastIndexOf(stepMarker);
@@ -107,9 +117,11 @@ export async function createAgentReply(
       ? ":tool-result"
       : input.variant === "tool_note"
         ? ":tool-note"
-        : input.variant === "step"
-          ? `:step:${String(input.stepIndex)}`
-          : "";
+        : input.variant === "nudge"
+          ? ":nudge"
+          : input.variant === "step"
+            ? `:step:${String(input.stepIndex)}`
+            : "";
   const replyBatchId = `agent-reply:${input.turnId}${suffix}`;
   const values = segments.map((text, index) => {
     const sequence = index + 1;
@@ -195,4 +207,28 @@ function validateSegments(segments: string[]): void {
   if (segments.some((segment) => segment.length > 500)) {
     throw new Error("reply_segment_too_long");
   }
+}
+
+/**
+ * 取该会话最近一条 AI 回复所带的 AI 员工标识（供定时发送/唤醒 nudge 等
+ * 无决策上下文的直发路径延续身份——否则这些消息 actor_id 落 null，前端
+ * 只能渲染成无脸的通用 Agent）。没有员工历史时返回 undefined（保持 null）。
+ */
+export async function latestAgentEmployeeActorId(
+  db: MessageDatabase,
+  conversationId: string,
+): Promise<string | undefined> {
+  const rows = await db
+    .select({ actorId: schema.messages.actorId })
+    .from(schema.messages)
+    .where(
+      and(
+        eq(schema.messages.conversationId, conversationId),
+        eq(schema.messages.actorType, "agent"),
+      ),
+    )
+    .orderBy(desc(schema.messages.occurredAt))
+    .limit(20);
+  const hit = rows.find((r) => r.actorId?.startsWith("ai_employee:"));
+  return hit?.actorId ?? undefined;
 }

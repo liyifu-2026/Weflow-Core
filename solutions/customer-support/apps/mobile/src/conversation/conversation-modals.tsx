@@ -353,7 +353,7 @@ export function ContactProfileModal({
             <View style={styles.profileLoading}>
               <ActivityIndicator color={colors.blue} />
               <Text style={styles.profileLoadingText}>
-                正在读取 Server2 资料
+                正在读取服务器资料
               </Text>
             </View>
           ) : !profile ? (

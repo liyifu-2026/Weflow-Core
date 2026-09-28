@@ -152,6 +152,12 @@ export function createAiEmployeesService(ctx) {
     if ((result.rows ?? []).length === 0) {
       return { status: "ai_employee_not_archivable" };
     }
+    // 级联：共享默认指向被归档定义时置空（运行时默认路由只认 active）
+    await db.execute(sql`
+      UPDATE customer_support.ai_employee_workspace_default
+      SET default_definition_id = NULL
+      WHERE id = 1 AND default_definition_id = ${definitionId}
+    `);
     const employees = await listDefinitions();
     const definition = employees.employees.find((d) => d.definitionId === definitionId);
     return { status: "ok", employee: definition };
@@ -300,6 +306,18 @@ export function createAiEmployeesService(ctx) {
   }
 
   async function setWorkspaceDefault(definitionId) {
+    if (definitionId !== null) {
+      // 归档/不存在的定义不能成为共享默认（否则 archive 语义被默认路由绕过）
+      const check = await db.execute(sql`
+        SELECT status FROM customer_support.ai_employee_definitions
+        WHERE definition_id = ${definitionId}
+      `);
+      const status = check.rows?.[0]?.status;
+      if (!status) return { status: "ai_employee_not_found" };
+      if (status !== DEFINITION_STATUS.ACTIVE) {
+        return { status: "ai_employee_default_invalid" };
+      }
+    }
     await db.execute(sql`
       INSERT INTO customer_support.ai_employee_workspace_default (id, default_definition_id)
       VALUES (1, ${definitionId})

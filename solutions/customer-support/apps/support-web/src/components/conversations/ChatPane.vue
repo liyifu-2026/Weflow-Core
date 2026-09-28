@@ -634,7 +634,6 @@ function onComposerTextUpdate(value: string) {
         :text="replyText"
         :tool-hint="toolHint"
         @update:text="onComposerTextUpdate($event as string)"
-        :entering="takeoverTransition"
         :mention-contacts="mentionContacts"
         :placeholder="composerPlaceholder"
         :disabled="composerDisabled"

@@ -59,6 +59,11 @@ type TransitionInput = {
    * 缺省/净化后为空 = 静默转接，不向客户发送任何固定文案。
    */
   farewellSegments?: string[];
+  /**
+   * 仅 created：告别话术的归属（AI 员工 definition_id）。缺省回退
+   * actorUserId（system-agent）——修复告别消息头像「换了个机器人」。
+   */
+  farewellActorId?: string | null;
 };
 
 type HandoffTransaction = Parameters<
@@ -780,7 +785,7 @@ async function transitionInTransaction(
               channelMessageId: null,
               direction: "outbound" as const,
               actorType: "agent" as const,
-              actorId: input.actorUserId,
+              actorId: input.farewellActorId ?? input.actorUserId,
               contentType: "text" as const,
               channelType: CHANNEL_WIRE_TYPES.TEXT,
               text,

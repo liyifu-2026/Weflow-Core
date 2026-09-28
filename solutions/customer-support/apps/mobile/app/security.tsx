@@ -24,7 +24,7 @@ export default function SecurityScreen() {
         </View>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>隐私</Text>
-          <Text style={styles.body}>应用进入后台时会隐藏客户内容。通知默认不显示消息正文，知识检索和文件预览只通过受保护的 Server2 接口进行。</Text>
+          <Text style={styles.body}>应用进入后台时会隐藏客户内容。通知默认不显示消息正文，知识检索和文件预览只通过受保护的服务器接口进行。</Text>
         </View>
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>关于</Text>

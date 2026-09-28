@@ -5,7 +5,7 @@
  * Agent Turn 触发和人工接管通知等逻辑。
  */
 
-import { and, eq, gte, inArray, isNull, lte, ne, sql, asc } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lte, ne, sql, asc, notLike } from "drizzle-orm";
 import { createHash } from "node:crypto";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
@@ -919,6 +919,9 @@ async function groupChatCooldownBlocks(
           eq(schema.messages.conversationId, conversationId),
           eq(schema.messages.actorType, "agent"),
           gt(schema.messages.occurredAt, since),
+          // 转人工告别语（handoff-farewell 前缀）不计入 AI 冷却额度：
+          // 它是程序化转接文案，占额度会让下一条真正的 AI 回复被冷却误拦
+          notLike(schema.messages.replyBatchId, "handoff-farewell:%"),
         ),
       );
     // 防御 DB 值与类型不符：count(*) 无 ::int 转型，pg 运行时返回 string

@@ -15,6 +15,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { isAgentPaused } from "../../handoff/application/handoff-service.js";
+import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
 import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
 import {
   claimDueTurnAdmission,
@@ -55,7 +56,7 @@ export async function processTurnAdmissions(
     });
     if (!claimed) continue; // stale：已被其他实例认领或窗口被新消息重置
     try {
-      await dispatchClaimedAdmission(db, claimed, now);
+      await dispatchClaimedAdmission(db, claimed, logger);
       processed += 1;
     } catch (error) {
       await requeueOrFailed(db, claimed, error, logger, now);
@@ -67,28 +68,37 @@ export async function processTurnAdmissions(
 async function dispatchClaimedAdmission(
   db: NodePgDatabase<typeof schema>,
   claimed: ClaimedAdmission,
-  now: Date,
+  logger: Logger,
 ): Promise<void> {
-  void now; // markDone 用当前时刻即可；now 保留在签名上以备超时唤醒用
   // 复检 1：Handoff 进行中（人工接管）→ 不建 turn
   if (await isAgentPaused(db, claimed.conversationId)) {
-    await markDone(db, claimed.conversationId, "handoff_active");
+    await markDone(db, claimed, "handoff_active");
     return;
   }
-  // 复检 2：联系人自动回复开关（agentEnabled）→ 关闭后不建 turn
+  // 复检 2：联系人自动回复开关（agentEnabled）与拉黑 → 关闭后不建 turn
   const [contact] = await db
-    .select({ agentEnabled: schema.contactProfiles.agentEnabled })
+    .select({
+      agentEnabled: schema.contactProfiles.agentEnabled,
+      blocked: schema.contactProfiles.blocked,
+    })
     .from(schema.contactProfiles)
     .where(eq(schema.contactProfiles.contactId, claimed.contactId))
     .limit(1);
-  if (!contact?.agentEnabled) {
-    await markDone(db, claimed.conversationId, "agent_disabled");
+  if (!contact?.agentEnabled || contact.blocked) {
+    await markDone(db, claimed, "agent_disabled");
+    return;
+  }
+  // 复检 2.5：全局 Agent 开关（Kill Switch）——窗口开启期间被关闭的
+  // 会话不能因「翻转发生在准入之后」而照常建轮（对齐 ingest 准入语义）
+  const runtime = await readRuntimeSettings(db, logger, { fresh: true });
+  if (!runtime.agentEnabled) {
+    await markDone(db, claimed, "agent_disabled");
     return;
   }
   // 复检 3：Execution Profile → 下线后不建 turn（对齐 ingest 准入语义）
   const admission = await resolveExecutionProfileForAdmission(db);
   if (!admission.allowed) {
-    await markDone(db, claimed.conversationId, "profile_unavailable");
+    await markDone(db, claimed, "profile_unavailable");
     return;
   }
   await db
@@ -102,14 +112,17 @@ async function dispatchClaimedAdmission(
       traceId: `turn-admission:${claimed.conversationId}:${String(claimed.revision)}`,
     })
     .onConflictDoNothing();
-  await markDone(db, claimed.conversationId, null);
+  await markDone(db, claimed, null);
 }
 
 async function markDone(
   db: NodePgDatabase<typeof schema>,
-  conversationId: string,
+  claimed: ClaimedAdmission,
   reasonCode: string | null,
 ): Promise<void> {
+  // revision+dispatching 双守卫：认领后新客户消息会 upsert 重置窗口
+  // （scheduled、revision+1）——此时本窗口已被接管，绝不能把它抹成 done
+  // （否则新消息永远不建轮）。
   await db
     .update(schema.turnAdmissionStates)
     .set({
@@ -117,7 +130,13 @@ async function markDone(
       errorCode: reasonCode,
       updatedAt: new Date(),
     })
-    .where(eq(schema.turnAdmissionStates.conversationId, conversationId));
+    .where(
+      and(
+        eq(schema.turnAdmissionStates.conversationId, claimed.conversationId),
+        eq(schema.turnAdmissionStates.revision, claimed.revision),
+        eq(schema.turnAdmissionStates.status, "dispatching"),
+      ),
+    );
 }
 
 async function requeueOrFailed(
@@ -134,14 +153,7 @@ async function requeueOrFailed(
   );
   const failed = claimed.revision >= MAX_ATTEMPTS && claimed.messageCount < 0; // revision 是窗口代数不是重试次数；重试上限看 attempt 列
   void failed;
-  const [current] = await db
-    .select({ attempt: schema.turnAdmissionStates.attempt })
-    .from(schema.turnAdmissionStates)
-    .where(
-      eq(schema.turnAdmissionStates.conversationId, claimed.conversationId),
-    )
-    .limit(1);
-  const nextAttempt = (current?.attempt ?? 0) + 1;
+  const nextAttempt = claimed.attempt + 1;
   await db
     .update(schema.turnAdmissionStates)
     .set({
@@ -151,6 +163,10 @@ async function requeueOrFailed(
       updatedAt: now,
     })
     .where(
-      eq(schema.turnAdmissionStates.conversationId, claimed.conversationId),
+      and(
+        eq(schema.turnAdmissionStates.conversationId, claimed.conversationId),
+        eq(schema.turnAdmissionStates.revision, claimed.revision),
+        eq(schema.turnAdmissionStates.status, "dispatching"),
+      ),
     );
 }

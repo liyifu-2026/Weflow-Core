@@ -17,6 +17,24 @@ vi.mock("../modules/agent/application/agent-turn-outcome-command.js", () => ({
   persistAgentToolCheckpoint: vi.fn(async () => ({ status: "planned" })),
 }));
 
+function makeChainableSelect(result: unknown[] = []) {
+  const chain: Record<string, unknown> = {};
+  const afterOrderBy = { limit: () => Promise.resolve(result) };
+  const thenable = (): unknown => {
+    const p = Promise.resolve(result);
+    return Object.assign(p, {
+      limit: () => Promise.resolve(result),
+      orderBy: () => afterOrderBy,
+      returning: () => Promise.resolve(result),
+    });
+  };
+  chain.where = vi.fn(() => thenable());
+  chain.orderBy = vi.fn(() => afterOrderBy);
+  chain.limit = vi.fn(() => Promise.resolve(result));
+  chain.from = vi.fn(() => chain);
+  return chain;
+}
+
 function makeDb() {
   const wakes = [
     {
@@ -24,7 +42,8 @@ function makeDb() {
       conversationId: "conv:1",
       turnId: "turn:1",
       kind: "wait_timeout",
-      status: "scheduled",
+      status: "firing",
+      createdAt: new Date(Date.now() - 5000),
       wakeAt: new Date(Date.now() - 1000),
       nudgeText: "您先忙，有问题随时叫我",
     },
@@ -33,7 +52,8 @@ function makeDb() {
       conversationId: "conv:2",
       turnId: "turn:2",
       kind: "wait_timeout",
-      status: "scheduled",
+      status: "firing",
+      createdAt: new Date(Date.now() - 5000),
       wakeAt: new Date(Date.now() - 1000),
       nudgeText: null,
     },
@@ -41,12 +61,21 @@ function makeDb() {
   const insertedTurns: unknown[] = [];
   const insertedMessages: { segments?: string[] }[] = [];
   const updated = { wakeIds: [] as number[] };
+  // 通用链桩：select 默认解析 []（入站检查/唤醒计数等辅助查询）；
+  // update().set().where() 支持 .returning() 返回 wakes（CAS 认领）。
+  let lastChain: Record<string, unknown> | undefined;
   const db = {
-    select: vi.fn().mockReturnThis(),
-    from: vi.fn().mockReturnThis(),
-    where: vi.fn().mockImplementation(() => {
+    select: vi.fn(() => {
+      lastChain = makeChainableSelect([]);
+      return lastChain;
+    }),
+    from: vi.fn(() => lastChain),
+    where: vi.fn(() => {
       const p = Promise.resolve(wakes);
-      return Object.assign(p, { limit: () => Promise.resolve(wakes) });
+      return Object.assign(p, {
+        limit: () => Promise.resolve(wakes),
+        returning: () => Promise.resolve(wakes),
+      });
     }),
     limit: vi.fn().mockResolvedValue(wakes),
     insert: vi.fn().mockReturnThis(),
@@ -66,6 +95,7 @@ function makeDb() {
 
 vi.mock("../modules/conversations/application/message-service.js", () => ({
   createAgentReply: vi.fn(async () => ({ created: true })),
+  latestAgentEmployeeActorId: vi.fn(async () => undefined),
 }));
 
 describe("processDueSessionWakes", () => {
@@ -82,6 +112,7 @@ describe("processDueSessionWakes", () => {
       {
         checkGates: async () => ({ blocked: false, reason: "handoff_active" }),
       } as never,
+      console,
     );
 
     expect(processed).toBe(2);
@@ -126,14 +157,22 @@ describe("processDueSessionWakes 策略闸门", () => {
         nudgeText: "您先忙",
       },
     ];
+    const claimed = wakes.map((w) => ({ ...w, status: "firing" }));
+    let lastChain: Record<string, unknown> | undefined;
     const db = {
-      select: vi.fn().mockReturnThis(),
-      from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockImplementation(() => {
-        const p = Promise.resolve(wakes);
-        return Object.assign(p, { limit: () => Promise.resolve(wakes) });
+      select: vi.fn(() => {
+        lastChain = makeChainableSelect([]);
+        return lastChain;
       }),
-      limit: vi.fn().mockResolvedValue(wakes),
+      from: vi.fn(() => lastChain),
+      where: vi.fn(() => {
+        const p = Promise.resolve(claimed);
+        return Object.assign(p, {
+          limit: () => Promise.resolve(claimed),
+          returning: () => Promise.resolve(claimed),
+        });
+      }),
+      limit: vi.fn().mockResolvedValue(claimed),
       update: vi.fn().mockReturnThis(),
       set: vi.fn().mockReturnThis(),
     };

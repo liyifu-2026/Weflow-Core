@@ -90,7 +90,6 @@ export function restoreDraftAfterSendFailure(
     content: string;
     source: LocalDraft["source"];
     evidenceId?: string;
-    suggestionId?: string;
     sourceRevision?: number;
     evidenceIds?: string[];
     edited?: boolean;
@@ -108,8 +107,6 @@ export function restoreDraftAfterSendFailure(
     content: input.content,
     source: input.source,
     evidenceId: input.evidenceId,
-    origin: input.source === "suggested" ? "ai_suggestion" : "manual",
-    suggestionId: input.suggestionId,
     sourceRevision: input.sourceRevision,
     evidenceIds: input.evidenceIds,
     edited: input.edited,

@@ -504,11 +504,20 @@ export const createStyles = (colors: ThemeColors) =>
     messageRow: { flexDirection: "row", alignItems: "flex-end", gap: 7 },
     left: { justifyContent: "flex-start" },
     right: { justifyContent: "flex-end" },
+    // 气泡列：包住可选的群聊发送者昵称行与气泡本体，宽度上限从 .bubble 上移到这层
+    bubbleWrap: { maxWidth: "76%" },
+    // 群聊发送者昵称：气泡上方小字浅色行（主题色自适应深色模式）
+    senderName: {
+      color: colors.muted,
+      fontSize: 11,
+      fontWeight: "600",
+      marginBottom: 2,
+      marginLeft: 2,
+    },
     bubble: {
       borderRadius: 17,
       paddingHorizontal: 13,
       paddingVertical: 10,
-      maxWidth: "76%",
     },
     // 媒体裸渲染（微信式）：图片/文件/表情不带聊天气泡底
     bubbleBare: {

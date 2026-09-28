@@ -75,7 +75,9 @@ const environmentSchema = z.object({
   FAST_MODEL: z.string().min(1).default("THUDM/GLM-4-9B-0414"),
   FAST_API_KEY: z.string().min(1).optional(),
   FAST_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(15_000),
-  WEKNORA_BASE_URL: z.url().default("http://localhost/api/v1"),
+  WEKNORA_BASE_URL: z
+    .preprocess((v) => (typeof v === "string" && v.trim() === "" ? undefined : v), z.url())
+    .default("http://localhost/api/v1"),
   WEKNORA_API_KEY: z.string().min(1).optional(),
   WEKNORA_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(15_000),
   WEKNORA_KNOWLEDGE_BASE_IDS: z.string().trim().optional(),

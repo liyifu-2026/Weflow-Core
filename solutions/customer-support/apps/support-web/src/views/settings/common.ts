@@ -36,16 +36,22 @@ export function writePipelineSettings(
 }
 
 /**
- * 写单个设置分节：保存前重读整行再合并，避免「页面加载快照」覆盖
- * 其他分区刚保存的内容（丢失更新）。仍非服务端事务，但窗口缩到毫秒级。
+ * 写单个设置分节：保存前重读整行，再对分节做浅合并——节内 UI 未暴露的键
+ * （botNames / threadTtlMinutes / roundSummaryLabels 等）保留不动，避免被
+ * 整节替换冲掉；同时也避免「页面加载快照」覆盖其他分区刚保存的内容
+ * （丢失更新）。仍非服务端事务，但窗口缩到毫秒级。
  */
 export async function writePipelineSettingsSection(
   section: string,
   value: Record<string, unknown>,
 ): Promise<void> {
   const latest = await readPipelineSettings();
+  const currentSection =
+    typeof latest[section] === "object" && latest[section] !== null
+      ? (latest[section] as Record<string, unknown>)
+      : {};
   await writePipelineSettings({
     ...latest,
-    [section]: value,
+    [section]: { ...currentSection, ...value },
   });
 }

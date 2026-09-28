@@ -2,7 +2,7 @@
  * 信息名片页面
  * 客服编辑自己的对外形象：头像、显示名、专家标签，并提供修改密码入口。
  * 标签与专家队列同源——转人工时系统按标签把相关任务定向推送给你。
- * 安全说明：资料更新走 Server2 契约；旧 Server2 无 agentProfile 能力时隐藏编辑区。
+ * 安全说明：资料更新走服务器契约；旧服务器无 agentProfile 能力时隐藏编辑区。
  */
 import { router, useFocusEffect } from "expo-router";
 import { ArrowLeft } from "phosphor-react-native/src/icons/ArrowLeft";
@@ -40,7 +40,7 @@ import type { ThemeColors } from "@/ui/theme";
 import { useTheme, useThemedStyles } from "@/ui/theme-context";
 import { uiTokens } from "@/ui/tokens";
 
-/** 标签上限（与 Server2 词表一致） */
+/** 标签上限（与服务器词表一致） */
 const MAX_TAGS = 7;
 
 /** 信息名片页面组件 */

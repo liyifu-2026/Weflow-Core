@@ -10,6 +10,7 @@
 import { ref, watch } from "vue";
 import { RefreshCw, Search, X } from "lucide-vue-next";
 import AvatarImage from "../AvatarImage.vue";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { contactDisplayName } from "../../labels";

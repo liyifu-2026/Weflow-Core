@@ -8,6 +8,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ChevronRight, RotateCw } from "lucide-vue-next";
 import { api } from "../api";
+import { confirmDialog } from "../components/confirm-dialog";
 import { statusTone, type WfStatusTone } from "../components/status-tone";
 import { healthLabel } from "../labels";
 import { Alert, AlertDescription } from "../components/ui/alert";
@@ -75,6 +76,33 @@ async function loadChannelStatus() {
       reason instanceof Error ? reason.message : "通道状态加载失败";
   } finally {
     channelLoading.value = false;
+  }
+}
+
+// 微信历史重扫（admin）：让 Channel Host 从通道侧重新拉取历史消息。
+// 重扫以 historical 事件幂等入库，不触发 AI 回复。
+const rescanBusy = ref(false);
+const rescanNotice = ref("");
+
+async function rescanWechatHistory() {
+  if (rescanBusy.value) return;
+  const ok = await confirmDialog(
+    "重新扫描微信历史消息？已入库的消息不会重复（幂等），也不会触发 AI 回复。",
+    { danger: false },
+  );
+  if (!ok) return;
+  rescanBusy.value = true;
+  channelError.value = "";
+  rescanNotice.value = "";
+  try {
+    await api("/api/v1/admin/channel/sync", { method: "POST" });
+    rescanNotice.value =
+      "已开始重扫，历史消息将以 historical 事件入库（幂等，不触发 AI）";
+  } catch (reason) {
+    channelError.value =
+      reason instanceof Error ? reason.message : "重扫请求失败，请稍后重试";
+  } finally {
+    rescanBusy.value = false;
   }
 }
 const turns = ref<AgentTurn[]>([]);
@@ -379,18 +407,30 @@ onBeforeUnmount(stopAutoRefresh);
               最近完成 {{ new Date(channelStatus.lastCompletedTurnAt).toLocaleTimeString() }}
             </span>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            :disabled="channelLoading"
-            @click="loadChannelStatus"
-          >
-            <RotateCw class="size-4" :class="channelLoading && 'animate-spin'" />
-            刷新
-          </Button>
+          <div class="flex shrink-0 items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="rescanBusy"
+              title="重新拉取微信历史消息（幂等入库，不触发 AI）"
+              @click="rescanWechatHistory"
+            >
+              {{ rescanBusy ? "重扫请求中…" : "重新扫描微信历史" }}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              :disabled="channelLoading"
+              @click="loadChannelStatus"
+            >
+              <RotateCw class="size-4" :class="channelLoading && 'animate-spin'" />
+              刷新
+            </Button>
+          </div>
         </CardContent>
       </Card>
       <p v-if="channelError" class="mt-2 text-xs text-destructive">{{ channelError }}</p>
+      <p v-if="rescanNotice" class="mt-2 text-xs text-muted-foreground">{{ rescanNotice }}</p>
     </section>
 
     <details class="mt-8">

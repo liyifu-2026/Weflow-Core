@@ -223,19 +223,6 @@ export async function commitDecisionDisposition(
 ): Promise<DecisionDispositionResult> {
   const { db, decision, turnId, conversationId } = input;
 
-  // 会话事实卡更新（私聊批）：咨询性数据，失败静默——绝不因卡片落库
-  // 阻断任何决策分支（包括 handoff/终态）。
-  if (decision.factsCard && typeof decision.factsCard === "object") {
-    try {
-      const card = sanitizeFactCard(decision.factsCard);
-      if (!isEmptyFactCard(card)) {
-        await upsertConversationFacts(db, { conversationId, card });
-      }
-    } catch {
-      // 事实卡落库失败不影响回合
-    }
-  }
-
   // 闸门：模型自行要求人工介入（显式 handoff / 高风险 / requiresHuman）。
   const gate = validateDecision(decision);
   if (gate.action === "handoff") {
@@ -261,6 +248,7 @@ export async function commitDecisionDisposition(
     await commitAgentTurnHandoff(db, {
       conversationId,
       turnId,
+      ...(input.aiEmployeeId ? { aiEmployeeId: input.aiEmployeeId } : {}),
       reason: withBriefing
         ? gate.reasonCode
         : `policy_gate_after_tool: ${gate.reasonCode}`,
@@ -372,6 +360,20 @@ async function commitDispositionTail(
     { kind: "fresh"; toolPlan: ToolPlan | null } | { kind: "tool_recovery" },
 ): Promise<DecisionDispositionResult> {
   const { db, decision, turnId, conversationId } = input;
+
+  // 会话事实卡更新（私聊批）：咨询性数据，失败静默。放在吸收检查**之后**
+  // （commitDispositionTail 是唯一入口）：被 discard 的过时决策基于插话前
+  // 上下文，其卡片不得覆盖现状；carry-through 按文档语义照常落卡。
+  if (decision.factsCard && typeof decision.factsCard === "object") {
+    try {
+      const card = sanitizeFactCard(decision.factsCard);
+      if (!isEmptyFactCard(card)) {
+        await upsertConversationFacts(db, { conversationId, card });
+      }
+    } catch {
+      // 事实卡落库失败不影响回合
+    }
+  }
   const fresh = mode.kind === "fresh";
   const outcomeVariant = fresh ? "direct" : "tool_result";
   const commitReplyOutcome = async (segments: string[]): Promise<void> => {

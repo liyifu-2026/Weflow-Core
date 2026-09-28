@@ -12,7 +12,7 @@ import type { LocalFileStorage } from "../../../infrastructure/file_storage/loca
 import type { MimoVisionClient } from "../../../infrastructure/model_runtime/mimo-vision-client.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
-import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
+import { resolveMediaTurnAdmission } from "./media-turn-admission.js";
 import { terminalizeNonInboundMedia } from "./terminalize-non-inbound-media.js";
 
 /** 视觉描述用原图字节上限：超过则回退缩略图（防模型超时与账单暴涨） */
@@ -111,7 +111,10 @@ export async function processImageDescription(
           updatedAt: new Date(),
         })
         .where(eq(schema.mediaAssets.mediaId, mediaId));
-      const admission = await resolveExecutionProfileForAdmission(transaction);
+      const admission = await resolveMediaTurnAdmission(
+        transaction,
+        row.media.conversationId,
+      );
       if (admission.allowed) {
         await transaction
           .insert(schema.agentTurns)
@@ -120,7 +123,7 @@ export async function processImageDescription(
             triggerMessageId: row.media.messageId,
             conversationId: row.media.conversationId,
             status: "queued",
-            executionProfileId: admission.profile.profileId,
+            executionProfileId: admission.executionProfileId,
             traceId: `media:${mediaId}`,
           })
           .onConflictDoNothing();
