@@ -57,6 +57,12 @@ type DispatcherOptions = {
   logger: Logger;
   intervalMs?: number;
   now?: () => Date;
+  /**
+   * running 轮次的 STALE 回收阈值（毫秒）。调用方按决策超时推导
+   * （staleRunningTurnThresholdMs(decisionTimeoutMs)）：90s 旧值小于
+   * 180s 决策超时会回收在飞的长思考决策，导致整轮回滚重烧模型。
+   */
+  staleRunningTurnThresholdMs?: number;
 };
 
 /** 启动 Agent 轮次分发器 */
@@ -71,12 +77,16 @@ export function startAgentTurnDispatcher(
       try {
         // 恢复 worker 崩溃后的 Agent Turn：running 重置为 queued；
         // 已持久化的工具阶段回到 queued，由 AgentTurnExecutor 继续执行。
+        const staleThreshold =
+          options.staleRunningTurnThresholdMs ?? STALE_RUNNING_TURN_MS;
         const staleBefore = staleRunningTurnBefore(
           options.now?.() ?? new Date(),
+          staleThreshold,
         );
         const recoveredToolTurns = await recoverStalePlannedTurns(
           options.db,
           options.now?.() ?? new Date(),
+          staleThreshold,
         );
         const recovered = await resetStaleRunningTurns(options.db, staleBefore);
         for (const turnId of recovered) {
@@ -236,8 +246,9 @@ export async function resetStaleRunningTurns(
 export async function recoverStalePlannedTurns(
   db: NodePgDatabase<typeof schema>,
   now: Date,
+  thresholdMs: number = STALE_RUNNING_TURN_MS,
 ): Promise<string[]> {
-  const staleBefore = staleRunningTurnBefore(now);
+  const staleBefore = staleRunningTurnBefore(now, thresholdMs);
   const reclaimed = await db
     .update(schema.toolExecutions)
     .set({
@@ -328,10 +339,12 @@ export async function recoverStalePlannedTurns(
 export async function failStalePlannedTurns(
   db: NodePgDatabase<typeof schema>,
   staleBefore: Date,
+  thresholdMs: number = STALE_RUNNING_TURN_MS,
 ): Promise<void> {
   await recoverStalePlannedTurns(
     db,
-    new Date(staleBefore.getTime() + STALE_RUNNING_TURN_MS),
+    new Date(staleBefore.getTime() + thresholdMs),
+    thresholdMs,
   );
 }
 
@@ -343,6 +356,7 @@ export async function failStalePlannedTurns(
 export async function requeueCompletedToolTurns(
   db: NodePgDatabase<typeof schema>,
   staleBefore: Date,
+  _thresholdMs?: number,
 ): Promise<string[]> {
   const rows = await db
     .update(schema.agentTurns)

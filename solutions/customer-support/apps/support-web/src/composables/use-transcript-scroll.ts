@@ -45,8 +45,10 @@ export function restoreAnchor(
 export type UseTranscriptScroll = ReturnType<typeof useTranscriptScroll>;
 
 export function useTranscriptScroll(options: {
-  /** 工作区 store 会话（跨登录记忆滚动位置） */
-  workspace: { scrollTop: number };
+  /** 工作区 store 会话（滚动位置按 conversationId 键控，跨登录记忆） */
+  workspace: { scrollTopByConversation: Record<string, number> };
+  /** 当前会话 id：滚动位置的隔离键，切会话不串台（同 G1 草稿键控） */
+  getConversationId: () => string;
   /** 当前会话整页重载（未读点「回最新」时的行为） */
   onReloadCurrent: () => Promise<void> | void;
 }) {
@@ -64,7 +66,8 @@ export function useTranscriptScroll(options: {
   }
 
   function rememberScroll(): void {
-    workspace.scrollTop = pane.value?.scrollTop ?? 0;
+    workspace.scrollTopByConversation[options.getConversationId()] =
+      pane.value?.scrollTop ?? 0;
   }
 
   function onMessagesScroll(): void {
@@ -72,7 +75,7 @@ export function useTranscriptScroll(options: {
     if (!el) return;
     atBottom.value =
       el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_THRESHOLD_PX;
-    workspace.scrollTop = el.scrollTop;
+    workspace.scrollTopByConversation[options.getConversationId()] = el.scrollTop;
   }
 
   // 滚到最新消息：瞬时滚动 + rAF/延时二次校正。

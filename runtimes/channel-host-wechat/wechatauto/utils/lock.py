@@ -23,6 +23,22 @@ class LockManager:
     线程重复获取时跳过进程锁（只需重入线程锁），保证
     ``@uilock`` 修饰的函数互相调用（如 ``Chat.ForwardVoiceMessage``
     内部调用 ``VoiceMessage.forward_to``）不会死锁。
+
+    锁边界（谁与谁互斥）：本模块是全仓库唯一的进程级 UI 锁，以下入口
+    共用同一把锁、彼此串行——
+
+    * ``wechatauto/guia.py`` 发送路径对外入口（``send_msg`` / ``send_file``
+      / ``send_image`` / ``open_chat`` / ``focus_input`` / ``input_text``
+      / ``click_send`` / ``reply_msg`` / ``quote_msg`` / ``at_member``
+      / ``ensure_visible`` / ``bring_to_front``）；
+    * ``wechatauto/media.py`` ``MediaDownloader.download_image_original``
+      （原图 UI 下载：ChatWith + real_click + ESC）；
+    * ``channel_host/media.py`` ``_UiOriginalTrigger._run``（后台原图
+      下载线程，显式 ``LockManager.acquire()`` 包住下载调用）；
+    * ``wechatauto/wx.py`` / ``wechatauto/msgs/`` 既有 ``@uilock`` 方法。
+
+    只加在「操作序列」入口，绝不下沉到 ``real_click`` / ``key`` 等
+    原子原语（原语级加锁会把一次输入序列劈开，重新引入键鼠交叉）。
     """
 
     process_lock = multiprocessing.Lock()

@@ -6,6 +6,7 @@
  */
 import { computed, onMounted, ref } from "vue";
 import { api } from "../api";
+import { confirmDialog } from "../components/confirm-dialog";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import {
@@ -55,6 +56,8 @@ const notice = ref("");
 const rescheduleOpen = ref(false);
 const rescheduleTarget = ref<ScheduledSend | null>(null);
 const rescheduleAt = ref("");
+// datetime-local 的最早可选时间：打开弹窗那一刻的当前时间
+const rescheduleMin = ref("");
 
 const STATUS_LABELS: Record<ScheduledSend["status"], string> = {
   pending: "待发送",
@@ -122,6 +125,7 @@ function openReschedule(row: ScheduledSend) {
   const base = new Date(row.sendAt);
   base.setDate(base.getDate() + 1);
   rescheduleAt.value = toLocalInput(base);
+  rescheduleMin.value = toLocalInput(new Date());
   rescheduleOpen.value = true;
 }
 
@@ -132,11 +136,24 @@ function toLocalInput(value: Date): string {
 
 async function confirmReschedule() {
   if (!rescheduleTarget.value || !rescheduleAt.value) return;
+  // 过去时间前端先挡：改期到过去会让扫描器下个 tick 立即把消息发给客户
+  // （后端已改为拒绝 invalid_state，这里给即时提示、不发无效请求）
+  if (new Date(rescheduleAt.value).getTime() <= Date.now()) {
+    notice.value = "改期时间必须晚于当前时间";
+    return;
+  }
   await act(rescheduleTarget.value, "reschedule", {
     sendAt: new Date(rescheduleAt.value).toISOString(),
   });
   rescheduleOpen.value = false;
   rescheduleTarget.value = null;
+}
+
+/** 撤销不可恢复，弹确认框防误触（与其他管理页 confirmDialog 用法一致） */
+async function cancelRow(row: ScheduledSend) {
+  if (!(await confirmDialog("撤销这条定时消息？撤销后不会再发送。", { danger: true })))
+    return;
+  await act(row, "cancel");
 }
 
 onMounted(load);
@@ -228,7 +245,7 @@ onMounted(load);
                 <Button variant="outline" size="sm" @click="openReschedule(row)">
                   改期
                 </Button>
-                <Button variant="outline" size="sm" @click="act(row, 'cancel')">
+                <Button variant="outline" size="sm" @click="cancelRow(row)">
                   撤销
                 </Button>
               </div>
@@ -251,7 +268,12 @@ onMounted(load);
         </DialogHeader>
         <div class="grid gap-2">
           <Label class="sr-only" for="reschedule-at">新发送时间</Label>
-          <Input id="reschedule-at" v-model="rescheduleAt" type="datetime-local" />
+          <Input
+            id="reschedule-at"
+            v-model="rescheduleAt"
+            type="datetime-local"
+            :min="rescheduleMin"
+          />
           <p class="text-xs text-muted-foreground">
             落在静音时段（22:00–08:00）的会顺延到 08:00 发送。
           </p>

@@ -321,6 +321,16 @@ export async function registerRoutes(server, ctx) {
     },
   );
 
+  /** decision-trace 工具结果截断：超 2000 字符截断并标注（字符串/JSON 对象都兜住） */
+  function truncateTraceResult(value) {
+    if (value === null || value === undefined) return value;
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    if (text === undefined || text.length <= 2000) return value;
+    if (typeof value === "string") return `${text.slice(0, 2000)}…（已截断）`;
+    // 对象截断后保持对象形状，前端 jsonPreview 仍按 JSON 渲染
+    return { truncated: true, preview: `${text.slice(0, 2000)}…（已截断）` };
+  }
+
   // 决策轨迹：turn_events 的可读投影（不含模型思维链）+ 工具执行记录联表
   //（参数/结果在 tool_executions 表，事件流里只有工具名和成败）
   server.get(
@@ -339,6 +349,11 @@ export async function registerRoutes(server, ctx) {
         .from(schema.agentTurnEvents)
         .where(eq(schema.agentTurnEvents.turnId, turnId))
         .orderBy(schema.agentTurnEvents.createdAt);
+      // 与注释承诺对齐：model_reasoning（模型思维链）不对坐席端返回，
+      // 过滤掉而不是靠调用方自行忽略（此前无 eventType 过滤会原样泄漏）。
+      const visibleEvents = events.filter(
+        (event) => event.eventType !== "model_reasoning",
+      );
       const toolExecutions = await db
         .select({
           executionId: schema.toolExecutions.executionId,
@@ -353,6 +368,11 @@ export async function registerRoutes(server, ctx) {
         .from(schema.toolExecutions)
         .where(eq(schema.toolExecutions.turnId, turnId))
         .orderBy(schema.toolExecutions.createdAt);
+      // 工具结果可能很大：截断到 2000 字符（参数保留，坐席排查需要入参原貌）
+      const safeToolExecutions = toolExecutions.map((row) => ({
+        ...row,
+        result: truncateTraceResult(row.result),
+      }));
       const [turn] = await db
         .select({
           turnId: schema.agentTurns.turnId,
@@ -367,7 +387,11 @@ export async function registerRoutes(server, ctx) {
         .from(schema.agentTurns)
         .where(eq(schema.agentTurns.turnId, turnId))
         .limit(1);
-      return { turn: turn ?? null, events, toolExecutions };
+      return {
+        turn: turn ?? null,
+        events: visibleEvents,
+        toolExecutions: safeToolExecutions,
+      };
     },
   );
 

@@ -57,6 +57,29 @@ export async function processMemoryCapture(
   const state = claimed[0];
   if (!state) return "stale";
 
+  // 处理端防御闸（E1）：即使上游排程口漏闸（历史遗留 scheduled 行、
+  // 未来新入口），群会话的捕获也在这里兜底终止——群成员发言无法区分
+  // 谁说的，提取即跨成员误归因。已 claim 的状态直接置 done 排空。
+  const [conversation] = await db
+    .select({ chatType: schema.conversations.chatType })
+    .from(schema.conversations)
+    .where(
+      eq(schema.conversations.conversationId, job.conversationId),
+    )
+    .limit(1);
+  if (conversation?.chatType === "group") {
+    await db
+      .update(schema.memoryCaptureStates)
+      .set({ status: "done", updatedAt: new Date() })
+      .where(
+        eq(
+          schema.memoryCaptureStates.conversationId,
+          job.conversationId,
+        ),
+      );
+    return "completed";
+  }
+
   try {
     const batch = await captureMessages(db, state);
     const extracted =

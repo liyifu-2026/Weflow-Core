@@ -6,6 +6,7 @@ import {
   coalesceQueuedAgentTurns,
   pendingReplyWindowStart,
   staleRunningTurnBefore,
+  staleRunningTurnThresholdMs,
 } from "../modules/conversations/application/agent-turn-scheduling-policy.js";
 
 const now = new Date("2026-07-30T00:00:10.000Z");
@@ -26,7 +27,19 @@ describe("agent turn scheduling policy", () => {
   it("pins the moved policy constants", () => {
     expect(AGENT_TURN_QUIET_WINDOW_MS).toBe(1_500);
     expect(AGENT_PENDING_REPLY_WINDOW_MS).toBe(10 * 60_000);
-    expect(STALE_RUNNING_TURN_MS).toBe(90 * 1_000);
+    // 90s 旧值小于 180s 决策超时，会误回收在飞的长思考决策（审计 C1）；
+    // 兜底常量提到 300s，dispatcher 按决策超时推导真实阈值。
+    expect(STALE_RUNNING_TURN_MS).toBe(300 * 1_000);
+  });
+
+  it("derives the stale threshold above the decision timeout", () => {
+    // 180s 决策超时 → 阈值 = 2×180s + 60s（覆盖截断重试两次调用）；
+    // 下限 300s 防配置出超短超时把阈值拉得过小。
+    expect(staleRunningTurnThresholdMs(180_000)).toBe(420_000);
+    expect(staleRunningTurnThresholdMs(30_000)).toBe(300_000);
+    expect(staleRunningTurnBefore(new Date(1_000_000), 420_000).getTime()).toBe(
+      1_000_000 - 420_000,
+    );
   });
 
   it("does not release a turn inside the quiet window", () => {

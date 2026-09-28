@@ -61,6 +61,12 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
     }
   }
 
+  /** 会话过期（401 广播）后的本地清理：不能再调登出接口（那会再次 401 打转） */
+  function expireSession() {
+    user.value = null;
+    initialized.value = true;
+  }
+
   async function changePassword(currentPassword: string, newPassword: string) {
     const result = await api<{ user: WeflowUser }>(
       "/api/v1/auth/change-password",
@@ -123,6 +129,7 @@ export const useWeflowAuthStore = defineStore("weflow-auth", () => {
     ensureSession,
     login,
     logout,
+    expireSession,
     changePassword,
     fetchTagVocabulary,
     uploadAvatar,

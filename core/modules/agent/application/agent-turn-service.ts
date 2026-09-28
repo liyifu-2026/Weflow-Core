@@ -37,6 +37,32 @@ export class AgentTurnTransitionNotApplied extends Error {
 
 const EXECUTABLE_STATUSES = ["queued", "running", "tool_planned"] as const;
 
+/**
+ * 租约续期：把 running/tool_planned 轮次的 startedAt 刷到当前时刻。
+ *
+ * STALE 回收以 startedAt 为准；长模型调用（thinking 可达 decisionTimeoutMs）
+ * 之前必须续租，否则 api 进程的 dispatcher 会在调用在飞时把轮次重置
+ * queued——原 worker 提交时 CAS 落空，整个回复事务回滚重烧模型。
+ * 返回 false = 轮次已不在可执行状态（已被回收/吸收/终结），调用方应
+ * 立即放弃本次工作而不是继续烧模型调用。
+ */
+export async function refreshTurnLease(
+  db: AgentTurnDatabase,
+  turnId: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(schema.agentTurns)
+    .set({ startedAt: new Date() })
+    .where(
+      and(
+        eq(schema.agentTurns.turnId, turnId),
+        inArray(schema.agentTurns.status, ["running", "tool_planned"]),
+      ),
+    )
+    .returning({ turnId: schema.agentTurns.turnId });
+  return rows.length > 0;
+}
+
 /** Owns the CAS boundary for terminal and pre-terminal AgentTurn transitions. */
 export class AgentTurnService {
   public constructor(private readonly db: AgentTurnDatabase) {}

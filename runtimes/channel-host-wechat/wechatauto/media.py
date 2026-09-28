@@ -45,6 +45,7 @@ import time
 from typing import List, Optional, Tuple
 
 from .logger import wxlog
+from .utils.lock import uilock
 
 V1_MAGIC = b"\x07\x08\x05\x56\x02\x05"
 V2_MAGIC = b"\x07\x08\x56\x32\x08\x07"
@@ -894,6 +895,7 @@ class MediaDownloader:
                 pass
         return None
 
+    @uilock
     def download_image_original(self, user: str, local_id: int, save_dir: Optional[str] = None,
                                 aes_key: Optional[str] = None, xor_key: Optional[int] = None,
                                 timeout: float = 30.0, chat_name: Optional[str] = None) -> Optional[str]:
@@ -904,6 +906,15 @@ class MediaDownloader:
         等待原图下载完成后解密保存。
 
         注意：会激活微信窗口并把鼠标移到图片上（用户操作会被短暂打断）。
+
+        锁边界（C3·P1）：本方法整段持有进程级 UI 锁（``@uilock``），与
+        ``wechatauto/guia.py`` 的发送路径（``send_msg`` / ``open_chat`` /
+        ``input_text`` / ``click_send`` 等同样 ``@uilock`` 的入口）互斥，
+        避免发送线程与本方法的 ``ChatWith`` + ``real_click`` + ESC 并发
+        驱动微信窗口导致键鼠交叉、文本发进错误会话。内部嵌套调用
+        ``WeChat.ChatWith``（wx.py，本身已 ``@uilock``）依赖 LockManager
+        同线程可重入语义，不会自锁。本地已落地原图的快速路径也在这把锁
+        内（仅多持锁几毫秒，换取实现简单、边界清晰）。
 
         Args:
             user: 会话用户名（wxid 或群聊 ID）

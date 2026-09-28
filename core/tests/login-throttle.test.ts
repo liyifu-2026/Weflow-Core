@@ -114,3 +114,35 @@ describe("login throttle", () => {
     expect(store.keys().length).toBeLessThanOrEqual(10_000);
   });
 });
+
+describe("login throttle (frpc loopback hardening)", () => {
+  it("does not let loopback failures lock out other users", () => {
+    // frpc TCP 隧道下所有公网请求的 request.ip 恒为 127.0.0.1：纯 IP 桶
+    // 一旦参与判定，任何人 10 次失败即可锁死全站登录。回环源必须跳过。
+    let now = 6_000_000;
+    const throttle = new LoginThrottle({ now: () => now });
+    for (let i = 0; i < 25; i += 1) {
+      throttle.recordFailure("127.0.0.1", `attacker${String(i)}`);
+      now += 1;
+    }
+    expect(() => throttle.assertAllowed("127.0.0.1", "alice")).not.toThrow();
+    // 但对同一用户名的定向爆破仍被用户名维度挡住
+    for (let i = 0; i < 10; i += 1) {
+      throttle.recordFailure("127.0.0.1", "bob");
+      now += 1;
+    }
+    expect(() => throttle.assertAllowed("127.0.0.1", "bob")).toThrow(
+      LoginThrottledError,
+    );
+  });
+
+  it("still blocks username rotation from a real (non-loopback) IP", () => {
+    const throttle = new LoginThrottle({ now: () => 7_000_000 });
+    for (let i = 0; i < 10; i += 1) {
+      throttle.recordFailure("192.168.1.9", `user${String(i)}`);
+    }
+    expect(() => throttle.assertAllowed("192.168.1.9", "another")).toThrow(
+      LoginThrottledError,
+    );
+  });
+});

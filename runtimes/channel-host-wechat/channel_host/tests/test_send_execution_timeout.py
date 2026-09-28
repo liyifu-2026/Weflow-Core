@@ -82,6 +82,12 @@ class SendExecutionBoundTests(unittest.TestCase):
                 store.close()
 
     def test_polling_keeps_moving_while_ui_automation_is_still_stuck(self):
+        """A2 回归：执行器卡住时排队操作保持 pending，不再未尝试即判 unknown。
+
+        旧行为把没进过 UI 的操作 finish 成 unknown（「已发出但无法确认」），
+        Core 不重发 → 消息静默丢失。新行为：认领前拦截、保持 pending 重试。
+        本测试保留原有的两条保证：轮询不被卡死拖住、卡死期间不重复点按 UI。
+        """
         with tempfile.TemporaryDirectory() as directory:
             store = EventStore(str(Path(directory) / "events.sqlite3"))
             _image_operation(store, "op-stuck")
@@ -91,30 +97,30 @@ class SendExecutionBoundTests(unittest.TestCase):
             try:
                 with patch.object(outbound, "SEND_EXECUTION_TIMEOUT_SECONDS", 0.2):
                     started = time.monotonic()
-                    self.assertEqual(process_send_operations(store, sender), 2)
-                    # 一轮只等一次超时：第二条操作发现线程仍卡着，立刻判 unknown
+                    # 只有 op-stuck 被处理（超时判 unknown）；op-next 被拦截保持 pending
+                    self.assertEqual(process_send_operations(store, sender), 1)
                     self.assertLess(time.monotonic() - started, 1)
 
                     self.assertEqual(
                         store.get_send_operation("op-stuck")["error"],
                         "send_execution_timeout",
                     )
-                    self.assertEqual(
-                        store.get_send_operation("op-next")["error"],
-                        "send_execution_in_progress",
-                    )
+                    deferred = store.get_send_operation("op-next")
+                    self.assertEqual(deferred["state"], "pending")
+                    self.assertIsNone(deferred["error"])
                     # 卡死期间只发生过一次真实 UI 动作，不重复点按
                     self.assertEqual(sender.send_calls, 1)
 
-                    # 之后的轮询继续推进（不再整机静止），且依旧不进 UI
+                    # 之后的轮询继续推进（不再整机静止），依旧不进 UI，
+                    # 且排队操作保持 pending 等执行器空闲后重试
                     _image_operation(store, "op-later")
                     started = time.monotonic()
-                    self.assertEqual(process_send_operations(store, sender), 1)
+                    self.assertEqual(process_send_operations(store, sender), 0)
                     self.assertLess(time.monotonic() - started, 1)
-                    self.assertEqual(
-                        store.get_send_operation("op-later")["error"],
-                        "send_execution_in_progress",
-                    )
+                    for operation_id in ("op-next", "op-later"):
+                        operation = store.get_send_operation(operation_id)
+                        self.assertEqual(operation["state"], "pending")
+                        self.assertIsNone(operation["error"])
                     self.assertEqual(sender.send_calls, 1)
             finally:
                 release.set()

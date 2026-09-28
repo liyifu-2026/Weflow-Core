@@ -111,6 +111,7 @@ export async function createManualReply(
           channel: schema.conversations.channel,
           contactId: schema.conversations.contactId,
           revision: schema.conversations.revision,
+          chatType: schema.conversations.chatType,
         })
         .from(schema.conversations)
         .where(eq(schema.conversations.conversationId, input.conversationId))
@@ -234,11 +235,15 @@ export async function createManualReply(
             })
             .onConflictDoNothing();
         }
-        await scheduleMemoryCaptureInTransaction(transaction, {
-          conversationId: input.conversationId,
-          contactId: conversation.contactId,
-          watermarkMessageId: created.messageId,
-        });
+        // 群聊不排程记忆捕获（E1 三闸收口——人工代回复路径此前漏闸：
+        // 群成员发言无法区分谁说的，提取即跨成员误归因）。
+        if (conversation.chatType !== "group") {
+          await scheduleMemoryCaptureInTransaction(transaction, {
+            conversationId: input.conversationId,
+            contactId: conversation.contactId,
+            watermarkMessageId: created.messageId,
+          });
+        }
         await transaction.insert(schema.auditEvents).values({
           auditId: randomUUID(),
           actorUserId: input.actorUserId,

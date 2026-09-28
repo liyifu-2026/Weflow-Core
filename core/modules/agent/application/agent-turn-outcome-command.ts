@@ -9,12 +9,13 @@
  * lives in Solution-owned storage (via plugin backend routes), never in the
  * Agent Turn outcome transaction.
  */
-import { eq, like, sql } from "drizzle-orm";
+import { and, eq, inArray, like, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { lockConversationOwnership } from "../../../infrastructure/postgres/ownership-lock.js";
 import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
 import { createHandoffInTransaction } from "../../handoff/application/handoff-service.js";
+import { buildFallbackHandoffBriefing } from "../../handoff/application/handoff-briefing-bridge.js";
 import {
   agentHandoffClientRequestId,
   humanizeHandoffSummary,
@@ -256,6 +257,7 @@ export async function commitAgentTurnOutcome(
       .select({
         contactId: schema.contactProfiles.contactId,
         agentEnabled: schema.contactProfiles.agentEnabled,
+        chatType: schema.conversations.chatType,
       })
       .from(schema.conversations)
       .innerJoin(
@@ -301,10 +303,20 @@ export async function commitAgentTurnOutcome(
     }
 
     if (!runtime.autoSendEnabled) {
+      // 补 v2 兜底简报（D4）：否则坐席接手后无法转交（缺 briefing 的
+      // 会话 transferMobileHandoff 一律 invalid_transition）。构建失败
+      // 静默降级为无简报，不影响 handoff 创建。
+      const briefing = buildFallbackHandoffBriefing({
+        sourceConversationRevision: 0,
+        handoffReason: "auto_send_disabled: AI send disabled by operator",
+        problemSummary:
+          "运营已关闭 AI 自动发送，本条 AI 回复未自动发出，需人工确认后处理。",
+      });
       await createAgentHandoffInTransaction(transaction, {
         conversationId: input.conversationId,
         turnId: input.turnId,
         reason: "auto_send_disabled: AI send disabled by operator",
+        ...(briefing ? { briefing } : {}),
       });
       await recordAgentTurnEvent(transaction, {
         turnId: input.turnId,
@@ -347,7 +359,11 @@ export async function commitAgentTurnOutcome(
     // 重复段被去重），推导出的 messageId 就不存在，外键会直接把整笔回复
     // 事务打回）。
     const watermarkMessageId = reply.messages.at(-1)?.messageId;
-    if (watermarkMessageId) {
+    // 群聊记忆后置（CONTEXT.md：三闸+scope 隔离待群聊真实运营再启动）：
+    // 群成员消息全是 wechat_contact、无法区分谁说的，提取即跨成员误归因。
+    // 结构闸：群会话不排程捕获（只改这一处排程入口，水位线语义不变）。
+    const isGroupConversation = profiles[0]?.chatType === "group";
+    if (watermarkMessageId && !isGroupConversation) {
       await scheduleMemoryCaptureInTransaction(transaction, {
         conversationId: input.conversationId,
         contactId: profiles[0].contactId,
@@ -492,14 +508,26 @@ export async function persistAgentToolCheckpoint(
         arguments: input.toolPlan.arguments,
       })
       .onConflictDoNothing();
-    await transaction
+    // 归属守卫：轮次若已被 STALE 回收（不再 running/tool_planned），不得
+    // 把它拖回 tool_planned——否则回收后的新执行者会与本 worker 的工具
+    // 检查点交叉（审计 C1：检查点曾无条件覆盖状态）。
+    const checkpointed = await transaction
       .update(schema.agentTurns)
       .set({
         status: "tool_planned",
         responseText: null,
         responseSegments: null,
       })
-      .where(eq(schema.agentTurns.turnId, input.turnId));
+      .where(
+        and(
+          eq(schema.agentTurns.turnId, input.turnId),
+          inArray(schema.agentTurns.status, ["running", "tool_planned"]),
+        ),
+      )
+      .returning({ turnId: schema.agentTurns.turnId });
+    if (checkpointed.length === 0) {
+      throw new Error("agent_outcome_conflict");
+    }
     await recordAgentTurnEvent(transaction, {
       turnId: input.turnId,
       conversationId: input.conversationId,
@@ -582,6 +610,7 @@ export async function commitAgentTurnReplyStep(
       .select({
         contactId: schema.contactProfiles.contactId,
         agentEnabled: schema.contactProfiles.agentEnabled,
+        chatType: schema.conversations.chatType,
       })
       .from(schema.conversations)
       .innerJoin(
@@ -624,20 +653,35 @@ export async function commitAgentTurnReplyStep(
         });
       }
     }
-    await scheduleMemoryCaptureInTransaction(transaction, {
-      conversationId: input.conversationId,
-      contactId: profile.contactId,
-      watermarkMessageId:
-        reply.messages[reply.messages.length - 1]?.messageId ??
-        `agent-message:${input.turnId}:step:${String(stepIndex)}:${String(
-          input.segments.length,
-        )}`,
-    });
+    // 群聊不排程记忆捕获（与 commitAgentTurnOutcome 同闸）：群成员发言
+    // 无法区分谁说的，提取即跨成员误归因（E1 三闸收口——续步路径此前漏闸）。
+    if (profile.chatType !== "group") {
+      await scheduleMemoryCaptureInTransaction(transaction, {
+        conversationId: input.conversationId,
+        contactId: profile.contactId,
+        watermarkMessageId:
+          reply.messages[reply.messages.length - 1]?.messageId ??
+          `agent-message:${input.turnId}:step:${String(stepIndex)}:${String(
+            input.segments.length,
+          )}`,
+      });
+    }
     // 刷新活跃度：STALE 回收以 startedAt 为准，长循环必须每步续租。
-    await transaction
+    // 续租落空 = 轮次已被回收/终结：整个事务回滚（本步消息不入库），
+    // 抛冲突交由既有重试链路处置，防止与回收后的新执行者交叉写。
+    const lease = await transaction
       .update(schema.agentTurns)
       .set({ startedAt: new Date() })
-      .where(eq(schema.agentTurns.turnId, input.turnId));
+      .where(
+        and(
+          eq(schema.agentTurns.turnId, input.turnId),
+          inArray(schema.agentTurns.status, ["running", "tool_planned"]),
+        ),
+      )
+      .returning({ turnId: schema.agentTurns.turnId });
+    if (lease.length === 0) {
+      throw new Error("agent_outcome_conflict");
+    }
     await recordAgentTurnEvent(transaction, {
       turnId: input.turnId,
       conversationId: input.conversationId,

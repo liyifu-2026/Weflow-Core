@@ -19,13 +19,17 @@ const HANDOFF_REASON_LABELS: Array<[prefix: string, label: string]> = [
   ["tool_chain_limit", "自动处理步骤达到上限，已转交人工处理"],
   ["tool_failure", "自动处理失败，已转交人工处理"],
   ["agent_recommended", "自动处理无法安全继续，已转交人工处理"],
+  ["reply_validation_failed", "回复内容校验未通过，已转交人工处理"],
 ];
 
 export function humanizeHandoffSummary(reason: string): string {
   const hit = HANDOFF_REASON_LABELS.find(([prefix]) =>
     reason.startsWith(prefix),
   );
-  return hit ? hit[1] : reason;
+  // 未映射的内部原因绝不原样发给客户（曾把 "tool_checkpoint_missing:
+  // persisted tool plan is unavailable" 这类英文内部错误直发微信）；
+  // 原始原因保留在 briefing 供人工排查。
+  return hit ? hit[1] : "自动回复出现异常，已转交人工处理";
 }
 
 export function agentHandoffClientRequestId(turnId: string): string {

@@ -445,6 +445,11 @@ export async function operateScheduledSend(
 
   if (input.operation === "reschedule") {
     if (!input.newSendAt) return { status: "invalid_state" };
+    // 拒绝过去时间：此前允许改期到过去 → 扫描器下个 tick 立即直发，
+    // 坐席本想改到明天、手滑选了今天早上就会当场把消息发给客户。
+    if (input.newSendAt.getTime() <= Date.now()) {
+      return { status: "invalid_state" };
+    }
     const shifted = shiftOutOfQuietHours(
       input.newSendAt,
       DEFAULT_QUIET_START,

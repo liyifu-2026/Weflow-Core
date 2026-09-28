@@ -90,6 +90,14 @@ const props = defineProps<{
   canTransfer: boolean;
   canFinish: boolean;
   handoffStatus: string | undefined;
+  /**
+   * D1：服务端认领资格（GET /conversations/:id/handoff 返回的
+   * state.canClaim，由 Core 按当前坐席的队列资格实时计算）。仅用于门控
+   * pending 态的「接手处理」按钮：false = 该坐席无认领资格，按钮隐藏，
+   * 避免点击后吃 403。undefined（旧合同 handoff 投影无该字段）= 资格
+   * 未知，保持原行为继续展示（fail-open，宁可多展示不可误隐藏）。
+   */
+  canClaimHandoff?: boolean | undefined;
   transferPendingLabel: string | null;
   canRejectTransfer: boolean;
   /** Composer */
@@ -484,8 +492,15 @@ function onComposerTextUpdate(value: string) {
             <Badge v-if="sessionBadgeLabel" variant="secondary" class="shrink-0">{{ sessionBadgeLabel }}</Badge>
           </div>
           <div class="flex shrink-0 items-center gap-1.5">
+            <!-- D1：pending 态按服务端 canClaim 门控——无队列资格的成员
+                 不再渲染「接手处理」（点了只会 403）；canClaim 数据随
+                 handoff 详情一起到达（选中/静默刷新时已拉取，无额外请求），
+                 资格未知（undefined）时不隐藏，维持旧行为。 -->
             <Button
-              v-if="canManualTakeover || handoffStatus === 'pending'"
+              v-if="
+                canManualTakeover ||
+                (handoffStatus === 'pending' && canClaimHandoff !== false)
+              "
               size="sm"
               :disabled="actionBusy"
               @click="handoffStatus === 'pending' ? emit('accept') : emit('takeover')"

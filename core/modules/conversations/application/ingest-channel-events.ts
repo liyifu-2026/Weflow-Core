@@ -31,6 +31,7 @@ import { OUTBOUND_LOOP_SEND_STATES, SEND_STATE } from "./send-states.js";
 import { enqueueAssigneeInboundNotification } from "../../notifications/application/notification-outbox.js";
 import { readRuntimeSettings } from "../../operations/application/runtime-settings.js";
 import { createHandoff } from "../../handoff/application/handoff-service.js";
+import { buildFallbackHandoffBriefing } from "../../handoff/application/handoff-briefing-bridge.js";
 import { conversationEvents } from "../../../infrastructure/events/conversation-events.js";
 import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
 import {
@@ -189,6 +190,15 @@ async function ingestNormalizedEvents(
     }
     // 事务提交后再进入人工路径（此时会话行已可见）
     for (const item of deferredGlobalPause) {
+      // 补 v2 兜底简报（D4）：否则坐席接手后无法转交（缺 briefing 的
+      // 会话 transferMobileHandoff 一律 invalid_transition）。构建失败
+      // 静默降级为无简报，不影响 handoff 创建。
+      const briefing = buildFallbackHandoffBriefing({
+        sourceConversationRevision: 0,
+        handoffReason: "global_pause: agent disabled",
+        problemSummary:
+          "全局 Agent 开关已关闭，该客户消息未自动回复，需人工跟进。",
+      });
       const result = await createHandoff(db, {
         conversationId: item.conversationId,
         actorUserId: "system",
@@ -198,6 +208,7 @@ async function ingestNormalizedEvents(
           .slice(0, 22)}`,
         summary: "global_pause: agent disabled",
         sourceIp: "server2",
+        ...(briefing ? { briefing } : {}),
       });
       if (result.status !== "ok" && result.status !== "invalid_transition") {
         logger.warn(
@@ -495,7 +506,9 @@ async function ingestNormalizedEvent(
     }
     // 记忆捕获属于 AI 服务（提取调用模型）：「仅人工」（agentEnabled=false）
     // 客户只入库展示，不触发任何 AI 动作（无回复、无记忆提取、无昵称查询）。
-    if (agentEnabled) {
+    // 群聊不排程：群成员发言全是 wechat_contact、提取模型无法区分谁说的，
+    // 会把成员 A 的陈述固化成群级「客户事实」互相污染（群记忆三闸后置）。
+    if (agentEnabled && chatType === "private") {
       await scheduleMemoryCaptureInTransaction(transaction, {
         conversationId,
         contactId,
@@ -879,8 +892,18 @@ async function shouldAcceptForAgentTurn(
     ttlMinutes: resolved.threadTtlMinutes,
   });
   if (!threadOpen) return false;
-  // 纯噪声（表情包/纯标点）在线程内也不值得一次模型调用
-  if (isGroupNoiseText(event.content)) return false;
+  // 纯噪声（表情包/纯标点）在线程内也不值得一次模型调用。
+  // 只广播实时事件（不落库）：审计 A6——静默吞掉「？」这类真实追问时，
+  // 排障需要能看到「收到了但被降噪」而不是「没收到」。
+  if (isGroupNoiseText(event.content)) {
+    conversationEvents.publish({
+      type: "group_noise_skipped",
+      conversationId,
+      messageId: event.eventId,
+      occurredAt: new Date().toISOString(),
+    });
+    return false;
+  }
   // 跟进准入：续期线程（空闲超时重置）并计一轮
   await ensureGroupThreadSession(transaction, {
     conversationId,

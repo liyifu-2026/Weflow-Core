@@ -151,7 +151,8 @@ integration("collaboration transfer", () => {
       .where(eq(schema.handoffStates.conversationId, conversationId));
     expect(state).toMatchObject({
       status: "pending",
-      handoffRevision: 1,
+      // escalate 现在递增 revision（D3 修复：pendingSince/revision 同步维护）
+      handoffRevision: 2,
       assignedUserId: null,
       assignedQueueId: queueId,
     });
@@ -161,7 +162,7 @@ integration("collaboration transfer", () => {
       .where(eq(schema.handoffCycles.cycleId, cycleId));
     expect(cycle).toMatchObject({
       status: "pending",
-      handoffRevision: 1,
+      handoffRevision: 2,
       assignedUserId: null,
       assignedQueueId: queueId,
     });

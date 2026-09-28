@@ -293,9 +293,10 @@ export const agentTurns = agentSchema.table(
   "turns",
   {
     turnId: varchar("turn_id", { length: 700 }).primaryKey(),
-    triggerMessageId: varchar("trigger_message_id", { length: 600 })
-      .notNull()
-      .references(() => messages.messageId),
+    // 唤醒续轮（turn:wake:*）没有客户触发消息，0081 起允许 NULL
+    triggerMessageId: varchar("trigger_message_id", {
+      length: 600,
+    }).references(() => messages.messageId),
     conversationId: varchar("conversation_id", { length: 300 })
       .notNull()
       .references(() => conversations.conversationId),

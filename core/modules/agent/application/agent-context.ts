@@ -223,11 +223,14 @@ export async function buildAgentContext(
       mediaDescription: message.mediaDescription,
       messageId: message.messageId,
     });
-  // 召回最近 12 条已确认的长期记忆（memory_enabled OFF 时不 recall）
+  // 召回最近 12 条已确认的长期记忆（memory_enabled OFF 时不 recall；
+  // 群聊不 recall——群会话的既有记忆是私聊联系人的，注入群回复会
+  // 跨会话泄漏个性化信息，群记忆待三闸落地后再启动）
   const runtime = await readRuntimeSettings(db);
-  const memories = !runtime.memoryEnabled
-    ? []
-    : await recallMemories(db, conversationId, 12);
+  const memories =
+    !runtime.memoryEnabled || chatType === "group"
+      ? []
+      : await recallMemories(db, conversationId, 12);
   const previousHumanCycle = await latestHumanCycleAgentContext(
     db,
     conversationId,

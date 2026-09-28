@@ -540,6 +540,13 @@
       "when": 1789000000004,
       "tag": "0080_send_state_vocabulary",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1789000000005,
+      "tag": "0081_wake_turn_trigger_nullable",
+      "breakpoints": true
     }
   ]
 }

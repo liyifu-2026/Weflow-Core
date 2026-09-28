@@ -7,7 +7,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { CHANNEL_WIRE_TYPES } from "../../channel/contracts/channel-wire.js";
-import { and, eq, isNull, ne } from "drizzle-orm";
+import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import { lockConversationOwnership } from "../../../infrastructure/postgres/ownership-lock.js";
@@ -18,6 +18,7 @@ import {
   enqueuePendingHandoffNotifications,
 } from "../../notifications/application/notification-outbox.js";
 import { cancelPendingAgentOutbound } from "../../conversations/application/send-states.js";
+import { canUserClaimQueuedHandoff } from "./mobile-handoff-service.js";
 
 type TransitionType =
   "created" | "accepted" | "manual_taken_over" | "released" | "resolved";
@@ -178,6 +179,13 @@ export async function escalateHandoff(
       status: "pending",
       assignedUserId: null,
       assignedQueueId: input.queueId,
+      // 回到 pending 队列必须刷新 pendingSince：承接自队列的会话该列为
+      // NULL，兜底扫描 lte(pendingSince, cutoff) 永不命中（永久滞留）；
+      // 承接过旧值的会话则会在升级后 15s 内立即触发全员广播，定向路由失效。
+      pendingSince: now,
+      // 状态迁移一律递增修订号（与 mobile claim/transfer 的 CAS 语义一致），
+      // 持旧 revision 的移动端操作会按 revision_conflict 重拉最新状态。
+      handoffRevision: sql`${schema.handoffStates.handoffRevision} + 1`,
       updatedAt: now,
     })
     .where(
@@ -198,6 +206,7 @@ export async function escalateHandoff(
       status: "pending",
       assignedUserId: null,
       assignedQueueId: input.queueId,
+      handoffRevision: sql`${schema.handoffCycles.handoffRevision} + 1`,
       updatedAt: now,
     })
     .where(eq(schema.handoffCycles.cycleId, current.cycleId));
@@ -529,7 +538,20 @@ async function transitionInTransaction(
     (type === "accepted" || type === "manual_taken_over") &&
     current?.assignedQueueId
   ) {
-    return { status: "invalid_transition" };
+    // 队列路由的 pending handoff：主动接管（manual_taken_over）保持拒绝；
+    // legacy 认领（accepted）不再一刀切拒绝——与 mobile claim 共用同一
+    // 资格判定（队列成员/持标签客服），不合格成员按既有 forbidden 语义
+    // 拒绝（前端按错误码渲染，不新增错误码词汇）。
+    if (type !== "accepted") return { status: "invalid_transition" };
+    if (
+      !(await canUserClaimQueuedHandoff(
+        transaction,
+        input.conversationId,
+        input.actorUserId,
+      ))
+    ) {
+      return { status: "not_assignee" };
+    }
   }
   if (
     (type === "resolved" || type === "released") &&
@@ -578,8 +600,15 @@ async function transitionInTransaction(
         : type === "accepted"
           ? {
               status: nextStatus,
+              // 与 mobile claim 同一落库序列：认领即递增修订号并清空
+              // 定向路由字段（target/acceptBy/fallback）。
+              handoffRevision: nextHandoffRevision,
               assignedUserId: input.actorUserId,
               assignedQueueId: null,
+              targetUserId: null,
+              targetQueueId: null,
+              acceptBy: null,
+              fallbackQueueId: null,
               acceptedAt: now,
               updatedAt: now,
             }
@@ -596,6 +625,10 @@ async function transitionInTransaction(
                 assignedQueueId: null,
                 resolvedByUserId: input.actorUserId,
                 resolution: input.summary,
+                // 与 mobile finish 同词表（HumanResult），AI 上下文读取口
+                // （latestHumanCycleAgentContext）据此回放人工结论。
+                result: "resolved_by_human",
+                finishedAt: now,
                 agentPaused: false,
                 resolvedAt: now,
                 updatedAt: now,
@@ -732,7 +765,9 @@ async function transitionInTransaction(
       type === "accepted"
         ? {
             status: "in_progress",
+            handoffRevision: nextHandoffRevision,
             assignedUserId: input.actorUserId,
+            assignedQueueId: null,
             acceptedAt: now,
             updatedAt: now,
           }
@@ -747,6 +782,8 @@ async function transitionInTransaction(
               status: "resolved",
               resolvedByUserId: input.actorUserId,
               resolution: input.summary,
+              result: "resolved_by_human",
+              finishedAt: now,
               resolvedAt: now,
               updatedAt: now,
             };
@@ -754,6 +791,18 @@ async function transitionInTransaction(
       .update(schema.handoffCycles)
       .set(cycleValues)
       .where(eq(schema.handoffCycles.cycleId, handoff.cycleId));
+    if (type === "resolved") {
+      // 与 mobile finish 对齐：补排队解析摘要任务（由 mobile 维护定时器
+      // 消费），供下一轮 AI 回复的上下文读取 resolutionSummary。
+      await transaction
+        .insert(schema.handoffResolutionSummaryJobs)
+        .values({
+          jobId: `resolution:${handoff.cycleId}`,
+          conversationId: input.conversationId,
+          cycleId: handoff.cycleId,
+        })
+        .onConflictDoNothing();
+    }
   }
 
   if (beginsCycle) {

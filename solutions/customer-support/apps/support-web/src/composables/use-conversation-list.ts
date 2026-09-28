@@ -47,6 +47,30 @@ export function useConversationList(options: {
   const sectionMine = ref<Conversation[]>([]);
   const sectionOthers = ref<Conversation[]>([]);
   const listNextCursors = ref<Record<SectionScope, string | null>>({ ...EMPTY_CURSORS });
+  // G3：记录被用户「加载更多」续过页的分区。15s 对账/5s 兜底/SSE 触发的
+  // loadList 若把三区无条件替换回第一页，用户翻出来的旧会话会整批消失。
+  const pagedScopes = ref<Record<SectionScope, boolean>>({
+    attention: false,
+    mine: false,
+    others: false,
+  });
+  // G3 拼接行淘汰语义（第二轮修订）：第一轮用「连续 2 次刷新未在服务端
+  // 数据里出现即淘汰」的计数器，但第 101+ 行永远不在服务端第一页里，
+  // 连续 2 次刷新（10-30s）后必被误删——翻页结果实际留不住。
+  // 现改为：拼接行一直保留，只在拿到「明确消失证据」时才丢弃——
+  // ① 被吸收：它重新出现在了服务端 fresh 数据里（去重合并自然吸收，
+  //    或 loadMoreSection 续页命中后就地换成服务端版本）；
+  // ② 服务端翻到底：用户主动 loadMoreSection 且续页无下一页游标，
+  //    说明服务端已对该区尾部完整对账，仍未出现的拼接行确认消失；
+  // ③ 区已缩水：loadList 返回的 fresh 没有下一页游标，说明该区总条数
+  //    ≤ 第一页容量、已不存在第 101+ 行，无法匹配的拼接行全部清掉。
+  // carriedIds 记录各区「当前未被服务端数据确认」的行 id，仅供内部
+  // 对账使用（非响应式；列表展示由三区数组驱动）。
+  const carriedIds: Record<SectionScope, Set<string>> = {
+    attention: new Set(),
+    mine: new Set(),
+    others: new Set(),
+  };
   const listLoadingMore = ref<Record<SectionScope, boolean>>({
     attention: false,
     mine: false,
@@ -133,13 +157,83 @@ export function useConversationList(options: {
             "/api/v1/conversations?limit=100&scope=others",
           ),
         ]);
-        sectionAttention.value = attention.conversations ?? [];
-        sectionMine.value = mine.conversations ?? [];
-        sectionOthers.value = others.conversations ?? [];
+        // G3：刷新保留续页状态。未翻页的区行为完全不变（新第一页 + 新游标）；
+        // 已翻页的区：新第一页照常替换头部，游标尽量保留原值（用户翻页边界
+        // 不因刷新而丢），并把「新列表里没有、但旧列表里有的行」拼到尾部
+        // （按 conversationId 去重、新列表顺序优先）。拼接行不再按「连续
+        // 未命中次数」淘汰（第 101+ 行永远不在 fresh 第一页里，计数器必然
+        // 误删）；只在服务端给出明确消失证据时丢弃，判据见 carriedIds 注释。
+        const previousCursors = { ...listNextCursors.value };
+        const withCarriedTail = (
+          scope: SectionScope,
+          fresh: Conversation[],
+          freshCursor: string | null | undefined,
+        ): Conversation[] => {
+          const carried = carriedIds[scope];
+          if (!pagedScopes.value[scope]) {
+            // 未翻页的区：整区以服务端为准，无拼接行需要对账。
+            carried.clear();
+            return fresh;
+          }
+          const freshIds = new Set(fresh.map((item) => item.conversationId));
+          // 判据①：曾被拼接的行重新被服务端确认 → 从拼接集合移除（吸收）。
+          for (const id of carried) {
+            if (freshIds.has(id)) carried.delete(id);
+          }
+          const previous =
+            scope === "attention"
+              ? sectionAttention.value
+              : scope === "mine"
+                ? sectionMine.value
+                : sectionOthers.value;
+          // 拼接行 = 旧列表里 fresh 第一页没有的行（无论它此前是否被服务端
+          // 确认过——现在它不在第一页，就处于「未确认」状态，继续保留）。
+          const tail = previous.filter(
+            (row) => !freshIds.has(row.conversationId),
+          );
+          if (!freshCursor) {
+            // 判据③：fresh 没有下一页游标 → 该区总条数 ≤ 第一页容量，
+            // 不在第一页里的旧行必然已从该区消失（删除/移出/排队结束），
+            // 全部丢弃。游标归零见下方 listNextCursors 赋值（这里先改会被
+            // 整体赋值覆盖，故统一在赋值处按 freshCursor 收口）。
+            carried.clear();
+            return [...fresh];
+          }
+          carried.clear();
+          for (const row of tail) carried.add(row.conversationId);
+          return [...fresh, ...tail];
+        };
+        sectionAttention.value = withCarriedTail(
+          "attention",
+          attention.conversations ?? [],
+          attention.nextCursor ?? null,
+        );
+        sectionMine.value = withCarriedTail("mine", mine.conversations ?? [], mine.nextCursor ?? null);
+        sectionOthers.value = withCarriedTail(
+          "others",
+          others.conversations ?? [],
+          others.nextCursor ?? null,
+        );
+        // 游标规则：未翻页的区 = 服务端新游标（行为不变）。已翻页的区：
+        // fresh 仍有下一页 → 优先保留用户翻到的旧边界游标（旧边界失效时
+        // 回退 fresh 游标兜底恢复续页）；fresh 已无下一页（判据③触发）→
+        // 归零，避免「加载更多」拿着已失效的旧游标空转。
         listNextCursors.value = {
-          attention: attention.nextCursor ?? null,
-          mine: mine.nextCursor ?? null,
-          others: others.nextCursor ?? null,
+          attention: pagedScopes.value.attention
+            ? attention.nextCursor
+              ? (previousCursors.attention ?? attention.nextCursor ?? null)
+              : null
+            : (attention.nextCursor ?? null),
+          mine: pagedScopes.value.mine
+            ? mine.nextCursor
+              ? (previousCursors.mine ?? mine.nextCursor ?? null)
+              : null
+            : (mine.nextCursor ?? null),
+          others: pagedScopes.value.others
+            ? others.nextCursor
+              ? (previousCursors.others ?? others.nextCursor ?? null)
+              : null
+            : (others.nextCursor ?? null),
         };
         conversations.value = [];
       } else {
@@ -199,14 +293,26 @@ export function useConversationList(options: {
           : scope === "mine"
             ? sectionMine
             : sectionOthers;
-      const seen = new Set(target.value.map((item) => item.conversationId));
+      const continuation = result.conversations ?? [];
+      const existingIds = new Set(target.value.map((item) => item.conversationId));
+      const byId = new Map(
+        continuation.map((item) => [item.conversationId, item]),
+      );
+      // G3 判据①：续页结果里出现的行 = 服务端最新确认 → 就地替换旧行
+      // （含拼接行），保证服务端有发言权的位置一律以服务端版本为准；
+      // 其余续页行（本地没有的）照旧追加去重。
       target.value = [
-        ...target.value,
-        ...(result.conversations ?? []).filter(
-          (item) => !seen.has(item.conversationId),
-        ),
+        ...target.value.map((row) => byId.get(row.conversationId) ?? row),
+        ...continuation.filter((item) => !existingIds.has(item.conversationId)),
       ];
+      // 被续页确认的行不再是「未确认拼接行」。
+      for (const item of continuation) carriedIds[scope].delete(item.conversationId);
       listNextCursors.value[scope] = result.nextCursor ?? null;
+      // G3 判据②：用户主动续页且服务端已无下一页 → 该区尾部已被服务端
+      // 完整对账，仍未出现的拼接行确认已消失，全部丢弃。
+      if (!result.nextCursor) carriedIds[scope].clear();
+      // G3：该区已被用户翻页，后续刷新须保留续页结果（见 loadList）
+      pagedScopes.value[scope] = true;
     } catch {
       // 静默；下一轮重试
     } finally {

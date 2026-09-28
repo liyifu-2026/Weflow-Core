@@ -1,0 +1,13 @@
+-- 0081: agent.turns.trigger_message_id 放宽为 nullable。
+--
+-- 会话唤醒（session wake）到期的续轮没有客户触发消息（turn_id =
+-- turn:wake:<wakeId>），此前列 NOT NULL + FK 导致无 nudge 的唤醒续轮
+-- insert 必然违反约束（23502）：唤醒被 finally 分支置 done 静默消费，
+-- wait 到期续轮机制自上线以来从未成功建过轮（生产日志
+-- weflow-core-api.out.log "null value in column trigger_message_id"）。
+--
+-- Postgres UNIQUE 允许多个 NULL，agent_turns_trigger_message_unique
+-- 对真实消息触发的唯一性约束不受影响；全部消费方均以
+-- messages.message_id = turns.trigger_message_id 等值连接或在读取侧
+-- 先判空，NULL 触发行只会自然落到「无触发消息」分支。
+ALTER TABLE "agent"."turns" ALTER COLUMN "trigger_message_id" DROP NOT NULL;

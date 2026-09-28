@@ -19,12 +19,26 @@ export const AGENT_TURN_QUIET_WINDOW_MS = 1_500;
 export const AGENT_PENDING_REPLY_WINDOW_MS = 10 * 60_000;
 
 /**
- * 运行中或工具待执行轮次被视为崩溃失效的时长阈值（毫秒）。
- * 90s：worker 内每一步都有独立超时（决策 decisionTimeoutMs、工具 15s），
- * 且每次续步都会刷新 startedAt——正常长循环不会误伤；而 2026-09-07
- * 实测 5min 阈值下 turn 假死要陪葬整整 5 分钟才被回收，客户侧不可接受。
+ * 运行中或工具待执行轮次被视为崩溃失效的时长阈值（毫秒）——兜底缺省。
+ *
+ * 2026-09-29 审计修正：旧值 90s 小于决策超时 MODEL_DECISION_TIMEOUT_MS
+ * （缺省 180s），thinking 模型一次长决策就会被 api 进程的 STALE 回收在
+ * 半路抢跑 → 原 worker 提交时 CAS 落空抛 agent_outcome_conflict → 整个
+ * 回复事务回滚重烧模型。现在阈值由调用方按决策超时推导
+ * （staleRunningTurnThresholdMs：2×决策超时 + 60s 余量，下限 300s），
+ * 配合 worker 侧每次模型调用前的租约续期（refreshTurnLease），健康的
+ * 在飞决策不再被误回收；worker 真崩时最迟阈值时长被接管。本常量只是
+ * 未配置时的下限兜底。
  */
-export const STALE_RUNNING_TURN_MS = 90 * 1_000;
+export const STALE_RUNNING_TURN_MS = 300 * 1_000;
+
+/** 由决策超时推导 STALE 阈值：覆盖 completeAgentDecision 内部的截断重试
+ * （两次模型调用）+ FC 出口闸门重试一次的窗口，另加调度/解析余量。 */
+export function staleRunningTurnThresholdMs(
+  decisionTimeoutMs: number,
+): number {
+  return Math.max(decisionTimeoutMs * 2 + 60_000, STALE_RUNNING_TURN_MS);
+}
 
 /** 视为"待确认回复"的出站发送状态；处于这些状态的回复阻塞新轮次。
  *  与出站循环扫描集同源定义（send-states），漂移在此处即编译失败。 */
@@ -75,9 +89,13 @@ export function coalesceQueuedAgentTurns(
   return { ready, superseded };
 }
 
-/** 运行中轮次的失效分界点：startedAt 早于该时间的轮次视为 worker 崩溃遗留。 */
-export function staleRunningTurnBefore(now: Date): Date {
-  return new Date(now.getTime() - STALE_RUNNING_TURN_MS);
+/** 运行中轮次的失效分界点：startedAt 早于该时间的轮次视为 worker 崩溃遗留。
+ *  阈值缺省为兜底常量；dispatcher 会传入按决策超时推导的阈值。 */
+export function staleRunningTurnBefore(
+  now: Date,
+  thresholdMs: number = STALE_RUNNING_TURN_MS,
+): Date {
+  return new Date(now.getTime() - thresholdMs);
 }
 
 /** 待回复排除窗口起点：occurredAt 晚于该时间的未确认 Agent 回复阻塞新轮次。 */

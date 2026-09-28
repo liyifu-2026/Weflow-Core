@@ -5,7 +5,7 @@
  * 续轮（或按预承诺 nudge 直接代发，不开模型——省掉 qq-bridge 式
  * 沉默唤醒的空转轮）。照 turn_admission/memory_capture 家法。
  */
-import { and, desc, eq, lte } from "drizzle-orm";
+import { and, desc, eq, lte, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
 import {
@@ -113,6 +113,9 @@ export async function claimDueSessionWakes(
   // 原先纯 SELECT 认领会在 dispatcher 手持快照期间被入站作废绕过——
   // nudge 追着客户刚发的消息发出。认领失败的行（已作废/已被其他实例
   // 处理）自然不出现在结果里。
+  // LIMIT 必须下推进 UPDATE 的 WHERE 子查询：整表 UPDATE 后 slice 会让
+  // 第 limit+1 条起也被置 firing 却无人认领——claim 只扫 scheduled，
+  // 这些行永久卡死（审计 B3）。按 wake_at 最早的 limit 条认领。
   const claimed = await db
     .update(schema.sessionWakes)
     .set({ status: "firing" })
@@ -120,10 +123,13 @@ export async function claimDueSessionWakes(
       and(
         eq(schema.sessionWakes.status, "scheduled"),
         lte(schema.sessionWakes.wakeAt, now),
+        sql`${
+          schema.sessionWakes.wakeId
+        } IN (SELECT wake_id FROM ${schema.sessionWakes} WHERE status = 'scheduled' AND wake_at <= ${now.toISOString()} ORDER BY wake_at ASC LIMIT ${limit})`,
       ),
     )
     .returning();
-  return claimed.slice(0, limit);
+  return claimed;
 }
 
 /** 消费完成标记（仅 firing → done；被作废/已取消的行绝不复活）。 */

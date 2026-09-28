@@ -1112,8 +1112,12 @@ export async function latestHumanCycleAgentContext(
       and(
         eq(schema.handoffCycles.conversationId, conversationId),
         eq(schema.handoffCycles.contractVersion, 2),
-        eq(schema.handoffCycles.status, "finished"),
-        sql`${schema.handoffCycles.result} <> 'transferred'`,
+        // 终态词汇收敛（读取侧）：mobile finish 写 "finished"，Web 结束
+        // 人工处理写 "resolved"，两个终态词都认。result 用 IS DISTINCT
+        // FROM 兼容历史行为 NULL 的行（NULL <> 'transferred' 恒为 NULL
+        // 会被 WHERE 丢弃）。
+        inArray(schema.handoffCycles.status, ["finished", "resolved"]),
+        sql`${schema.handoffCycles.result} IS DISTINCT FROM 'transferred'`,
       ),
     )
     .orderBy(desc(schema.handoffCycles.finishedAt))
@@ -1459,6 +1463,25 @@ async function canClaim(
   )
     return true;
   return actorMatchesQueue(db, state.assignedQueueId, actorUserId);
+}
+
+/**
+ * 队列路由资格判定（mobile claim 与 Web legacy 认领共用，避免两条入口
+ * 漂移）：仅 pending 且未被认领的 handoff 可认领；无队列/通用队列全员
+ * 可认领，指向专家队列时仅队列成员/持标签客服可认领。
+ */
+export async function canUserClaimQueuedHandoff(
+  db: Db,
+  conversationId: string,
+  userId: string,
+): Promise<boolean> {
+  const [state] = await db
+    .select()
+    .from(schema.handoffStates)
+    .where(eq(schema.handoffStates.conversationId, conversationId))
+    .limit(1);
+  if (!state) return false;
+  return canClaim(db, state, userId);
 }
 
 async function presentState(

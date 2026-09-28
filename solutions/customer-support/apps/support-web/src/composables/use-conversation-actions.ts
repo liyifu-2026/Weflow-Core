@@ -243,21 +243,39 @@ export function useConversationActions(options: {
     );
   }
 
+  // 发送失败暂存（G2）：超时/响应丢失时请求可能已被服务端受理，而服务端
+  // 按 clientRequestId 幂等。下次点发送时若文本未变就复用同一键，由服务端
+  // 去重兜底防双发；文本已改说明是新的一条，换新键。成功后清空。
+  let lastFailedRequest: {
+    conversationId: string;
+    clientRequestId: string;
+    text: string;
+  } | null = null;
+
   async function send(): Promise<void> {
     const conversationId = selection.selectedId.value;
     if (!options.canReply() || !conversationId || sending.value) return;
     sending.value = true;
     const text = options.replyText.value.trim();
+    const failed = lastFailedRequest;
+    const clientRequestId =
+      failed &&
+      failed.conversationId === conversationId &&
+      failed.text === text
+        ? failed.clientRequestId
+        : crypto.randomUUID();
     try {
       const mentionRefs = extractMentionRefs();
-      await postMessage(text, crypto.randomUUID(), {
+      await postMessage(text, clientRequestId, {
         replyToChannelMessageId: replyTarget.value?.messageId || undefined,
         mentionContactRefs: mentionRefs.length ? mentionRefs : undefined,
       });
+      lastFailedRequest = null;
       options.replyText.value = "";
       clearReplyTarget();
       await Promise.all([selection.select(conversationId), options.reloadList()]);
     } catch (reason) {
+      lastFailedRequest = { conversationId, clientRequestId, text };
       detailError.value =
         reason instanceof Error ? reason.message : "回复未能发送";
     } finally {

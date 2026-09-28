@@ -41,6 +41,7 @@ import type { AgentDecision } from "./agent-decision.js";
 import { getToolPlan, knowledgeToolPlan, type ToolPlan } from "./tool-plan.js";
 import { validateDecision, validateReplySegments } from "./policy-gate.js";
 import { buildHandoffBriefing } from "../../handoff/application/handoff-briefing.js";
+import { buildFallbackHandoffBriefing } from "../../handoff/application/handoff-briefing-bridge.js";
 import {
   commitAgentTurnFailure,
   commitAgentTurnHandoff,
@@ -245,6 +246,22 @@ export async function commitDecisionDisposition(
         farewellSegments,
       );
     }
+    // v2 简报两条路径都补齐（D4）：fresh 用模型自带简报；tool_recovery
+    // 无新鲜 revision，按失败协调器同一模式补机制级兜底简报——否则坐席
+    // 接手后永远无法转交（transferMobileHandoff 对缺 briefing 一律 409）。
+    // 构建失败静默降级为无简报，绝不拖垮转人工本身。
+    const briefing = withBriefing
+      ? buildHandoffBriefing({
+          sourceConversationRevision: input.conversationRevision ?? 0,
+          handoffReason: `policy_gate: ${gate.reasonCode}`,
+          ...(decision.handoffBriefing
+            ? { modelBriefing: decision.handoffBriefing }
+            : {}),
+        })
+      : buildFallbackHandoffBriefing({
+          sourceConversationRevision: 0,
+          handoffReason: `policy_gate_after_tool: ${gate.reasonCode}`,
+        });
     await commitAgentTurnHandoff(db, {
       conversationId,
       turnId,
@@ -253,17 +270,7 @@ export async function commitDecisionDisposition(
         ? gate.reasonCode
         : `policy_gate_after_tool: ${gate.reasonCode}`,
       ...(farewellSegments.length > 0 ? { farewellSegments } : {}),
-      ...(withBriefing
-        ? {
-            briefing: buildHandoffBriefing({
-              sourceConversationRevision: input.conversationRevision ?? 0,
-              handoffReason: `policy_gate: ${gate.reasonCode}`,
-              ...(decision.handoffBriefing
-                ? { modelBriefing: decision.handoffBriefing }
-                : {}),
-            }),
-          }
-        : {}),
+      ...(briefing ? { briefing } : {}),
     });
     return { action: "terminal" };
   }
@@ -810,10 +817,13 @@ async function commitReplyValidationFailure(
   } catch (error) {
     const reasonCode =
       error instanceof Error ? error.message : "reply_validation_failed";
+    // 校验失败不再静默吞轮：带 handoffReason 兜底转人工（此前只落
+    // failed 事件，客户永远等不到回复也等不到告知）。
     await commitAgentTurnFailure(db, {
       conversationId,
       turnId,
       errorCode: "reply_validation_failed",
+      handoffReason: `reply_validation_failed: ${reasonCode}`,
       events: [{ eventType: "validation_failed", reasonCode }],
     });
     return true;

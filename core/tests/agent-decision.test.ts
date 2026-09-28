@@ -46,16 +46,32 @@ describe("agent decision contract", () => {
         }),
       ).replySegments,
     ).toEqual(eightSegments);
-    expect(() =>
-      parseAgentDecision(
-        JSON.stringify({
-          reply_segments: Array.from({ length: 9 }, (_, i) => `第${i + 1}条`),
-          next_action: "reply",
-          requires_human: false,
-          risk_level: "low",
-        }),
-      ),
-    ).toThrow("invalid agent decision");
+    // 超段数不再炸整轮（旧语义抛 invalid agent decision → 重试 3 次转
+    // 人工），改为收敛到上限并标记省略：部分送达好过整轮沉默。
+    const overlong = parseAgentDecision(
+      JSON.stringify({
+        reply_segments: Array.from({ length: 9 }, (_, i) => `第${i + 1}条`),
+        next_action: "reply",
+        requires_human: false,
+        risk_level: "low",
+      }),
+    ).replySegments;
+    expect(overlong).toHaveLength(8);
+    expect(overlong.at(-1)).toMatch(/…$/);
+    // 超长单段 reply_text 被拆成 ≤500 字多段（拆分修复：501-2000 字合法
+    // 长回复过去直接炸段校验静默吞轮）
+    const longText = "好".repeat(1200);
+    const split = parseAgentDecision(
+      JSON.stringify({
+        reply_text: longText,
+        next_action: "reply",
+        requires_human: false,
+        risk_level: "low",
+      }),
+    ).replySegments;
+    expect(split.length).toBeGreaterThan(1);
+    for (const segment of split) expect(segment.length).toBeLessThanOrEqual(500);
+    expect(split.join("")).toContain("好".repeat(500));
   });
 
   it("joins segments into replyText", () => {

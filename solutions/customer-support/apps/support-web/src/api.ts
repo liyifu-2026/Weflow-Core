@@ -48,6 +48,15 @@ export async function api<T>(
     ? await response.json()
     : await response.text();
   if (!response.ok) {
+    // 会话过期统一入口：只广播事件，跳转由 main.ts 监听器处理（api 层不碰
+    // router）；登录接口自身的 401（凭据错误）不触发，避免登录页死循环。
+    if (
+      response.status === 401 &&
+      path !== "/api/v1/auth/login" &&
+      path !== "/api/v1/mobile/auth/login"
+    ) {
+      window.dispatchEvent(new CustomEvent("weflow:unauthorized"));
+    }
     const code =
       typeof payload === "object" && payload
         ? String((payload as { error?: string }).error ?? "")
@@ -92,12 +101,20 @@ function errorCopy(code: string, status: number): string {
     contact_agent_binding_invalid: "联系人或 AI Employee 无效",
     policy_not_found: "待验证的策略版本不存在",
     policy_not_publishable: "策略当前不可发布，请检查版本状态",
+    // 模型注册表/槽位绑定（core/modules/operations）：
+    failover_cycle: "故障转移链成环：故障转移不能指向自己或自己的下游模型",
+    capability_mismatch: "模型能力不符：该槽位要求的模型能力此模型不具备",
+    model_not_found: "模型不存在或已被删除",
     case_not_promotable: "案例尚未完成脱敏审核，不能进入基准区",
     invalid_request: "请求参数不合法，请检查填写内容",
     invalid_cursor: "分页游标无效，请刷新后重试",
     conversation_not_found: "会话不存在或已删除",
     handoff_not_found: "交接记录不存在",
     handoff_not_assignee: "当前会话不属于你，无法执行此操作",
+    // D1 兜底：mobile claim 路径对「无队列认领资格」返回 403 +
+    // handoff_target_not_eligible（web legacy 路径对应 handoff_not_assignee）。
+    // 无映射时会退化成含糊的「请求未被接受」，这里给一句明确文案。
+    handoff_target_not_eligible: "你没有该会话队列的接手资格，无法认领",
     handoff_already_claimed: "会话已被其他客服接管",
     invalid_handoff_transition: "当前状态不支持此操作，请刷新后重试",
     handoff_revision_conflict: "交接状态已变化，请刷新后重试",

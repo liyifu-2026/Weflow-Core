@@ -25,6 +25,7 @@ import {
 } from "./complete-agent-decision.js";
 import { isToolName } from "./tool-catalog.js";
 import { recordAgentTurnEvent } from "./agent-turn-events.js";
+import { refreshTurnLease } from "./agent-turn-service.js";
 
 type Database = NodePgDatabase<typeof schema>;
 
@@ -58,6 +59,12 @@ export async function acquireDecision(
   input: AcquireDecisionInput,
 ): Promise<AcquiredDecision> {
   const { db, client, model, turnId, conversationId, strategy } = input;
+  // 决策调用前续租：长思考（可达 decisionTimeoutMs）期间 STALE 回收以
+  // startedAt 为准；续租失败说明轮次已被回收/吸收，立即放弃省一次
+  // 白烧的模型调用（提交时也过不了 CAS）。
+  if (!(await refreshTurnLease(db, turnId))) {
+    throw new Error("agent_outcome_conflict");
+  }
   const modelResponse = await completeAgentDecision(
     client,
     input.decisionMessages,
@@ -67,12 +74,14 @@ export async function acquireDecision(
       ...(input.nativeTools.length > 0 ? { tools: input.nativeTools } : {}),
     },
   );
+  // 审计事件落库失败不阻断主流程（同文件外的 turn_error 事件同款处理）：
+  // 可观测性写入放大成整轮失败重试 = 白烧一次 180s 模型调用。
   await recordModelCallEvent(db, {
     turnId,
     conversationId,
     model,
     response: modelResponse,
-  });
+  }).catch(() => undefined);
 
   let decision: AgentDecision;
   let responseForAudit = modelResponse;
@@ -120,7 +129,7 @@ export async function acquireDecision(
       conversationId,
       eventType: "model_reasoning",
       payload: { reasoning: responseForAudit.reasoning },
-    });
+    }).catch(() => undefined);
   }
   return { decision, responseForAudit };
 }
@@ -256,6 +265,9 @@ async function gateNativeToolCalls(
       }),
     },
   ];
+  if (!(await refreshTurnLease(db, input.turnId))) {
+    throw new Error("agent_outcome_conflict");
+  }
   return await completeAgentDecision(input.client, retryMessages, input.model, {
     timeoutMs: input.decisionTimeoutMs,
   });

@@ -322,7 +322,7 @@ export async function processAgentTurn(
       conversationId: turn.conversationId,
       traceId: job.traceId,
       path: "fresh",
-      triggerMessageId: turn.triggerMessageId,
+      triggerMessageId: turn.triggerMessageId ?? undefined,
       conversationRevision: conversation?.revision ?? 0,
       model,
       aiEmployeeId,

@@ -501,6 +501,15 @@ class WeChatDB:
         )
         self.keys_file = keys_file or os.path.join(self.workdir, "keys.json")
         self._keys: Dict[str, bytes] = {}
+        # C2：实例级可重入锁，串行化 _open 全路径（缓存命中判断 → 解密/
+        # 合并 → quick_check）。主轮询、HTTP 媒体线程、发送线程会并发
+        # 打开库，解密缓存重建会用 'wb' 截断重写、'r+b' 原地改写同一
+        # 缓存文件，并发进入会互相踩出损坏缓存。
+        self._open_lock = threading.RLock()
+        # A5：每个库的「连续重建失败轮数」（一轮 = 一次 _open 内 3 次重试
+        # 全部失败）。密钥失效时此前每秒原样重试、永不重提密钥；用它触发
+        # 密钥重提取自愈。读写都在 _open_lock 内，线程安全。
+        self._rebuild_failures: Dict[str, int] = {}
         self._db_files = self._collect_db_files()
         self.master_key: Optional[str] = None
         self.cfg_dword: Optional[int] = None
@@ -1436,6 +1445,30 @@ class WeChatDB:
     WAL_HEADER_SZ = 32   # WCDB WAL 文件头
     WAL_FRAME_SZ = 4120  # 帧头 24 字节(大端 pgno + 校验等) + 4096 加密页
 
+    # A5：连续重建失败达到该轮数即尝试重提取密钥自愈；之后每
+    # _KEY_REEXTRACT_REPEAT_EVERY 轮失败才再试一次，避免每秒全内存扫描。
+    _KEY_REEXTRACT_AFTER_ROUNDS = 3
+    _KEY_REEXTRACT_REPEAT_EVERY = 3
+
+    def _reextract_stale_key(self, rel: str) -> bool:
+        """A5 自愈：对疑似失效的库密钥重新从微信进程内存提取并校验。
+
+        微信重登会轮换库密钥：缓存密钥解不开新库，quick_check 永远不过。
+        只有当 extract_keys 重新提取的密钥能通过该库页 1 HMAC（_key_works，
+        与提取时的校验同一密码学判据）时才更新缓存，避免一次失败的提取
+        毁掉仍可用的好缓存。调用方持有 _open_lock，无需自行加锁。
+        """
+        try:
+            extracted = self.extract_keys()
+        except Exception:
+            # 微信未运行/权限不足等：提取不可用，交给上层抛 key_invalid
+            return False
+        if not extracted:
+            return False
+        self._keys.update(extracted)
+        self._save_keys()
+        return self._key_works(rel)
+
     def _auto_diagnose_key_failure(self, rel: str) -> None:
         """密钥缺失报错时的自动诊断，向 stderr 输出三项最常见根因：
         1) Python 位数（32 位 Python 读不了 64 位微信进程内存）；
@@ -1496,7 +1529,18 @@ class WeChatDB:
               "python -m wechatauto.diagnose_keys", file=sys.stderr)
 
     def _open(self, rel: str) -> sqlite3.Connection:
-        """打开解密(并合并 -wal 增量)后的只读库。
+        """打开解密(并合并 -wal 增量)后的只读库（串行化入口）。
+
+        C2：多线程并发调用 _open 时，解密缓存重建会并发截断/改写同一个
+        缓存文件（'wb' 全量重建、'r+b' 合并 WAL）。用实例级 RLock 把整条
+        路径（缓存命中判断 → 解密重建 → _merge_wal → quick_check）串行化；
+        RLock 可重入，防御 _open 内部路径再次调用 _open 造成自死锁。
+        """
+        with self._open_lock:
+            return self._open_locked(rel)
+
+    def _open_locked(self, rel: str) -> sqlite3.Connection:
+        """_open 的实际实现（调用方必须已持有 _open_lock）。
 
         解密结果缓存到 workdir；主库或 WAL 有变化时：
         - 主库被 checkpoint 改写（mtime/size 变化）或 WAL 被重置 → 全量重建；
@@ -1541,6 +1585,8 @@ class WeChatDB:
                 old = None
         build = (not old or old["mtime"] != src_mtime or old["size"] != src_size
                  or old["wal_mtime"] != wal_mtime or old["wal_size"] != wal_size)
+        # A5：本轮 _open 是否已尝试过密钥重提取（防同一轮内反复内存扫描）
+        rotated = False
         attempt = 0
         while build:
             attempt += 1
@@ -1556,13 +1602,41 @@ class WeChatDB:
             else:
                 applied = 0
             if self._check_merged(dst):
+                # A5：重建成功即清零该库的连续失败计数
+                self._rebuild_failures.pop(rel, None)
                 build = False
                 os.makedirs(os.path.dirname(stamp), exist_ok=True)
                 with open(stamp, "w") as f:
                     f.write("%d,%r,%d,%r,%d,%d"
                             % (STAMP_VERSION, src_mtime, src_size, wal_mtime, wal_size, applied))
             elif attempt >= 3:
-                raise RuntimeError("数据库合并失败(文件被微信并发改写): %s" % rel)
+                # A5：微信重登轮换库密钥后，启动缓存的 self._keys[rel] 解不开
+                # 新库，此前这里每秒原样重试、永不重提密钥（死循环）。改为按
+                # 「连续重建失败轮数」计数，达到阈值时重新提取密钥自愈；仍
+                # 失败则抛出 key_invalid 明确错误，便于上游观测与告警。
+                failures = self._rebuild_failures.get(rel, 0) + 1
+                self._rebuild_failures[rel] = failures
+                if (
+                    failures >= self._KEY_REEXTRACT_AFTER_ROUNDS
+                    and failures % self._KEY_REEXTRACT_REPEAT_EVERY == 0
+                    and not rotated
+                ):
+                    rotated = True
+                    if self._reextract_stale_key(rel):
+                        print("[wechatauto] 密钥已重新提取成功，重建 %s" % rel,
+                              file=sys.stderr)
+                        # 换上新密钥后给一次全新的重建预算
+                        self._rebuild_failures.pop(rel, None)
+                        key = self._keys[rel]
+                        old = None
+                        attempt = 0
+                        continue
+                raise RuntimeError(
+                    "key_invalid: 数据库连续 %d 轮重建失败，密钥可能已因微信"
+                    "重登失效: %s。已尝试自动重提取密钥仍无法解密，请重启微信"
+                    "（保持登录窗口打开）后重试；也可删除密钥缓存后重试: %s"
+                    % (failures, rel, self.keys_file)
+                )
             else:
                 old = None  # 合并结果损坏 → 全量重建重试
         conn = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)

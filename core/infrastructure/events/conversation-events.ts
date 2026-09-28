@@ -27,7 +27,10 @@ export type ConversationEventType =
   | "brief_updated"
   | "conversation_updated"
   /** 发送期插话闸门：agent 回复分段因客户插话被扣留（剩余分段置 held） */
-  | "reply_interrupted";
+  | "reply_interrupted"
+  /** 群聊降噪：纯噪声文本在闸门处被跳过（不建轮不烧模型），仅广播
+   *  便于排障「客户在群里说话了但 bot 没反应」的可见性，不落库。 */
+  | "group_noise_skipped";
 
 export type ConversationEvent = {
   type: ConversationEventType;

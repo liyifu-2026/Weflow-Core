@@ -58,6 +58,26 @@ from PIL import Image
 
 from wechatauto.logger import wxlog
 from wechatauto.param import WxResponse
+from wechatauto.utils.lock import uilock
+
+# ---------------------------------------------------------------------------
+# UI 锁边界（C3·P1 修复）：
+# 本模块所有「注入键鼠 / 抢焦点 / 切窗口」的对外入口都加 @uilock
+# （wechatauto/utils/lock.py 的进程级 LockManager），与
+#   * wechatauto/media.py MediaDownloader.download_image_original（原图 UI
+#     下载：ChatWith + real_click + ESC），
+#   * channel_host/media.py _UiOriginalTrigger（后台原图下载线程），
+#   * wx.py 既有 @uilock 方法（ChatWith / SendMsg 等）
+# 共用同一把进程级 UI 锁，保证发送线程与原图下载线程不会并发驱动微信窗口
+# （否则键鼠交叉、会话被切走，文本可能发进错误会话）。
+# LockManager 同线程可重入：send_msg → open_chat → input_text → click_send
+# 的内层嵌套获取不会死锁。
+# 明确不加锁（读操作，不注入输入）：_find_main_window / _find_render_window
+# （纯 EnumWindows 枚举）、ocr / _grab_screen（纯截屏）、get_input_box 等
+# 像素探测。加锁只到「操作序列」粒度（对外入口），绝不下沉到
+# real_click / key 等原子原语——原语级加锁会把一次发送的 Ctrl+A/Del/Ctrl+V
+# 序列劈开，反而重新引入交叉窗口。
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # DPI：模块加载时立即设为 PER_MONITOR_AWARE_V2，保证后续所有
@@ -882,6 +902,7 @@ class WeChatGUI:
     # ------------------------------------------------------------------
     # 前台与可用性
     # ------------------------------------------------------------------
+    @uilock
     def bring_to_front(self, keep_topmost: bool = False) -> bool:
         """将微信窗口置为前台，返回是否成功。
 
@@ -977,6 +998,7 @@ class WeChatGUI:
             wxlog.info(f'自动最小化遮挡窗口 {len(targets)} 个')
         return len(targets)
 
+    @uilock
     def ensure_visible(self) -> bool:
         """自动最小化遮挡窗口并把微信置于前台。
 
@@ -1308,6 +1330,7 @@ class WeChatGUI:
                 wxlog.debug('初始化 UIA 引擎失败：%s', e)
         return self._uia
 
+    @uilock
     def open_chat(self, name: str, exact: bool = False) -> bool:
         """打开指定会话的聊天窗口（优先 UIA，其次 OCR 侧栏/搜索）。
 
@@ -1552,6 +1575,7 @@ class WeChatGUI:
                 return (self.right_pane_left, y0_abs, self.render_w, y1_abs)
         return None
 
+    @uilock
     def focus_input(self, box: Optional[Tuple[int, int, int, int]] = None) -> bool:
         """点击输入框文本区使其获得焦点。返回是否检测到输入框。
 
@@ -1579,6 +1603,7 @@ class WeChatGUI:
         pyperclip.copy(text)
         time.sleep(0.2)
 
+    @uilock
     def input_text(self, text: str,
                    box: Optional[Tuple[int, int, int, int]] = None,
                    fast: bool = False) -> bool:
@@ -1675,6 +1700,7 @@ class WeChatGUI:
     # ------------------------------------------------------------------
     # 发送
     # ------------------------------------------------------------------
+    @uilock
     def click_send(self, fast: bool = False) -> bool:
         """发送消息并确认输入框已清空。
 
@@ -1725,6 +1751,7 @@ class WeChatGUI:
                 return True
         return False
 
+    @uilock
     def send_msg(self, text: str, who: Optional[str] = None,
                  verify: bool = False) -> WxResponse:
         """发送一条文本消息。
@@ -1984,6 +2011,7 @@ class WeChatGUI:
             wxlog.debug(f'打开会话后未检测到输入框，重试 open_chat({who})')
         return bool(self.get_input_box())
 
+    @uilock
     def send_file(self, path: str, who: Optional[str] = None,
                   verify: bool = False) -> WxResponse:
         """发送本地文件（剪贴板粘贴路线）。"""
@@ -2006,6 +2034,7 @@ class WeChatGUI:
                     if ok else WxResponse.failure('文件已操作发送，但数据库未确认', data={'path': path}))
         return WxResponse.success(f'文件已发送：{path}', data={'path': path})
 
+    @uilock
     def send_image(self, path: str, who: Optional[str] = None,
                    verify: bool = False) -> WxResponse:
         """发送本地图片（剪贴板粘贴路线，微信自动作为图片消息插入）。"""
@@ -2097,6 +2126,7 @@ class WeChatGUI:
             return None
         return max(100, box[1] - 80)
 
+    @uilock
     def reply_msg(self, text: str, who: Optional[str] = None,
                   target_text: Optional[str] = None, verify: bool = False) -> WxResponse:
         """回复最近一条消息（悬停消息 → 点击「回复」→ 输入 → 发送）。
@@ -2169,6 +2199,7 @@ class WeChatGUI:
                 best = (x + w // 2, cy)
         return best
 
+    @uilock
     def quote_msg(self, text: str, who: Optional[str] = None,
                   target_text: Optional[str] = None, verify: bool = False) -> WxResponse:
         """引用指定/最近一条消息（右键 → 菜单「引用」→ 输入 → 发送）。
@@ -2226,6 +2257,7 @@ class WeChatGUI:
     # ------------------------------------------------------------------
     # 艾特成员（群聊）
     # ------------------------------------------------------------------
+    @uilock
     def at_member(self, member: str, text: str, who: Optional[str] = None,
                   verify: bool = False) -> WxResponse:
         """在群聊中 @ 成员后追加发送 text。

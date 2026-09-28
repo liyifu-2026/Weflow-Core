@@ -17,14 +17,20 @@ import {
   SCHEDULE_SEND_RANGE,
 } from "./decision-contract.js";
 
-/** LLM 输出的原始 JSON Schema（snake_case 字段，与提示词对齐） */
+/** LLM 输出的原始 JSON Schema（snake_case 字段，与提示词对齐）
+ *
+ * 长度上限采取「宽松受理 + 收敛」而非 strict 拒绝：模型输出略超限
+ * （facts_card 多写一条、reply_text 超过单段 500 字）曾直接炸掉整个
+ * 决策 → 重试 3 次耗尽转人工，与 sanitize「宁可残缺不可阻断」的契约
+ * 相悖。此处只拒绝结构性错误（未知动作码、缺必填字段），量的问题交给
+ * transform 拆分/截断与处置层 sanitize。 */
 const decisionInputSchema = z
   .object({
-    reply_text: z.string().trim().min(1).max(2_000).optional(),
+    reply_text: z.string().trim().min(1).max(4_000).optional(),
     reply_segments: z
-      .array(z.string().trim().min(1).max(500))
+      .array(z.string().trim().min(1).max(2_000))
       .min(1)
-      .max(MAX_REPLY_SEGMENTS)
+      .max(MAX_REPLY_SEGMENTS * 4)
       .optional(),
     next_action: z.enum(NEXT_ACTION_VALUES),
     no_action_reason: z.enum(NO_ACTION_REASONS).optional(),
@@ -32,11 +38,10 @@ const decisionInputSchema = z
     risk_level: z.enum(["low", "medium", "high"]),
     handoff_briefing: z
       .object({
-        problem_summary: z.string().trim().min(1).max(1_000),
-        unresolved_items: z.array(z.string().trim().min(1).max(500)).max(20),
-        suggested_first_reply: z.string().trim().min(1).max(1_000),
+        problem_summary: clampString(1_000),
+        unresolved_items: z.array(clampString(500)).max(40).optional(),
+        suggested_first_reply: clampString(1_000),
       })
-      .strict()
       .optional(),
     knowledge_query: z.string().trim().min(1).max(1_000).optional(),
     tool: z
@@ -62,15 +67,15 @@ const decisionInputSchema = z
     closure_summary: z.string().trim().min(1).max(1_000).optional(),
     // 会话事实卡（私聊批）：模型对持久工作状态的全量更新；咨询性数据，
     // 处置层经 sanitize 收敛后落 agent.fact_cards，下回合开头注入。
+    // 未知键剥离、超限截断（不 strict：多写一个键就炸整轮的代价远大于收益）。
     facts_card: z
       .object({
-        problem: z.string().max(500).optional(),
-        confirmed_facts: z.array(z.string().max(200)).max(20).optional(),
-        attempted: z.array(z.string().max(200)).max(20).optional(),
-        promises: z.array(z.string().max(200)).max(20).optional(),
-        open_questions: z.array(z.string().max(200)).max(20).optional(),
+        problem: clampString(500).optional(),
+        confirmed_facts: z.array(clampString(200)).max(40).optional(),
+        attempted: z.array(clampString(200)).max(40).optional(),
+        promises: z.array(clampString(200)).max(40).optional(),
+        open_questions: z.array(clampString(200)).max(40).optional(),
       })
-      .strict()
       .optional(),
   })
   .strict()
@@ -170,33 +175,78 @@ const decisionInputSchema = z
     }
   });
 
+/** 受理宽松、落点收敛：超长字符串截断（嵌套对象 schema 用，不拒绝） */
+function clampString(max: number) {
+  return z.string().transform((value) => value.trim().slice(0, max));
+}
+
+/**
+ * 把超过单段上限的回复拆成 ≤500 字的多段。
+ * 501–2000 字的合法长回复过去直接炸段校验（reply_segment_too_long）→
+ * 整轮静默 failed：不回复、也不转人工。现在在契约层拆分，优先在
+ * 标点/空白处断开避免句子腰斩；拆出的段数超出上限时截断并标记省略号
+ * （降级为部分送达，仍好过整轮沉默）。
+ */
+function splitSegment(segment: string, max = 500): string[] {
+  if (segment.length <= max) return [segment];
+  const chunks: string[] = [];
+  let rest = segment.trim();
+  while (rest.length > max) {
+    const window = rest.slice(0, max);
+    const candidates = [
+      window.lastIndexOf("。"),
+      window.lastIndexOf("！"),
+      window.lastIndexOf("？"),
+      window.lastIndexOf("；"),
+      window.lastIndexOf("\n"),
+      window.lastIndexOf(" "),
+    ].filter((index) => index >= max - 120);
+    const cut = candidates.length > 0 ? Math.max(...candidates) + 1 : max;
+    chunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) chunks.push(rest);
+  return chunks.filter((chunk) => chunk.length > 0);
+}
+
 /** 将 LLM 输出的 snake_case 字段转换为内部 camelCase 格式 */
-const decisionSchema = decisionInputSchema.transform((value) => ({
-  replySegments: value.reply_segments ?? [value.reply_text ?? ""],
-  replyText: (value.reply_segments ?? [value.reply_text ?? ""]).join("\n\n"),
-  nextAction: value.next_action,
-  noActionReason: value.no_action_reason,
-  requiresHuman: value.requires_human,
-  riskLevel: value.risk_level,
-  tool: value.tool,
-  knowledgeQuery: value.knowledge_query,
-  waitMs: value.wait_ms,
-  nudgeText: value.nudge_text,
-  scheduledMessage: value.scheduled_message,
-  scheduledSendAt: value.scheduled_send_at
-    ? new Date(value.scheduled_send_at)
-    : undefined,
-  closureSummary: value.closure_summary,
-  // 放宽为 Record：策略路径经 meta 透传（unknown），处置层统一 sanitize
-  factsCard: value.facts_card as Record<string, unknown> | undefined,
-  handoffBriefing: value.handoff_briefing
-    ? {
-        problemSummary: value.handoff_briefing.problem_summary,
-        unresolvedItems: value.handoff_briefing.unresolved_items,
-        suggestedFirstReply: value.handoff_briefing.suggested_first_reply,
-      }
-    : undefined,
-}));
+const decisionSchema = decisionInputSchema.transform((value) => {
+  const rawSegments = value.reply_segments ?? [value.reply_text ?? ""];
+  const split = rawSegments.flatMap((segment) => splitSegment(segment));
+  const replySegments =
+    split.length > MAX_REPLY_SEGMENTS
+      ? [
+          ...split.slice(0, MAX_REPLY_SEGMENTS - 1),
+          `${split[MAX_REPLY_SEGMENTS - 1]}…`,
+        ]
+      : split;
+  return {
+    replySegments,
+    replyText: replySegments.join("\n\n"),
+    nextAction: value.next_action,
+    noActionReason: value.no_action_reason,
+    requiresHuman: value.requires_human,
+    riskLevel: value.risk_level,
+    tool: value.tool,
+    knowledgeQuery: value.knowledge_query,
+    waitMs: value.wait_ms,
+    nudgeText: value.nudge_text,
+    scheduledMessage: value.scheduled_message,
+    scheduledSendAt: value.scheduled_send_at
+      ? new Date(value.scheduled_send_at)
+      : undefined,
+    closureSummary: value.closure_summary,
+    // 放宽为 Record：策略路径经 meta 透传（unknown），处置层统一 sanitize
+    factsCard: value.facts_card as Record<string, unknown> | undefined,
+    handoffBriefing: value.handoff_briefing
+      ? {
+          problemSummary: value.handoff_briefing.problem_summary,
+          unresolvedItems: value.handoff_briefing.unresolved_items ?? [],
+          suggestedFirstReply: value.handoff_briefing.suggested_first_reply,
+        }
+      : undefined,
+  };
+});
 
 /** Agent 决策的内部类型（camelCase） */
 export type AgentDecision = z.infer<typeof decisionSchema>;

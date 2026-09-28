@@ -13,6 +13,7 @@ import threading
 from typing import Callable, Optional
 
 from .event_store import EventStore
+from wechatauto.utils.lock import LockManager
 
 
 # 原图 UI 下载（WECHAT_MEDIA_ORIGINAL_VIA_UI=1）的后台结果缓存目录名
@@ -284,12 +285,20 @@ class _UiOriginalTrigger:
             result_dir = self._root / _safe_dir_name(media_ref)
             result_dir.mkdir(parents=True, exist_ok=True)
             try:
-                path = self._downloader.download_image_original(
-                    conversation_ref,
-                    local_id,
-                    save_dir=str(result_dir),
-                    timeout=45.0,
-                )
+                # C3·P1：与发送路径（wechatauto/guia.py 的 send_msg / open_chat
+                # 等 @uilock 入口）共用同一把进程级 UI 锁。真实的
+                # MediaDownloader.download_image_original 内部也持同一把锁
+                # （LockManager 同线程可重入，此处再包一层不会死锁）；触发器
+                # 这一层再显式获取，是为了对「download_image_original 未自带
+                # 锁的 downloader 实现」也保证互斥——绝不允许 UI 原图下载线程
+                # 与发送线程并发驱动微信窗口（键鼠交叉会把文本送进错误会话）。
+                with LockManager.acquire():
+                    path = self._downloader.download_image_original(
+                        conversation_ref,
+                        local_id,
+                        save_dir=str(result_dir),
+                        timeout=45.0,
+                    )
             except Exception as error:
                 print(f"[media-original] ui download failed: {type(error).__name__}: {error}")
                 return

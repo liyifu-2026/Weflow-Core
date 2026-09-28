@@ -51,6 +51,21 @@ class FakeWeChatDb:
     def get_self_info(self):
         return {"username": "wxid_self"}
 
+    def is_self_sender(self, sender_id, conversation_ref=None):
+        # 对齐真实 WeChatDB.is_self_sender 的契约（单一事实源重构后 host
+        # 委托此方法；替身缺失会让 _is_self_sender 走 except 分支恒 False，
+        # 断言失败又跳过 store.close()，在 Windows 上以 PermissionError
+        # 的面目出现）。语义：字符串身份比 self username；数字行号退回
+        # 经典约定 2=自己。
+        if sender_id is None:
+            return False
+        if isinstance(sender_id, str):
+            return sender_id == "wxid_self"
+        try:
+            return int(sender_id) == 2
+        except (TypeError, ValueError):
+            return False
+
 
 def _emotion(local_id, sort_seq, content, sender_id="wxid-contact"):
     return {

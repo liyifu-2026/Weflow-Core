@@ -114,7 +114,8 @@ export async function processDueSessionWakes(
         .insert(schema.agentTurns)
         .values({
           turnId: `turn:wake:${String(input.wakeId)}`,
-          triggerMessageId: null as never,
+          // 唤醒续轮没有客户触发消息（0081 起该列允许 NULL）
+          triggerMessageId: null,
           conversationId: input.conversationId,
           status: "queued",
           traceId: `session-wake:${String(input.wakeId)}`,

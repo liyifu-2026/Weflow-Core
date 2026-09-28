@@ -36,6 +36,7 @@ class ChannelHostHttpServer:
         key_refresh: Optional[Callable[[], bool]] = None,
         account: Optional[str] = None,
         backfill_runner=None,
+        runtime_health: Optional[dict] = None,
     ):
         if not token:
             raise ValueError("channel host token is required")
@@ -44,6 +45,12 @@ class ChannelHostHttpServer:
         self.host = host
         self.port = port
         self.wechat_process_alive = wechat_process_alive
+        # A4：主循环运行时健康状态（main.py 维护的进程内 dict，含
+        # last_poll_ok_at / last_poll_error / consecutive_poll_failures）。
+        # 之前从未注入，捕获链路静默停摆（微信退出/密钥失效/轮询异常）
+        # 时 Core 通过 /status 完全不可观测。未注入时保持空 dict，响应
+        # 字段退化到既有取值，向后兼容。
+        self.runtime_health = runtime_health if isinstance(runtime_health, dict) else {}
         self.media_resolver = media_resolver
         self.contact_reader = contact_reader
         self.key_refresh = key_refresh
@@ -164,6 +171,7 @@ class ChannelHostHttpServer:
                     if self.wechat_process_alive is not None
                     else None
                 )
+                health = self.runtime_health
                 _write_json(
                     handler,
                     HTTPStatus.OK,
@@ -171,6 +179,14 @@ class ChannelHostHttpServer:
                         "host_alive": True,
                         "wechat_process_alive": process_alive,
                         "db_readable": self.event_store.readable(),
+                        # A4：捕获链路健康增量字段（保留既有字段不动，纯增量
+                        # 向后兼容）。last_poll_ok_at 长时间不前进 +
+                        # consecutive_poll_failures 持续增长 = 轮询停摆信号。
+                        "last_poll_ok_at": health.get("last_poll_ok_at"),
+                        "last_poll_error": health.get("last_poll_error"),
+                        "consecutive_poll_failures": int(
+                            health.get("consecutive_poll_failures") or 0
+                        ),
                     },
                 )
                 return

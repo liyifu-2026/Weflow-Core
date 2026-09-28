@@ -15,6 +15,7 @@ import {
   resolveWebDistDir,
 } from "../../infrastructure/http/web-static.js";
 import { startAgentTurnDispatcher } from "../../infrastructure/redis/agent-turn-dispatcher.js";
+import { staleRunningTurnThresholdMs } from "../../modules/conversations/application/agent-turn-scheduling-policy.js";
 import { loadInstalledBackendPlugins } from "../../infrastructure/solutions/backend-plugin-loader.js";
 import { startMemoryCaptureDispatcher } from "../../infrastructure/redis/memory-capture-dispatcher.js";
 import { startMediaProcessingDispatcher } from "../../infrastructure/redis/media-processing-dispatcher.js";
@@ -260,6 +261,11 @@ await runProcess({
       db: postgres.db,
       redisUrl: config.redisUrl,
       logger,
+      // STALE 阈值随决策超时推导（2×超时+60s）：90s 固定值小于 180s 决策
+      // 超时，thinking 模型长思考会被误回收 → 整轮回滚重烧模型。
+      staleRunningTurnThresholdMs: staleRunningTurnThresholdMs(
+        config.model?.decisionTimeoutMs ?? 180_000,
+      ),
     });
     // 启动内存捕获调度器，异步处理对话记忆的持久化
     const stopMemoryCaptureDispatcher = startMemoryCaptureDispatcher({

@@ -37,11 +37,21 @@ SEND_EXECUTION_TIMEOUT_SECONDS = float(
     os.getenv("CHANNEL_HOST_SEND_TIMEOUT_SECONDS", "180")
 )
 
-# 发送执行器固定单线程：GUI 自动化不可并发。上一次操作仍卡着时，新操作不再
-# 进入 UI（排队只会连带卡住轮询），直接判 unknown 并继续后续轮询。
+# 发送执行器固定单线程：GUI 自动化不可并发。上一次操作仍卡着时（超时放弃
+# 等待后 UI 线程可能仍在后台跑），后续操作在认领（claim）之前就被拦下——
+# 保持 pending 等下一轮重试，绝不 finish 成 unknown：消息从未进过 UI 就判
+# 「已发出但无法确认」，Core 不会重发，消息会静默丢失（A2）。且一旦 claim，
+# 操作进入 executing + 60s 租约，租约到期只能走对账路径被终态化，无法回到
+# pending，所以拦截必须发生在 claim 之前。
 _SEND_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="send-op")
 _SEND_LOCK = threading.Lock()
 _SEND_PENDING: Optional[Future] = None
+
+
+def _send_executor_busy() -> bool:
+    """A2：发送执行器是否仍被上一条操作占用（挂起的 UI 自动化线程）。"""
+    with _SEND_LOCK:
+        return _SEND_PENDING is not None and not _SEND_PENDING.done()
 
 
 # A GUI send may already have succeeded while the WeChat database is still
@@ -484,16 +494,29 @@ def process_send_operations(
             processed += 1
             continue
 
+        # A2：执行器仍被上一条操作占着（如超时后 UI 线程还在后台跑）时，
+        # 在认领之前直接跳过本轮，操作保持 pending 等下一轮重试。此前这里
+        # 照常认领后把操作 finish 成 unknown 终态——消息从未进过 UI 却被判
+        # 「已发出但无法确认」，Core 不重发，消息静默丢失。日志只打一行，
+        # 不刷屏（卡死期间每轮都会经过这里）。
+        if _send_executor_busy():
+            print(
+                f"[send] executor busy; deferring send operation "
+                f"{operation_id} (kept pending)"
+            )
+            continue
+
         baseline = (
             existing_baseline
             if existing_baseline is not None
             else sender.current_high_water(conversation_ref)
         )
-        claim = event_store.claim_send_operation(operation_id, baseline)
-        if claim is None:
-            continue
 
-        # Pre-send reconciliation: only applicable to text sends.
+        # A2：text 预对账（含载荷校验）提前到认领之前。对账只是读微信库
+        # 查证「是否早已发过」，查询抛异常（DB 瞬时不可读/合并失败）不代表
+        # 发送失败，保持 pending 跳过本轮、下一轮自然重试；此前在认领后
+        # finish 成 unknown，Core 不再重发 → 消息静默丢失。baseline 与
+        # claim.baseline_sort_seq 取值一致（认领时原样落库），提前不影响语义。
         if kind == "text":
             text = payload.get("text")
             if not isinstance(text, str) or not text.strip():
@@ -506,15 +529,14 @@ def process_send_operations(
                 continue
             try:
                 existing_message_id = sender.find_self_text_after(
-                    conversation_ref, text, claim.baseline_sort_seq
+                    conversation_ref, text, baseline
                 )
             except Exception as error:
-                event_store.finish_send_operation(
-                    operation_id,
-                    "unknown",
-                    error=f"send_reconciliation_failed:{_error_text(error)}",
+                print(
+                    f"[send] reconciliation lookup failed; deferring send "
+                    f"operation {operation_id} (kept pending): "
+                    f"{_error_text(error)}"
                 )
-                processed += 1
                 continue
             if existing_message_id is not None:
                 event_store.finish_send_operation(
@@ -524,6 +546,10 @@ def process_send_operations(
                 )
                 processed += 1
                 continue
+
+        claim = event_store.claim_send_operation(operation_id, baseline)
+        if claim is None:
+            continue
 
         attempt = _dispatch_send_bounded(sender, conversation_ref, payload)
         if attempt.state == "confirmed":
@@ -677,8 +703,9 @@ def _dispatch_send_bounded(
 
     GUI 自动化里的阻塞点（WinRT OCR、UIA 热激活、剪贴板）无法从 Python 侧
     取消，超时只能放弃等待、按 unknown 记账（已发出但未确认的消息不重发）。
-    单线程执行器 + 挂起探针保证：上一次仍卡着时，这一次立刻判 unknown，
-    既不进 UI 也不让轮询陪着一起等。
+    执行器忙时的拦截已上移到 process_send_operations 认领之前（A2：保持
+    pending 跳过本轮，绝不 finish 成 unknown）；这里的忙检查只作为防线
+    兜底（正常单线程调用方到不了这里），语义保持不变。
     """
     global _SEND_PENDING
     timeout = (

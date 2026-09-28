@@ -120,6 +120,10 @@ export function registerAssetRoutes(
     reply.header("content-type", content.mimeType);
     reply.header("cache-control", "private, max-age=3600");
     reply.header("x-content-type-options", "nosniff");
+    // 强制 attachment（与 media 模块对齐）：mimeType 取自客户端上传时声明，
+    // 黑名单不含 text/html——内联渲染同源 HTML 即存储型 XSS。<img> 缩略图
+    // 预览不受 content-disposition 影响，仅直链导航变为下载。
+    reply.header("content-disposition", "attachment");
     return reply.send(storage.read(content.storageKey));
   });
 

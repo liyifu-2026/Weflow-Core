@@ -6,9 +6,10 @@
 
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { and, asc, eq, gt, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, lt, ne, or } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import * as schema from "../../../infrastructure/postgres/schema.js";
+import { ChannelSendConflictError } from "../../../infrastructure/channel/http-channel-provider.js";
 import {
   stageOutboundMedia,
   tryCleanupOutboundMediaStaging,
@@ -41,6 +42,22 @@ import type { RuntimeSettings } from "../../operations/application/runtime-setti
 // 纯决策核（分段阻塞/打字节拍/kill-switch）收敛在 outbound-step-decision；
 // 此处保持既有导出路径，节奏测试与外消费方不受迁移影响。
 export { interSegmentDelayMs };
+
+/**
+ * 媒体暂存持续失败放弃阈值。磁盘文件丢失（stored_files 行在、文件没了）
+ * 不会自愈：若永远按瞬时故障重试，这条死消息会每 500ms 占一次出站扫描窗，
+ * 攒满 limit 后全局出站饿死（队头阻塞）。距上次状态变更超过阈值仍失败
+ * 即终态化为 failed，让出扫描窗（见扫描循环内的暂存 catch）。
+ */
+const MEDIA_STAGING_FAILURE_GIVE_UP_MS = 30 * 60 * 1000;
+
+/**
+ * unknown 终态的延迟对账窗口。unknown 留在出站扫描窗只为对 host 延迟对账
+ * 补 confirmed；超过窗口仍未对出来的 unknown 是永远无法终态化的死消息，
+ * 继续占窗会攒满 limit 把全局出站饿死（队头阻塞）。窗口内 unknown 照常
+ * 对账，行为不变（见扫描查询的 where 条件）。
+ */
+const UNKNOWN_RECONCILE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** 出站媒体信息（从 mediaAssets + storedFiles 查询） */
 type OutboundMediaInfo = {
@@ -85,6 +102,8 @@ export async function processOutboundMessages(
       contentType: schema.messages.contentType,
       chatType: schema.conversations.chatType,
       createdAt: schema.messages.createdAt,
+      // 暂存失败「持续多久」的判定基准（sendUpdatedAt 空则回落 createdAt）
+      sendUpdatedAt: schema.messages.sendUpdatedAt,
     })
     .from(schema.messages)
     .innerJoin(
@@ -94,6 +113,17 @@ export async function processOutboundMessages(
     .where(
       and(
         inArray(schema.messages.sendState, [...OUTBOUND_LOOP_SEND_STATES]),
+        // unknown 是终态，留在扫描窗只为对 host 延迟对账补 confirmed。
+        // 超过窗口仍未对出来的 unknown 无法终态化，是死消息：继续占窗
+        // 会在攒满 limit(20) 后把全局出站饿死（队头阻塞——排在其后的
+        // pending 永远进不了扫描结果）。窗口内 unknown 照常对账，行为不变。
+        or(
+          ne(schema.messages.sendState, SEND_STATE.unknown),
+          gt(
+            schema.messages.sendUpdatedAt,
+            new Date(Date.now() - UNKNOWN_RECONCILE_WINDOW_MS),
+          ),
+        ),
         options.conversationId
           ? eq(schema.messages.conversationId, options.conversationId)
           : undefined,
@@ -304,8 +334,14 @@ export async function processOutboundMessages(
     }
 
     // 查询媒体信息（如果消息是媒体类型）。
-    // 暂存失败（存储文件缺失/IO 错误）按瞬时故障处理：保持 pending/submitting，
-    // 本轮跳过、下轮轮询重试；绝不标记 unknown（ADR：unknown 无操作不可自动重建）。
+    // 暂存失败（存储文件缺失/IO 错误）默认按瞬时故障处理：保持
+    // pending/submitting，本轮跳过、下轮轮询重试；绝不标记 unknown
+    // （ADR：unknown 无操作不可自动重建）。
+    // 但磁盘文件丢失这类故障不会自愈——若永远按瞬时重试，这条死消息会
+    // 每轮占一次出站扫描窗，攒满 limit 后全局出站饿死（队头阻塞）。因此
+    // 持续失败超过 MEDIA_STAGING_FAILURE_GIVE_UP_MS（以 sendUpdatedAt 或
+    // createdAt 计）即终态化为 failed 让出扫描窗；新鲜失败仍按瞬时处理
+    // （可能只是单次 IO 抖动）。
     let mediaInfo: OutboundMediaInfo | null = null;
     if (message.contentType === "media" && options.fileStorageRoot) {
       try {
@@ -315,6 +351,23 @@ export async function processOutboundMessages(
           options.fileStorageRoot,
         );
       } catch (error) {
+        const failingSince = message.sendUpdatedAt ?? message.createdAt;
+        const failingForMs = Date.now() - failingSince.getTime();
+        if (failingForMs > MEDIA_STAGING_FAILURE_GIVE_UP_MS) {
+          options.logger?.warn?.(
+            { messageId: message.messageId, failingForMs },
+            "outbound media staging failed persistently; marked failed",
+          );
+          await db
+            .update(schema.messages)
+            .set({
+              sendState: SEND_STATE.failed,
+              sendError: "media_staging_failed",
+              sendUpdatedAt: new Date(),
+            })
+            .where(eq(schema.messages.messageId, message.messageId));
+          continue;
+        }
         options.logger?.warn?.(
           { err: error, messageId: message.messageId },
           "outbound media staging failed; will retry next cycle",
@@ -343,10 +396,19 @@ export async function processOutboundMessages(
       });
     } catch (error) {
       // 单条隔离：Host 以 400/413/422 拒收说明该消息 payload 本身无效
-      // （协议字段缺失、非法、过大），原样重试无意义。标记 failed 终态
-      // 并继续处理后续消息；认证/冲突/传输类故障仍中断整轮等待下一轮
-      // 重试，避免一条毒消息队头堵塞冻结整个出站队列。
+      // （协议字段缺失、非法、过大）；409（account_mismatch /
+      // send_operation_identity_conflict，如账号改名 / fileStorageRoot
+      // 变更导致 payload 与既有操作身份不一致）说明这条消息在当前账号/
+      // 身份前提下永远发不出去。同为「原样重试无意义」的毒消息：标
+      // failed 终态并继续处理后续消息；认证/传输类故障仍中断整轮等待
+      // 下一轮重试，避免一条毒消息队头堵塞冻结整个出站队列。
+      // identity_conflict 语义即「这条永远发不出去」，标 failed 正确，
+      // 不自动换 opId 重试。
       if (error instanceof ChannelSendRejectedError) {
+        const sendError =
+          error instanceof ChannelSendConflictError
+            ? `channel_rejected_http_409_${error.reason}`
+            : `channel_rejected_http_${String(error.httpStatus)}`;
         options.logger?.warn?.(
           { messageId: message.messageId, httpStatus: error.httpStatus },
           "outbound message rejected by channel host; marked failed",
@@ -355,7 +417,7 @@ export async function processOutboundMessages(
           .update(schema.messages)
           .set({
             sendState: SEND_STATE.failed,
-            sendError: `channel_rejected_http_${String(error.httpStatus)}`,
+            sendError,
             sendUpdatedAt: new Date(),
           })
           .where(eq(schema.messages.messageId, message.messageId));

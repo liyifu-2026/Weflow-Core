@@ -160,6 +160,20 @@ export class ChannelProviderError extends Error {
   }
 }
 
+/**
+ * Host 以 409 拒收发送操作（account_mismatch / send_operation_identity_conflict）。
+ * 与 400/413/422 同属「这条消息本身发不出去」的错误：账号改名或
+ * fileStorageRoot 变更导致 payload 与既有操作身份不一致时，这条消息在当前
+ * 前提下永远发不出去。若按通用 HTTP 错误中断整轮，一条毒消息会让所有会话
+ * 的出站每轮炸停（队头阻塞）且它永远 pending——必须单条隔离。
+ * reason 保留 host 返回的错误码，供出站循环写入 send_error 供排障检索。
+ */
+export class ChannelSendConflictError extends ChannelSendRejectedError {
+  public constructor(public readonly reason: string) {
+    super(409, `Host rejected request with 409: ${reason}`);
+  }
+}
+
 export type HttpChannelProviderOptions = {
   baseUrl: string;
   token: string;
@@ -369,6 +383,9 @@ export class HttpChannelProvider
           ...input,
           ...(input.account ? { account: input.account } : {}),
         }),
+        // 仅 send 端点把 409 翻译为单条隔离错误；sync/backfill 等管理端点
+        // 的 409（store_not_empty）语义完全不同，仍走通用 HTTP 错误。
+        isolateOnConflict: true,
       },
     );
     return parseSendOperation(response);
@@ -498,9 +515,13 @@ export class HttpChannelProvider
 
   async #request(
     url: string,
-    init: RequestInit & { allowNotFound?: boolean },
+    init: RequestInit & {
+      allowNotFound?: boolean;
+      /** 409 时翻译为单条隔离错误（仅 POST /channel/send 使用） */
+      isolateOnConflict?: boolean;
+    },
   ): Promise<unknown> {
-    const { allowNotFound, ...requestInit } = init;
+    const { allowNotFound, isolateOnConflict, ...requestInit } = init;
     let response: Response;
     try {
       const headers = requestHeaders(init.headers);
@@ -519,9 +540,9 @@ export class HttpChannelProvider
     }
     if (response.status === 404 && allowNotFound) return undefined;
     if (!response.ok) {
-      // Host 明确拒收且属于「请求本身无效」（400/413/422：payload 非法、
-      // 过大、不可处理）——翻译为契约错误供出站循环做单条隔离。
-      // 401/403（认证配置）、404/405（协议/路由）、409（冲突/账号不匹配）
+      // Host 明确拒收且属于「这条消息本身发不出去」（400/413/422：payload
+      // 非法、过大、不可处理；409：账号不匹配/操作身份冲突）——翻译为契约
+      // 错误供出站循环做单条隔离。401/403（认证配置）、404/405（协议/路由）
       // 等不是单条消息的问题，仍按 HTTP 错误中断整轮，防止误杀整个队列。
       if (
         response.status === 400 ||
@@ -532,6 +553,22 @@ export class HttpChannelProvider
           response.status,
           `Host rejected request with ${String(response.status)}`,
         );
+      }
+      if (response.status === 409 && isolateOnConflict) {
+        // account_mismatch（发送目标账号与本实例不符，如账号改名）/
+        // send_operation_identity_conflict（同 operationId 身份不一致，
+        // 如 fileStorageRoot 变更导致 payload 不再匹配）：这条消息在当前
+        // 前提下永远发不出去（毒消息）。若走通用 HTTP 错误中断整轮，一条
+        // 毒消息会让所有会话的出站每轮炸停（队头阻塞）且它永远 pending；
+        // 翻译为单条隔离错误，由出站循环把该条标 failed，不做换 opId 重试。
+        let reason = "channel_conflict";
+        try {
+          const body = (await response.json()) as { error?: unknown };
+          if (typeof body.error === "string" && body.error) reason = body.error;
+        } catch {
+          // body 非 JSON（如反代错误页）时退回通用 reason，仍做单条隔离
+        }
+        throw new ChannelSendConflictError(reason);
       }
       throw new ChannelProviderError(
         "channel_http_error",

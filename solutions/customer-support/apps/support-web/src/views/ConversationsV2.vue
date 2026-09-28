@@ -59,14 +59,11 @@ const search = computed({
   get: () => workspace.search,
   set: (value: string) => (workspace.search = value),
 });
-const replyText = computed({
-  get: () => workspace.replyDraft,
-  set: (value: string) => (workspace.replyDraft = value),
-});
 
 // ---------- 模块组装（依赖单向，UI 编排经回调衔接） ----------
 const scroll = useTranscriptScroll({
   workspace,
+  getConversationId: () => selection.selectedId.value,
   onReloadCurrent: () => selection.select(selection.selectedId.value),
 });
 
@@ -97,6 +94,16 @@ const selection = useConversationSelection({
   },
   onConversationSelected: (id) => realtime.startLivePolling(id),
   onSettled: () => void actions.autoCheckUnknownOutcomes(),
+});
+
+// 草稿按会话键控（G1）：读写当前选中会话自己的草稿。若全局共享一条，
+// 切会话后残留文本会被发给另一个客户；键控后切回原会话草稿仍在。
+const replyText = computed({
+  get: () =>
+    workspace.replyDraftByConversation[selection.selectedId.value] ?? "",
+  set: (value: string) => {
+    workspace.replyDraftByConversation[selection.selectedId.value] = value;
+  },
 });
 
 const realtime = useConversationRealtime({
@@ -484,6 +491,10 @@ function searchKnowledge() {
         @load-contacts="(append: boolean) => loadContacts(append)"
       />
 
+      <!-- D1：can-claim-handoff 取自 Core 详情接口（GET /conversations/:id/handoff）
+           随 state 一起返回的 canClaim，用于门控 pending 态「接手处理」按钮——
+           无队列资格成员不再看到按钮。数据复用既有 handoff 详情装载（选中 +
+           静默刷新时已拉取），不新增请求；旧合同投影无该字段时 ChatPane fail-open。 -->
       <ChatPane
         ref="messagePaneHost"
         :selected="selected ?? null"
@@ -510,6 +521,7 @@ function searchKnowledge() {
         :can-transfer="canTransfer"
         :can-finish="canFinish"
         :handoff-status="handoff?.state?.status"
+        :can-claim-handoff="handoff?.state?.canClaim"
         :transfer-pending-label="transferPendingLabel"
         :can-reject-transfer="Boolean(handoff?.state?.canRejectTransfer)"
         v-model:reply-text="replyText"
