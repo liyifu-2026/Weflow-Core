@@ -151,8 +151,7 @@ async function requeueOrFailed(
     { conversationId: claimed.conversationId, error: message },
     "turn admission dispatch failed",
   );
-  const failed = claimed.revision >= MAX_ATTEMPTS && claimed.messageCount < 0; // revision 是窗口代数不是重试次数；重试上限看 attempt 列
-  void failed;
+  // 重试上限看 attempt 列（revision 是窗口代数不是重试次数）
   const nextAttempt = claimed.attempt + 1;
   await db
     .update(schema.turnAdmissionStates)
