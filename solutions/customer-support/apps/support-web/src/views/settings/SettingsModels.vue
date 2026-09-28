@@ -31,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { confirmDialog } from "@/components/confirm-dialog";
 import {
   CircleAlert,
   CircleCheck,
@@ -269,7 +270,7 @@ async function createModel() {
       timeoutMs: 60_000,
       failoverTo: null,
     };
-    notice.value = "模型已创建";
+    notice.value = "模型已创建；约 15 秒内生效";
     await load();
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "模型创建失败";
@@ -279,13 +280,19 @@ async function createModel() {
 }
 
 async function removeModel(model: ModelEntry) {
-  if (!window.confirm(`删除模型「${model.displayName}」？槽位绑定将指向空。`)) return;
+  if (
+    !(await confirmDialog(
+      `删除模型「${model.displayName}」？删除后不可恢复，绑定该模型的槽位将变为未绑定（使用首次部署默认配置）。`,
+      { danger: true },
+    ))
+  )
+    return;
   saving.value = true;
   try {
     await api(`/api/v1/admin/model-gateway/models/${encodeURIComponent(model.modelId)}`, {
       method: "DELETE",
     });
-    notice.value = "已删除";
+    notice.value = "已删除；约 15 秒内生效";
     await load();
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : "删除失败";
@@ -335,8 +342,8 @@ onMounted(load);
       <CardHeader>
         <CardTitle>模型槽位</CardTitle>
         <CardDescription>
-          槽位决定各业务环节用哪个模型。绑定后从注册表取端点与密钥；未绑定的槽位回落
-          .env 首次种子配置。
+          槽位决定各业务环节用哪个模型。绑定后从注册表取端点与密钥；未绑定的槽位
+          使用首次部署时的默认配置。
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -368,7 +375,7 @@ onMounted(load);
                 <SelectValue placeholder="选择模型" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem :value="NONE">未绑定（回落 .env 种子）</SelectItem>
+                <SelectItem :value="NONE">未绑定（使用首次部署默认）</SelectItem>
                 <SelectItem
                   v-for="model in data.models.filter((m) => m.enabled)"
                   :key="model.modelId"
@@ -417,7 +424,7 @@ onMounted(load);
               v-model="newModel.displayName"
               placeholder="deepseek-v4-flash"
             />
-            <p class="text-xs text-muted-foreground">请求上游时使用的模型名</p>
+            <p class="text-xs text-muted-foreground">调用时传给服务商的模型名</p>
           </div>
           <div class="space-y-2 sm:col-span-2">
             <Label for="new-model-url">端点 Base URL</Label>
@@ -426,6 +433,9 @@ onMounted(load);
               v-model="newModel.baseUrl"
               placeholder="https://api.example.com/v1"
             />
+            <p class="text-xs text-muted-foreground">
+              模型服务商提供的 API 地址，通常以 /v1 结尾
+            </p>
           </div>
           <div class="space-y-2 sm:col-span-2">
             <Label for="new-model-key">API Key</Label>
@@ -435,6 +445,9 @@ onMounted(load);
               type="password"
               placeholder="sk-…"
             />
+            <p class="text-xs text-muted-foreground">
+              在模型服务商控制台获取；保存后不回显
+            </p>
           </div>
           <div class="space-y-2">
             <Label>能力标签</Label>
@@ -456,6 +469,9 @@ onMounted(load);
                 {{ CAPABILITY_LABELS[cap] }}
               </label>
             </div>
+            <p class="text-xs text-muted-foreground">
+              勾选该模型支持的能力，供槽位分配时参考
+            </p>
           </div>
           <div class="space-y-2">
             <Label>故障转移</Label>
@@ -515,7 +531,7 @@ onMounted(load);
 
       <CardContent v-else-if="data && data.models.length" class="border-t">
         <p class="pb-3 text-xs text-muted-foreground">
-          健康状态仅记录本页「测试连接」的手动探测结果，不代表 worker 实际调用成败。
+          健康状态仅记录本页「测试连接」的手动探测结果，不代表 AI 实际调用成败。
         </p>
         <div class="divide-y">
           <div
@@ -627,6 +643,9 @@ onMounted(load);
                       {{ CAPABILITY_LABELS[cap] }}
                     </label>
                   </div>
+                  <p class="text-xs text-muted-foreground">
+                    勾选该模型支持的能力，供槽位分配时参考
+                  </p>
                 </div>
                 <div class="space-y-2">
                   <Label>故障转移</Label>
@@ -652,6 +671,9 @@ onMounted(load);
                       </SelectItem>
                     </SelectContent>
                   </Select>
+                  <p class="text-xs text-muted-foreground">
+                    该模型失败/超时自动切到所选模型
+                  </p>
                 </div>
                 <div class="flex items-center gap-2">
                   <Switch
@@ -696,7 +718,7 @@ onMounted(load);
           <CircleX class="size-8 text-muted-foreground/60" />
           <p class="text-sm font-medium">注册表为空</p>
           <p class="text-sm text-muted-foreground">
-            新建模型并绑定槽位；未绑定时回落 .env 首次种子配置（仅首次部署生效）。
+            新建模型并绑定槽位；未绑定的槽位使用首次部署时的默认配置。
           </p>
         </div>
       </CardContent>

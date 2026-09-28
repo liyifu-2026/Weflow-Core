@@ -115,7 +115,8 @@ onBeforeRouteLeave(async () => {
     <header class="mb-6">
       <h1 class="text-2xl font-semibold tracking-tight">设置中心</h1>
       <p class="mt-1 text-sm text-muted-foreground">
-        AI 员工 / 模型 / 知识库 / 行为 / 安全 / 部署。改动即时生效，无需重启。
+        AI 员工 / 模型 / 知识库 / 行为 / 安全 / 部署。改动保存后热生效，无需重启
+        （多数 15–30 秒内生效，「行为」分区开关即时生效）。
       </p>
     </header>
 

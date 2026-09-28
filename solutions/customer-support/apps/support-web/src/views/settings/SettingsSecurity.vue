@@ -337,7 +337,7 @@ onMounted(load);
           <div class="space-y-2">
             <Label>群单独配置</Label>
             <p class="text-xs text-muted-foreground">
-              格式：群 conversationRef + 模式；覆盖全局策略。
+              填写群 ID（形如 12345678@chatroom）与该群的响应模式，覆盖上方全局策略。
             </p>
             <div class="space-y-3">
               <div

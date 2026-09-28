@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { confirmDialog } from "@/components/confirm-dialog";
 import {
   readPipelineSettings,
   writePipelineSettingsSection,
@@ -111,8 +112,13 @@ async function load() {
   }
 }
 
-function applyTemplate() {
-  if (!window.confirm("用 WeKnora 预设模板覆盖当前表单？")) return;
+async function applyTemplate() {
+  if (
+    !(await confirmDialog(
+      "用 WeKnora 预设模板覆盖当前表单？表单中未保存的修改将被替换（已保存的配置不受影响）。",
+    ))
+  )
+    return;
   config.value = { ...WEKNORA_TEMPLATE };
   notice.value = "已填充 WeKnora 预设模板（填好端点与凭据后保存）";
 }

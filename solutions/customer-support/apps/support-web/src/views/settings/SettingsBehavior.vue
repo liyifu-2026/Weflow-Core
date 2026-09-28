@@ -18,6 +18,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { confirmDialog } from "@/components/confirm-dialog";
 import { api } from "../../api";
 
 type RuntimeSettings = {
@@ -95,8 +96,16 @@ async function load() {
 
 async function patch(key: keyof RuntimeSettings) {
   if (!settings.value || saving.value) return;
-  const snapshot = { ...settings.value };
   const next = !settings.value[key];
+  // 危险操作：关闭 Kill Switch（AI 全量停答）需要二次确认；开启不拦。
+  if (key === "agentEnabled" && !next) {
+    const ok = await confirmDialog(
+      "确认关闭「AI 自动应答」？关闭后新消息不再触发 AI 回复（瞬时暂停，不影响人工操作与已入队消息的处理），直到重新开启。",
+      { danger: true },
+    );
+    if (!ok) return;
+  }
+  const snapshot = { ...settings.value };
   settings.value[key] = next;
   saving.value = true;
   error.value = "";
