@@ -38,27 +38,40 @@ const theme = ref<"light" | "dark">(
   localStorage.getItem("wf-theme") === "dark" ? "dark" : "light",
 );
 
-type NavItem = { to: string; icon: LucideIcon; label: string };
+type NavItem = { to: string; icon: LucideIcon; label: string; group: "workbench" | "admin" };
 
 const workbenchItems: NavItem[] = [
-  { to: "/conversations", icon: MessageSquare, label: "会话" },
-  { to: "/knowledge", icon: BookOpen, label: "知识库" },
-  { to: "/assets", icon: Images, label: "素材" },
-  { to: "/scheduled-sends", icon: Clock, label: "定时任务" },
+  { to: "/conversations", icon: MessageSquare, label: "会话", group: "workbench" },
+  { to: "/knowledge", icon: BookOpen, label: "知识库", group: "workbench" },
+  { to: "/assets", icon: Images, label: "素材", group: "workbench" },
+  { to: "/scheduled-sends", icon: Clock, label: "定时任务", group: "workbench" },
 ];
 
 const adminItems: NavItem[] = [
-  { to: "/ai-employees", icon: Bot, label: "AI员工" },
-  { to: "/admin", icon: ListChecks, label: "管理" },
-  { to: "/settings", icon: Settings, label: "设置" },
-  { to: "/system/status", icon: ShieldCheck, label: "系统状态" },
-  { to: "/system/users", icon: Users, label: "用户与角色" },
-  { to: "/system/audit", icon: ScrollText, label: "审计日志" },
+  { to: "/ai-employees", icon: Bot, label: "AI员工", group: "admin" },
+  { to: "/admin", icon: ListChecks, label: "管理", group: "admin" },
+  { to: "/settings", icon: Settings, label: "设置", group: "admin" },
+  { to: "/system/status", icon: ShieldCheck, label: "系统状态", group: "admin" },
+  { to: "/system/users", icon: Users, label: "用户与角色", group: "admin" },
+  { to: "/system/audit", icon: ScrollText, label: "审计日志", group: "admin" },
 ];
 
 const navItems = computed<NavItem[]>(() =>
   auth.isAdmin ? [...workbenchItems, ...adminItems] : workbenchItems,
 );
+const GROUP_LABELS: Record<NavItem["group"], string> = {
+  workbench: "工作台",
+  admin: "管理",
+};
+const navGroups = computed<Array<{ key: NavItem["group"]; items: NavItem[] }>>(() => {
+  const groups: Array<{ key: NavItem["group"]; items: NavItem[] }> = [];
+  for (const item of navItems.value) {
+    const last = groups.at(-1);
+    if (last && last.key === item.group) last.items.push(item);
+    else groups.push({ key: item.group, items: [item] });
+  }
+  return groups;
+});
 
 watch(
   () => route.fullPath,
@@ -92,14 +105,30 @@ onMounted(applyTheme);
 <template>
   <div class="flex h-screen overflow-hidden">
     <aside
-      class="flex shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground transition-[width] duration-200"
+      class="flex shrink-0 flex-col border-r border-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]"
       :class="collapsed ? 'w-16' : 'w-56'"
     >
       <div class="flex h-14 items-center justify-between px-4">
-        <span
+        <router-link
           v-if="!collapsed"
-          class="text-lg font-semibold tracking-tight select-none"
-        >WeFlow</span>
+          to="/conversations"
+          class="flex select-none items-center gap-2 text-[15px] font-semibold tracking-tight"
+          title="WeFlow"
+        >
+          <svg width="22" height="22" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true">
+            <path d="M5 21c3-11 7 11 11 0s7 11 11 0" />
+            <path d="M5 26h22" opacity=".35" />
+          </svg>
+          <span><b class="font-extrabold">We</b><span class="font-medium text-muted-foreground">Flow</span></span>
+        </router-link>
+        <svg
+          v-else
+          width="24" height="24" viewBox="0 0 32 32" fill="none" stroke="currentColor"
+          stroke-width="3" stroke-linecap="round" aria-hidden="true" class="mx-auto"
+        >
+          <path d="M5 21c3-11 7 11 11 0s7 11 11 0" />
+          <path d="M5 26h22" opacity=".35" />
+        </svg>
         <Button
           variant="ghost"
           size="icon"
@@ -115,27 +144,41 @@ onMounted(applyTheme);
       <Separator class="bg-sidebar-border" />
 
       <nav
-        class="flex-1 space-y-1 overflow-y-auto p-2"
+        class="flex-1 overflow-y-auto p-2"
         :class="collapsed && 'px-2'"
         aria-label="主导航"
       >
-        <router-link
-          v-for="item in navItems"
-          :key="item.to"
-          :to="item.to"
-          class="flex h-9 items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-          :class="
-            route.path === item.to
-              ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-              : ''
-          "
-          active-class=""
-          exact-active-class=""
-          :title="collapsed ? item.label : undefined"
-        >
-          <component :is="item.icon" class="size-4 shrink-0" />
-          <span v-if="!collapsed">{{ item.label }}</span>
-        </router-link>
+        <template v-for="(group, gi) in navGroups" :key="group.key">
+          <p
+            v-if="!collapsed"
+            class="px-2 pb-1 pt-3 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/60 first:pt-1"
+          >
+            {{ GROUP_LABELS[group.key] }}
+          </p>
+          <div v-else-if="gi > 0" class="mx-2 my-2 border-t border-sidebar-border/60" />
+          <router-link
+            v-for="item in group.items"
+            :key="item.to"
+            :to="item.to"
+            class="relative flex h-9 items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground/70 transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            :class="
+              route.path === item.to
+                ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+                : ''
+            "
+            active-class=""
+            exact-active-class=""
+            :title="collapsed ? item.label : undefined"
+          >
+            <span
+              v-if="route.path === item.to"
+              class="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary"
+              aria-hidden="true"
+            />
+            <component :is="item.icon" class="size-4 shrink-0" />
+            <span v-if="!collapsed">{{ item.label }}</span>
+          </router-link>
+        </template>
       </nav>
 
       <Separator class="bg-sidebar-border" />

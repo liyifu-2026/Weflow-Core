@@ -1,6 +1,6 @@
 [package]
 name = "weflow-desktop"
-version = "2.1.0"
+version = "2.1.1"
 description = "Weflow AI 客服产品桌面端壳（Tauri WebView2）"
 edition = "2021"
 rust-version = "1.77"
