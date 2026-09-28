@@ -6,82 +6,112 @@
     <title>Weflow</title>
     <style>
       * { box-sizing: border-box; }
-      html, body { margin: 0; height: 100%; font-family: system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+      html, body { margin: 0; height: 100%; font-family: "Geist", system-ui, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
       body {
         display: flex; align-items: center; justify-content: center;
         color: #1c1917;
         background:
-          radial-gradient(1200px 600px at 20% -10%, #e7e5e4 0%, transparent 60%),
-          radial-gradient(900px 500px at 110% 110%, #dbeafe 0%, transparent 55%),
+          radial-gradient(1100px 540px at 12% -12%, rgba(0,0,0,.05) 0%, transparent 60%),
+          radial-gradient(900px 480px at 112% 112%, rgba(0,0,0,.035) 0%, transparent 55%),
           #fafaf9;
       }
       @media (prefers-color-scheme: dark) {
         body { color: #e7e5e4;
           background:
-            radial-gradient(1200px 600px at 20% -10%, #27272a 0%, transparent 60%),
-            radial-gradient(900px 500px at 110% 110%, #172554 0%, transparent 55%),
+            radial-gradient(1100px 540px at 12% -12%, rgba(255,255,255,.05) 0%, transparent 60%),
+            radial-gradient(900px 480px at 112% 112%, rgba(255,255,255,.035) 0%, transparent 55%),
             #0c0a09;
         }
-        .card { background: rgba(28,25,23,.82) !important; border-color: #292524 !important; }
-        .sub { color: #a8a29e !important; }
-        input { background: #1c1917 !important; border-color: #44403c !important; color: #e7e5e4 !important; }
-        .hint { color: #78716c !important; }
-        .hint code { background: #292524 !important; color: #d6d3d1 !important; }
+        .sub, .hint { color: #a8a29e !important; }
+        input { background: rgba(28,25,23,.6) !important; border-color: #44403c !important; color: #e7e5e4 !important; }
+        input:focus { border-color: #d6d3d1 !important; box-shadow: 0 0 0 3px rgba(255,255,255,.08) !important; }
+        button.primary { background: #e7e5e4 !important; border-color: #e7e5e4 !important; color: #0c0a09 !important; }
+        .meta { color: #57534e !important; }
       }
-      .card {
-        width: 100%; max-width: 24rem; margin: 1rem;
-        padding: 2.2rem 2rem 1.6rem;
-        background: rgba(255,255,255,.86);
-        border: 1px solid #e7e5e4; border-radius: 14px;
-        box-shadow: 0 18px 50px -18px rgba(0,0,0,.22);
-        backdrop-filter: blur(6px);
+      .wrap { width: 100%; max-width: 30rem; padding: 2.5rem 2.2rem; }
+
+      .brandline { display: flex; align-items: center; gap: .6rem; font-size: .92rem; font-weight: 600; letter-spacing: -.01em; }
+      .brandline svg { flex: none; }
+      .brandline b { font-weight: 800; }
+
+      .stage { padding: 2.2rem 0 1.6rem; }
+      /* 签名时刻：波浪 logo 按笔顺自绘制 */
+      .wave-draw {
+        stroke-dasharray: 1; stroke-dashoffset: 1;
+        animation: draw 1.1s cubic-bezier(0.16, 1, 0.3, 1) .15s forwards;
       }
-      .brand { display: flex; align-items: center; gap: .6rem; margin-bottom: .4rem; }
-      .mark {
-        width: 1.9rem; height: 1.9rem; border-radius: 8px; flex: none;
-        background: linear-gradient(135deg, #2563eb, #4f46e5);
-        color: #fff; font-weight: 700; font-size: 1rem;
-        display: flex; align-items: center; justify-content: center;
+      .underline-draw { animation-delay: .55s; animation-duration: .5s; }
+      @keyframes draw { to { stroke-dashoffset: 0; } }
+
+      .wordmark {
+        font-size: clamp(3.2rem, 7vw, 4.6rem); line-height: .95;
+        letter-spacing: -.045em; margin: .4rem 0 0; user-select: none;
       }
-      h1 { font-size: 1.15rem; margin: 0; letter-spacing: .01em; }
-      .sub { color: #78716c; font-size: .88rem; margin: .3rem 0 0; line-height: 1.55; }
+      .wordmark .thin { color: #78716c; font-weight: 500; }
+      .anim-rise { animation: rise .7s cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: var(--d, 0ms); }
+      @keyframes rise { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: none } }
+      @media (prefers-reduced-motion: reduce) {
+        .anim-rise, .wave-draw { animation: none; }
+        .wave-draw { stroke-dashoffset: 0; }
+      }
+
+      .sub { color: #78716c; font-size: .92rem; margin: 1.1rem 0 0; line-height: 1.65; }
+      .status { display: flex; align-items: center; gap: .6rem; margin: 1.3rem 0 .2rem; font-size: .9rem; color: #57534e; }
       .spinner {
         width: .95rem; height: .95rem; border-radius: 50%; flex: none;
-        border: 2px solid #d6d3d1; border-top-color: #2563eb;
+        border: 2px solid #d6d3d1; border-top-color: currentColor;
         animation: spin .8s linear infinite;
       }
       @keyframes spin { to { transform: rotate(360deg) } }
-      .status { display: flex; align-items: center; gap: .6rem; margin: 1.4rem 0 .2rem; font-size: .9rem; color: #57534e; }
       .status.ok .spinner { display: none; }
-      label { display: block; font-size: .85rem; color: #57534e; margin: 1.15rem 0 .35rem; }
-      input { width: 100%; padding: .6rem .75rem; font-size: .95rem;
-              border: 1px solid #d6d3d1; border-radius: 8px; background: #fff; color: inherit;
+      label { display: block; font-size: .78rem; color: #78716c; letter-spacing: .12em; text-transform: uppercase; margin: 1.15rem 0 .4rem; }
+      input { width: 100%; padding: .65rem .8rem; font-size: .95rem;
+              border: 1px solid #d6d3d1; border-radius: 9px; background: rgba(255,255,255,.65); color: inherit;
               transition: border-color .15s, box-shadow .15s; }
-      input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
-      .row { display: flex; gap: .6rem; margin-top: 1rem; }
-      button { padding: .6rem 1.1rem; font-size: .95rem; border-radius: 8px; border: 1px solid #d6d3d1;
-               background: #fff; color: inherit; cursor: pointer; transition: filter .15s, opacity .15s; }
-      button:hover { filter: brightness(.97); }
-      button.primary { background: #2563eb; border-color: #2563eb; color: #fff; flex: 1; }
-      button.primary:hover { filter: brightness(1.06); }
-      button:disabled { opacity: .5; cursor: default; }
-      .hint { font-size: .8rem; color: #a8a29e; margin-top: 1.2rem; line-height: 1.65; }
-      code { background: #f5f5f4; padding: .08rem .35rem; border-radius: 4px; font-size: .92em; }
+      input:focus { outline: none; border-color: #1c1917; box-shadow: 0 0 0 3px rgba(0,0,0,.06); }
+      .row { display: flex; gap: .6rem; margin-top: 1.2rem; }
+      button.primary {
+        display: flex; align-items: center; justify-content: space-between; width: 100%;
+        padding: .65rem 1.1rem; font-size: .95rem; border-radius: 9px; border: 1px solid transparent;
+        background: #1c1917; color: #fafaf9; cursor: pointer;
+        transition: opacity .15s, transform .3s cubic-bezier(0.16,1,0.3,1);
+      }
+      button.primary:hover { transform: translateY(-1px); }
+      button.primary:disabled { opacity: .5; cursor: default; transform: none; }
+      .arrow { transition: transform .3s cubic-bezier(0.16,1,0.3,1); }
+      button.primary:hover .arrow { transform: translateX(3px); }
+      .hint { font-size: .8rem; color: #a8a29e; margin-top: 1.3rem; line-height: 1.7; }
+      .hint code { background: rgba(0,0,0,.05); padding: .08rem .35rem; border-radius: 4px; font-size: .92em; }
       .error { color: #dc2626; font-size: .85rem; min-height: 1.2rem; margin-top: .6rem; }
+      .meta { font-size: .72rem; color: #a8a29e; margin-top: 2rem; }
       .hidden { display: none; }
-      .fade-in { animation: fadein .35s ease; }
-      @keyframes fadein { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
     </style>
   </head>
   <body>
-    <div class="card fade-in">
-      <div class="brand">
-        <div class="mark">W</div>
-        <h1>Weflow</h1>
+    <div class="wrap">
+      <div class="brandline anim-rise" style="--d: 0ms">
+        <svg width="22" height="22" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true">
+          <path d="M5 21c3-11 7 11 11 0s7 11 11 0" />
+          <path d="M5 26h22" opacity=".35" />
+        </svg>
+        <span><b>We</b>Flow</span>
       </div>
-      <p class="sub">连接客服工作台</p>
 
-      <div class="status" id="status">
+      <div class="stage">
+        <svg
+          class="anim-rise" style="--d: 60ms"
+          width="150" height="150" viewBox="0 0 32 32"
+          fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path class="wave-draw" d="M5 21c3-11 7 11 11 0s7 11 11 0" stroke-width="2.6" pathLength="1" />
+          <path class="wave-draw underline-draw" d="M5 26h22" stroke-width="2.6" opacity=".3" pathLength="1" />
+        </svg>
+        <h1 class="wordmark anim-rise" style="--d: 200ms">We<span class="thin">Flow</span></h1>
+        <p class="sub anim-rise" style="--d: 340ms">连接客服工作台</p>
+      </div>
+
+      <div class="status anim-rise" id="status" style="--d: 420ms">
         <span id="dot" class="spinner"></span>
         <span id="statusText">正在连接…</span>
       </div>
@@ -90,7 +120,10 @@
         <label for="url">服务器地址</label>
         <input id="url" type="text" spellcheck="false" placeholder="https://web.leaif.com" />
         <div class="row">
-          <button id="connect" class="primary">连接</button>
+          <button id="connect" class="primary">
+            <span>连接</span>
+            <span class="arrow">→</span>
+          </button>
         </div>
         <div id="error" class="error"></div>
         <p class="hint">
@@ -98,6 +131,8 @@
           命令行 <code>--url &lt;地址&gt;</code> 可临时覆盖。
         </p>
       </div>
+
+      <p class="meta">内部系统 · 账号由管理员发放</p>
     </div>
 
     <script>
@@ -116,7 +151,7 @@
       // 状态展示刻意保持中性：不暴露「本机→公网」候选探测过程与地址来源——
       // 使用者只需要知道「正在连接」与「连不上怎么办」两件事。
       function setStatus(kind, text) {
-        statusEl.className = "status" + (kind ? " " + kind : "");
+        statusEl.className = "status anim-rise" + (kind ? " " + kind : "");
         statusText.textContent = text;
       }
 
