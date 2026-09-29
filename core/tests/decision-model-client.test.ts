@@ -134,6 +134,38 @@ describe("decision model client", () => {
     expect(readNoulProbability(result.answers.q1)).toBeUndefined();
   });
 
+  it("parses the real score shape (criteria array, 0-indexed weighted score)", async () => {
+    // 真实抓包（2026-09-30）：score 值在 `score` 字段，legend 按数组下标回带
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({
+          answers: {
+            q_urgency: {
+              type: "score",
+              score: 3.88,
+              legend: { 0: "1 很不紧急", 1: "2 不紧急", 2: "3 一般", 3: "4 比较紧急", 4: "5 非常紧急" },
+              probabilities: { 0: 0.01, 1: 0.02, 2: 0.09, 3: 0.08, 4: 0.8 },
+              confidence: 0.8,
+            },
+          },
+          usage: { input_tokens: 36 },
+          model: "decision-model-preview",
+          latency_ms: 48.2,
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    const result = await callDecisionModel(endpoint, {
+      state: "x",
+      questions: { q_urgency: { type: "score" } },
+      fetchImpl,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.answers.q_urgency!.score).toBeCloseTo(3.88);
+    expect(result.answers.q_urgency!.answer).toBeCloseTo(3.88);
+    expect(readDecisionConfidence(result.answers.q_urgency)).toBeCloseTo(0.8);
+  });
+
   it("parses the real protocol shapes (noul/choice fields, captured 2026-09-30)", async () => {
     // 真实抓包：noul 值在 `noul` 字段、choice 在 `choice` 字段 + probabilities
     const fetchImpl = (async () =>

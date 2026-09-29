@@ -31,22 +31,28 @@ export type DecisionModelEndpoint = {
 export type DecisionQuestionDef = {
   type: "choice" | "noul" | "score";
   instructions?: string | undefined;
-  /** choice 选项表 / score 等级说明（原文透传） */
-  criteria?: Record<string, unknown> | undefined;
+  /**
+   * choice 选项表（对象）/ score 等级说明（实测 2026-09-30：必须是数组，
+   * 元素顺序即 0-indexed 档位，响应 legend 按下标回带）。
+   */
+  criteria?: Record<string, unknown> | unknown[] | undefined;
 };
 
 /** 单个问题的判定回包（宽松收敛：真实协议字段 + 原始 answer 兜底） */
 export type DecisionAnswer = {
   /**
-   * 归一化判定值：noul = P(yes)；choice = 命中选项键；score = 加权期望。
-   * 真实协议（2026-09-30 实测）值分别在 noul/choice 字段，这里统一提取；
-   * 完全陌生的形态则保留整个原始对象。
+   * 归一化判定值：noul = P(yes)；choice = 命中选项键；score = 加权期望
+   * （0-indexed，criteria 数组下标轴，映射业务分值时由调用方 +1）。
+   * 真实协议（2026-09-30 实测）值分别在 noul/choice/score 字段，这里统一
+   * 提取；完全陌生的形态则保留整个原始对象。
    */
   answer: unknown;
   /** noul 判定的原始概率字段（answer 的来源之一，保留便于审计） */
   noul?: number | undefined;
   /** choice 判定的原始选项字段 */
   choice?: unknown;
+  /** score 判定的原始加权期望字段（0-indexed） */
+  score?: number | undefined;
   probabilities?: Record<string, number> | undefined;
   confidence?: number | undefined;
   legend?: unknown;
@@ -134,11 +140,14 @@ export async function callDecisionModel(
             ? shaped.noul
             : shaped.choice !== undefined
               ? shaped.choice
-              : value;
+              : shaped.score !== undefined
+                ? shaped.score
+                : value;
       answers[key] = {
         answer,
         ...(shaped.noul !== undefined ? { noul: shaped.noul } : {}),
         ...(shaped.choice !== undefined ? { choice: shaped.choice } : {}),
+        ...(shaped.score !== undefined ? { score: shaped.score } : {}),
         ...(shaped.probabilities !== undefined
           ? { probabilities: shaped.probabilities }
           : {}),
@@ -180,6 +189,8 @@ const questionAnswerSchema = z
     noul: z.number().finite().optional(),
     /** 真实协议：choice 命中选项键在此字段 */
     choice: z.unknown(),
+    /** 真实协议（2026-09-30 实测）：score 加权期望（0-indexed）在此字段 */
+    score: z.number().finite().optional(),
     probabilities: z.record(z.string(), z.number().finite()).optional(),
     confidence: z.number().finite().optional(),
     legend: z.unknown().optional(),

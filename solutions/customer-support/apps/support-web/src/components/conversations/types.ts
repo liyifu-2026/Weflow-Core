@@ -17,6 +17,8 @@ export type Conversation = {
     reason?: string;
     createdAt?: string;
     agentPaused?: boolean;
+    /** 决策模型紧急度评分（1..5；null=未评分）。待认领列表按此加权排序 */
+    priority?: number | null;
   } | null;
   unreadCustomerCount?: number;
   riskLevel?: string | null;

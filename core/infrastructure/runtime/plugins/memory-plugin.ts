@@ -19,6 +19,8 @@ import {
 } from "../capabilities/memory.js";
 import { processMemoryCapture } from "../../../modules/memory/application/process-memory-capture.js";
 import { recallMemories } from "../../../modules/memory/application/recall-memories.js";
+import type { DecisionModelEndpoint } from "../../model_runtime/decision-model-client.js";
+import type { DecisionSettings } from "../../../modules/agent/application/decision-triage.js";
 
 export type MemoryPluginOptions = {
   db: NodePgDatabase<typeof schema>;
@@ -28,6 +30,14 @@ export type MemoryPluginOptions = {
    * getter 形式供热加载场景使用（模型设置保存后即时刷新，无需重启）。
    */
   model: string | (() => string);
+  /**
+   * 决策模型缝（Phase 3 记忆预判）：可选；未注入 = 预判关闭，
+   * 行为与接入前一致。getSettings 每次捕获现读（组合根缓存）。
+   */
+  decision?: {
+    endpoint: DecisionModelEndpoint;
+    getSettings: () => Promise<DecisionSettings>;
+  };
 };
 
 /** 创建记忆能力插件；依赖 text.model 能力（由组合根注入）。 */
@@ -35,8 +45,16 @@ export function memoryPlugin(options: MemoryPluginOptions): PluginDefinition {
   const resolveModel = (): string =>
     typeof options.model === "function" ? options.model() : options.model;
   const capture: MemoryCaptureService = {
-    process: (db, job) =>
-      processMemoryCapture(db, options.modelClient, resolveModel(), job),
+    process: async (db, job) => {
+      if (!options.decision) {
+        return processMemoryCapture(db, options.modelClient, resolveModel(), job);
+      }
+      const decisionSettings = await options.decision.getSettings();
+      return processMemoryCapture(db, options.modelClient, resolveModel(), job, new Date(), {
+        endpoint: options.decision.endpoint,
+        settings: decisionSettings,
+      });
+    },
   };
   const recall: MemoryRecallService = {
     recall: (db, conversationId, limit) =>

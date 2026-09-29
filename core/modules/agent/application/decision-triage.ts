@@ -15,6 +15,8 @@
  * 不含任何业务关键词。缝存在性 = triageEnabled OR worthReplyEnabled
  * （OR shadowEnabled），不与 triage 槽位绑定耦合。
  */
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import * as schema from "../../../infrastructure/postgres/schema.js";
 import {
   callDecisionModel,
   readChoiceProbability,
@@ -30,6 +32,10 @@ export const DECISION_QUESTION_IDS = {
   needHuman: "q_need_human",
   tier: "q_tier",
   worthReply: "q_worth_reply",
+  /** Phase 3：handoff 待认领队列紧急度（score，criteria 数组档数即分值上限） */
+  urgency: "q_urgency",
+  /** Phase 3：记忆提取前价值预判（noul） */
+  hasMemory: "q_has_memory",
 } as const;
 
 /** 扩展设置 decision 键的收敛形态（缺省全关） */
@@ -99,7 +105,7 @@ export function extractDecisionSettings(raw: unknown): DecisionSettings {
           ? { instructions: q.instructions }
           : {}),
         ...(typeof q.criteria === "object" && q.criteria !== null
-          ? { criteria: q.criteria as Record<string, unknown> }
+          ? { criteria: q.criteria as Record<string, unknown> | unknown[] }
           : {}),
       };
     }
@@ -310,4 +316,147 @@ export function decisionAuditPayload(
     inputTokens: result.inputTokens,
     model: result.model,
   };
+}
+
+// ── Phase 3：异步旁路（handoff 评分 / 记忆预判）────────────────────────
+
+/**
+ * score 判定 → 业务优先级：score 是 0-indexed 加权期望（criteria 数组
+ * 下标轴），映射到 1..档数；四舍五入后钳位。回包缺失返回 undefined
+ * （调用方 fail-open = 不评分，排序语义与未接入一致）。
+ */
+export function mapUrgencyToPriority(
+  answer: DecisionAnswerLike | undefined,
+  levelCount: number,
+): number | undefined {
+  const raw =
+    typeof answer?.score === "number" && Number.isFinite(answer.score)
+      ? answer.score
+      : typeof answer?.answer === "number" && Number.isFinite(answer.answer)
+        ? answer.answer
+        : undefined;
+  if (raw === undefined) return undefined;
+  const priority = Math.round(raw) + 1;
+  return Math.min(Math.max(priority, 1), Math.max(levelCount, 1));
+}
+
+/** score 回包的宽松读取形态（与 client 的 DecisionAnswer 结构兼容） */
+type DecisionAnswerLike = {
+  answer?: unknown;
+  score?: unknown;
+};
+
+/**
+ * handoff 待认领队列异步评分（fire-and-forget）：
+ * - 仅当 settings 配置了 q_urgency（score）才动作；会话当前 handoff 非
+ *   pending（已认领/已解决）不评分；
+ * - 任何失败静默放弃 = 无分 = 排序语义与未接入一致（fail-open）；
+ * - context 只喂触发期近 5 条入站（数据最小化口径同 triage）。
+ * 永不抛错。
+ */
+export function scoreHandoffAsync(input: {
+  db: NodePgDatabase<typeof schema>;
+  endpoint: DecisionModelEndpoint;
+  settings: DecisionSettings;
+  conversationId: string;
+  fetchImpl?: typeof fetch | undefined;
+}): void {
+  void (async () => {
+    try {
+      const { and, desc, eq } = await import("drizzle-orm");
+      const urgency =
+        input.settings.questions[DECISION_QUESTION_IDS.urgency];
+      if (urgency?.type !== "score") return;
+      const [handoff] = await input.db
+        .select({ status: schema.handoffStates.status })
+        .from(schema.handoffStates)
+        .where(
+          eq(schema.handoffStates.conversationId, input.conversationId),
+        )
+        .limit(1);
+      if (!handoff || handoff.status !== "pending") return;
+      const recent = await input.db
+        .select({ text: schema.messages.text })
+        .from(schema.messages)
+        .where(
+          and(
+            eq(schema.messages.conversationId, input.conversationId),
+            eq(schema.messages.direction, "inbound"),
+          ),
+        )
+        .orderBy(desc(schema.messages.occurredAt))
+        .limit(5);
+      // 直接单问调用（紧急度不在 triage 缝问题集里，不走 classifyWithDecisionModel）
+      const call = await callDecisionModel(
+        { ...input.endpoint, timeoutMs: input.settings.timeoutMs },
+        {
+          state: {
+            recent: recent
+              .slice(-5)
+              .map((row) => row.text.slice(0, 120)),
+          },
+          questions: { [DECISION_QUESTION_IDS.urgency]: urgency },
+          ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+        },
+      );
+      if (!call.ok) return;
+      const levelCount = Array.isArray(urgency.criteria)
+        ? urgency.criteria.length
+        : 5;
+      const priority = mapUrgencyToPriority(
+        call.answers[DECISION_QUESTION_IDS.urgency] as DecisionAnswerLike,
+        levelCount,
+      );
+      if (priority === undefined) return;
+      await input.db
+        .update(schema.handoffStates)
+        .set({ priority, priorityScoredAt: new Date() })
+        .where(
+          and(
+            eq(schema.handoffStates.conversationId, input.conversationId),
+            eq(schema.handoffStates.status, "pending"),
+          ),
+        );
+    } catch {
+      // fail-open：评分失败 = 无分 = 现状排序
+    }
+  })();
+}
+
+/**
+ * 记忆捕获价值预判：P(含值得记的事实) < memoryProbability（默认 0.5）→
+ * true（跳过提取）。问题未配置 / 回包缺失 / 任何异常 → false（照常提取，
+ * fail-open）。messages 为本批待提取文本（调用方裁剪，各 ≤120 字）。
+ */
+export async function shouldSkipMemoryCapture(input: {
+  endpoint: DecisionModelEndpoint;
+  settings: DecisionSettings;
+  messages: readonly string[];
+  fetchImpl?: typeof fetch | undefined;
+}): Promise<boolean> {
+  try {
+    const hasMemory =
+      input.settings.questions[DECISION_QUESTION_IDS.hasMemory];
+    if (hasMemory?.type !== "noul") return false;
+    if (input.messages.length === 0) return false;
+    const call = await callDecisionModel(
+      { ...input.endpoint, timeoutMs: input.settings.timeoutMs },
+      {
+        state: {
+          recent: input.messages.slice(-8).map((text) => text.slice(0, 120)),
+        },
+        questions: { [DECISION_QUESTION_IDS.hasMemory]: hasMemory },
+        ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+      },
+    );
+    if (!call.ok) return false;
+    const answer = call.answers[DECISION_QUESTION_IDS.hasMemory];
+    const p =
+      readNoulProbability(answer) ??
+      (typeof answer?.answer === "number" ? answer.answer : undefined);
+    if (p === undefined) return false;
+    return p < 0.5;
+  } catch {
+    return false;
+  }
 }

@@ -148,6 +148,7 @@ export async function listSharedConversations(
   const attentionScore = sql<number>`(
     CASE ${schema.handoffStates.status} WHEN 'pending' THEN 200 WHEN 'transfer_pending' THEN 250 WHEN 'in_progress' THEN 100 ELSE 0 END
     + ${unreadCustomerCount}
+    + CASE ${schema.handoffStates.status} WHEN 'pending' THEN coalesce(${schema.handoffStates.priority}, 0) * 50 ELSE 0 END
   )`;
 
   // 注意 SQL 三值逻辑：status 为 NULL（无 handoff 的 AGENT_ACTIVE 会话）时，
@@ -202,6 +203,7 @@ export async function listSharedConversations(
         agentEnabled: schema.contactProfiles.agentEnabled,
       },
       handoffStatus: schema.handoffStates.status,
+      handoffPriority: schema.handoffStates.priority,
       handoffReason: schema.handoffStates.reason,
       handoffCreatedAt: schema.handoffStates.createdAt,
       handoffAssignedUserId: schema.handoffStates.assignedUserId,
@@ -280,6 +282,7 @@ export async function listSharedConversations(
       schema.contactProfiles.tags,
       schema.contactProfiles.agentEnabled,
       schema.handoffStates.status,
+      schema.handoffStates.priority,
       schema.handoffStates.reason,
       schema.handoffStates.createdAt,
       schema.handoffStates.assignedUserId,
@@ -349,7 +352,11 @@ export async function listSharedConversations(
             ? {
                 score:
                   typeof last.unreadCustomerCount === "number"
-                    ? handoffRank(last.handoffStatus) + last.unreadCustomerCount
+                    ? handoffRank(last.handoffStatus) +
+                      last.unreadCustomerCount +
+                      (last.handoffStatus === "pending"
+                        ? (last.handoffPriority ?? 0) * 50
+                        : 0)
                     : 0,
               }
             : {}),
@@ -365,6 +372,7 @@ export async function listSharedConversations(
     conversations: page.map(
       ({
         handoffStatus,
+        handoffPriority,
         handoffReason,
         handoffCreatedAt,
         handoffAssignedUserId,
@@ -398,6 +406,7 @@ export async function listSharedConversations(
           handoff: handoffStatus
             ? {
                 status: handoffStatus,
+                priority: handoffPriority ?? null,
                 reason: handoffReason,
                 createdAt: handoffCreatedAt,
                 assignedUserId: handoffAssignedUserId,

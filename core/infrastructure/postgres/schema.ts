@@ -683,6 +683,9 @@ export const handoffStates = handoffSchema.table("states", {
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
+  /** 决策模型 urgency 评分（1..档数；NULL=未评分，排序语义与未接入一致）。0082 */
+  priority: integer("priority"),
+  priorityScoredAt: timestamp("priority_scored_at", { withTimezone: true }),
 });
 
 export const handoffEvents = handoffSchema.table(

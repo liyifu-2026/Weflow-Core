@@ -56,7 +56,10 @@ import {
   classifyForTriage,
   extractTriagePolicy,
 } from "../../modules/agent/application/triage-classifier.js";
-import { extractDecisionSettings } from "../../modules/agent/application/decision-triage.js";
+import {
+  extractDecisionSettings,
+  scoreHandoffAsync,
+} from "../../modules/agent/application/decision-triage.js";
 import { createBehaviorSettingsReader } from "../../modules/agent/application/behavior-settings.js";
 import { createOptionalCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
 import {
@@ -349,6 +352,15 @@ await runProcess({
         db: postgres.db,
         modelClient: hotTextClient,
         model: () => memoryModelName,
+        ...(decisionEndpoint
+          ? {
+              decision: {
+                endpoint: decisionEndpoint,
+                getSettings: async () =>
+                  extractDecisionSettings(await readPipelineSettings()),
+              },
+            }
+          : {}),
       }),
     );
     await kernel.start();
@@ -585,10 +597,21 @@ await runProcess({
               decisionTimeoutMs: config.model?.decisionTimeoutMs,
             },
           );
-          await executor.execute({
+          const turnResult = await executor.execute({
             turnId,
             traceId: job.data.traceId,
           });
+          // Phase 3 handoff 异步评分：本轮以转人工终态（triage/主决策/
+          // 降级任一路径）→ fire-and-forget 给待认领队列打紧急度分。
+          // 评分失败 = 无分 = 现状排序；决策端点未绑定 = 整体关闭。
+          if (decisionEndpoint && turnResult.status === "suppressed_handoff") {
+            scoreHandoffAsync({
+              db: postgres.db,
+              endpoint: decisionEndpoint,
+              settings: extractDecisionSettings(await readPipelineSettings()),
+              conversationId: turnResult.conversationId,
+            });
+          }
         });
       },
       {

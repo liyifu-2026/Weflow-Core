@@ -11,7 +11,9 @@ import {
   DEFAULT_DECISION_SETTINGS,
   extractDecisionSettings,
   isDecisionSeamActive,
+  mapUrgencyToPriority,
   shouldSkipForWorthReply,
+  shouldSkipMemoryCapture,
   verdictFromDecision,
   type DecisionSettings,
 } from "../modules/agent/application/decision-triage.js";
@@ -276,6 +278,84 @@ describe("shouldSkipForWorthReply", () => {
     expect(shouldSkipForWorthReply(ok({}), settings)).toBe(false);
     expect(
       shouldSkipForWorthReply(ok({ q_worth_reply: { answer: "high" } }), settings),
+    ).toBe(false);
+  });
+});
+
+describe("mapUrgencyToPriority (score 0-indexed → 1..档数)", () => {
+  it("maps weighted score to 1-based priority with clamp", () => {
+    expect(mapUrgencyToPriority({ score: 3.88 }, 5)).toBe(5);
+    expect(mapUrgencyToPriority({ score: 0.2 }, 5)).toBe(1);
+    expect(mapUrgencyToPriority({ score: 2.5 }, 5)).toBe(4);
+    expect(mapUrgencyToPriority({ score: 9 }, 5)).toBe(5);
+    expect(mapUrgencyToPriority({ score: -3 }, 5)).toBe(1);
+  });
+
+  it("falls back to answer field and returns undefined on missing", () => {
+    expect(mapUrgencyToPriority({ answer: 1.9 }, 5)).toBe(3);
+    expect(mapUrgencyToPriority({}, 5)).toBeUndefined();
+    expect(mapUrgencyToPriority(undefined, 5)).toBeUndefined();
+    expect(mapUrgencyToPriority({ score: "high" }, 5)).toBeUndefined();
+  });
+});
+
+describe("shouldSkipMemoryCapture (P<0.5 跳过提取)", () => {
+  const memorySettings = (): DecisionSettings => ({
+    ...settingsWith({}),
+    questions: {
+      ...settingsWith({}).questions,
+      q_has_memory: { type: "noul", instructions: "值得记吗" },
+    },
+  });
+  const ok = (noul: number) =>
+    new Response(
+      JSON.stringify({
+        answers: { q_has_memory: { type: "noul", noul } },
+        usage: { input_tokens: 40 },
+        model: "decision-model-preview",
+        latency_ms: 45,
+      }),
+      { status: 200 },
+    );
+
+  it("skips only when P(has memory) < 0.5", async () => {
+    const fetchImpl = (async () => ok(0.2)) as unknown as typeof fetch;
+    expect(
+      await shouldSkipMemoryCapture({
+        endpoint,
+        settings: memorySettings(),
+        messages: ["好的谢谢"],
+        fetchImpl,
+      }),
+    ).toBe(true);
+    const fetchImpl2 = (async () => ok(0.5)) as unknown as typeof fetch;
+    expect(
+      await shouldSkipMemoryCapture({
+        endpoint,
+        settings: memorySettings(),
+        messages: ["我上周买的空气炸锅坏了"],
+        fetchImpl: fetchImpl2,
+      }),
+    ).toBe(false);
+  });
+
+  it("fails open: no question configured / endpoint failure → extract as usual", async () => {
+    expect(
+      await shouldSkipMemoryCapture({
+        endpoint,
+        settings: settingsWith({}),
+        messages: ["x"],
+      }),
+    ).toBe(false);
+    const fetchFail = (async () =>
+      new Response("err", { status: 503 })) as unknown as typeof fetch;
+    expect(
+      await shouldSkipMemoryCapture({
+        endpoint,
+        settings: memorySettings(),
+        messages: ["x"],
+        fetchImpl: fetchFail,
+      }),
     ).toBe(false);
   });
 });

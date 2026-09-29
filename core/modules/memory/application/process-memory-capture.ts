@@ -6,7 +6,7 @@
  * 使用乐观锁防止并发处理同一会话的记忆捕获任务。
  */
 import { createHash } from "node:crypto";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { TextModel } from "../../model/contracts/text-model.js";
 import * as schema from "../../../infrastructure/postgres/schema.js";
@@ -17,6 +17,9 @@ import {
   publishedStatus,
   type ExtractedMemory,
 } from "./memory-extraction.js";
+import { shouldSkipMemoryCapture } from "../../agent/application/decision-triage.js";
+import type { DecisionModelEndpoint } from "../../../infrastructure/model_runtime/decision-model-client.js";
+import type { DecisionSettings } from "../../agent/application/decision-triage.js";
 
 /** 记忆捕获任务标识 */
 export type MemoryCaptureJob = {
@@ -37,6 +40,10 @@ export async function processMemoryCapture(
   model: string,
   job: MemoryCaptureJob,
   now = new Date(),
+  decision?: {
+    endpoint: DecisionModelEndpoint;
+    settings: DecisionSettings;
+  },
 ): Promise<"completed" | "stale"> {
   const claimed = await db
     .update(schema.memoryCaptureStates)
@@ -78,6 +85,34 @@ export async function processMemoryCapture(
         ),
       );
     return "completed";
+  }
+
+  // 决策模型价值预判（Phase 3）：P(含值得记的事实)<0.5 → 直接置 done，
+  // 省一次提取调用。预判失败/问题未配置一律照常提取（fail-open）。
+  if (decision) {
+    const recent = await db
+      .select({ text: schema.messages.text })
+      .from(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.conversationId, job.conversationId),
+          eq(schema.messages.direction, "inbound"),
+        ),
+      )
+      .orderBy(desc(schema.messages.occurredAt))
+      .limit(8);
+    const skip = await shouldSkipMemoryCapture({
+      endpoint: decision.endpoint,
+      settings: decision.settings,
+      messages: recent.map((row) => row.text),
+    });
+    if (skip) {
+      await db
+        .update(schema.memoryCaptureStates)
+        .set({ status: "done", updatedAt: new Date() })
+        .where(eq(schema.memoryCaptureStates.conversationId, job.conversationId));
+      return "completed";
+    }
   }
 
   try {
