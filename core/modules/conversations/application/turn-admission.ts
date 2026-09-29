@@ -35,6 +35,20 @@ export const DEFAULT_QUIET_WINDOW_MS = 12_000;
 /** 半句未完时的延长窗：最多再等到 30 秒。 */
 export const MAX_ADMISSION_WINDOW_MS = 30_000;
 
+/**
+ * Phase 4 半句续窗：返回本次续窗毫秒；超过续窗次数上限返回 null
+ * （照常建轮）。attempt 同时承担派发重试计数，续窗与重试共享上限
+ * （MAX 半句续窗 2 次），避免无限续窗拖死会话首响。
+ */
+export function halfSentenceRescheduleDelayMs(
+  attempt: number,
+  extensionMs: number,
+  maxExtensions = 2,
+): number | null {
+  if (attempt >= maxExtensions) return null;
+  return toPositiveInt(extensionMs, DEFAULT_QUIET_WINDOW_MS);
+}
+
 /** 收窗时刻：未半句化为基准窗，半句化延长窗；参数异常回落默认。 */
 export function nextAdmissionAt(input: {
   text: unknown;

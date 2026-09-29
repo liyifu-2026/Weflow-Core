@@ -36,12 +36,21 @@ export const DECISION_QUESTION_IDS = {
   urgency: "q_urgency",
   /** Phase 3：记忆提取前价值预判（noul） */
   hasMemory: "q_has_memory",
+  /** Phase 4：短静默窗收窗判定——客户想说的话说完整了吗（noul） */
+  finished: "q_finished",
 } as const;
 
 /** 扩展设置 decision 键的收敛形态（缺省全关） */
 export type DecisionSettings = {
   /** 影子模式：调用并落审计，不消费结果 */
   shadowEnabled: boolean;
+  /**
+   * Phase 4 短静默窗：开启后 ingest 按 quietWindowMs 登记基准窗（正则
+   * 不再延长），收窗时由决策模型判「说完了吗」，未说完才续窗。
+   */
+  halfSentenceEnabled: boolean;
+  /** Phase 4 基准静默窗毫秒（halfSentenceEnabled 时生效；出厂 12s，可调短） */
+  quietWindowMs: number;
   /** 主动模式：决策模型结果替换 triage LLM 分类档 */
   triageEnabled: boolean;
   /** 主动模式：P(不值得回复)≥noReplyProbability → 轮次 no_action 终结 */
@@ -58,6 +67,8 @@ export type DecisionSettings = {
 
 export const DEFAULT_DECISION_SETTINGS: DecisionSettings = {
   shadowEnabled: false,
+  halfSentenceEnabled: false,
+  quietWindowMs: 12_000,
   triageEnabled: false,
   worthReplyEnabled: false,
   timeoutMs: 500,
@@ -112,6 +123,14 @@ export function extractDecisionSettings(raw: unknown): DecisionSettings {
   }
   return {
     shadowEnabled: s.shadowEnabled === true,
+    halfSentenceEnabled: s.halfSentenceEnabled === true,
+    quietWindowMs:
+      typeof s.quietWindowMs === "number" &&
+      Number.isFinite(s.quietWindowMs) &&
+      s.quietWindowMs >= 3_000 &&
+      s.quietWindowMs <= 30_000
+        ? Math.round(s.quietWindowMs)
+        : DEFAULT_DECISION_SETTINGS.quietWindowMs,
     triageEnabled: s.triageEnabled === true,
     worthReplyEnabled: s.worthReplyEnabled === true,
     timeoutMs:
@@ -458,5 +477,45 @@ export async function shouldSkipMemoryCapture(input: {
     return p < 0.5;
   } catch {
     return false;
+  }
+}
+
+/** 完句判定结论：unknown = 判定不可用（调用方 fail-open 照常建轮） */
+export type HalfSentenceVerdict = "finished" | "unfinished" | "unknown";
+
+/**
+ * Phase 4 收窗判定：客户想说的话说完整了吗。P(完整) ≥ 0.5 → finished；
+ * < 0.5 → unfinished（续窗）；问题未配置 / 回包缺失 / 任何失败 →
+ * unknown（照常建轮，与未接入一致）。
+ */
+export async function judgeMessageFinished(input: {
+  endpoint: DecisionModelEndpoint;
+  settings: DecisionSettings;
+  messages: readonly string[];
+  fetchImpl?: typeof fetch | undefined;
+}): Promise<HalfSentenceVerdict> {
+  try {
+    const finished = input.settings.questions[DECISION_QUESTION_IDS.finished];
+    if (finished?.type !== "noul") return "unknown";
+    if (input.messages.length === 0) return "unknown";
+    const call = await callDecisionModel(
+      { ...input.endpoint, timeoutMs: input.settings.timeoutMs },
+      {
+        state: {
+          recent: input.messages.slice(-8).map((text) => text.slice(0, 120)),
+        },
+        questions: { [DECISION_QUESTION_IDS.finished]: finished },
+        ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
+      },
+    );
+    if (!call.ok) return "unknown";
+    const answer = call.answers[DECISION_QUESTION_IDS.finished];
+    const p =
+      readNoulProbability(answer) ??
+      (typeof answer?.answer === "number" ? answer.answer : undefined);
+    if (p === undefined) return "unknown";
+    return p >= 0.5 ? "finished" : "unfinished";
+  } catch {
+    return "unknown";
   }
 }

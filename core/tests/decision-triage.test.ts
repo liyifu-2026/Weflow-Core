@@ -11,6 +11,7 @@ import {
   DEFAULT_DECISION_SETTINGS,
   extractDecisionSettings,
   isDecisionSeamActive,
+  judgeMessageFinished,
   mapUrgencyToPriority,
   shouldSkipForWorthReply,
   shouldSkipMemoryCapture,
@@ -357,5 +358,88 @@ describe("shouldSkipMemoryCapture (P<0.5 跳过提取)", () => {
         fetchImpl: fetchFail,
       }),
     ).toBe(false);
+  });
+});
+
+describe("extractDecisionSettings Phase 4 fields", () => {
+  it("reads halfSentenceEnabled and clamps quietWindowMs", () => {
+    const settings = extractDecisionSettings({
+      decision: { halfSentenceEnabled: true, quietWindowMs: 5000 },
+    });
+    expect(settings.halfSentenceEnabled).toBe(true);
+    expect(settings.quietWindowMs).toBe(5000);
+    const bad = extractDecisionSettings({
+      decision: { halfSentenceEnabled: true, quietWindowMs: 500 },
+    });
+    expect(bad.quietWindowMs).toBe(DEFAULT_DECISION_SETTINGS.quietWindowMs);
+    expect(extractDecisionSettings(undefined).halfSentenceEnabled).toBe(false);
+  });
+});
+
+describe("judgeMessageFinished (Phase 4 收窗判定)", () => {
+  const halfSettings = (): DecisionSettings => ({
+    ...settingsWith({}),
+    questions: {
+      ...settingsWith({}).questions,
+      q_finished: { type: "noul", instructions: "说完了吗" },
+    },
+  });
+  const responding = (noul: number) =>
+    new Response(
+      JSON.stringify({
+        answers: { q_finished: { type: "noul", noul } },
+        usage: { input_tokens: 30 },
+        model: "decision-model-preview",
+        latency_ms: 40,
+      }),
+      { status: 200 },
+    );
+
+  it("P>=0.5 finished, P<0.5 unfinished", async () => {
+    const yes = (async () => responding(0.9)) as unknown as typeof fetch;
+    expect(
+      await judgeMessageFinished({
+        endpoint,
+        settings: halfSettings(),
+        messages: ["我买的空气炸锅坏了，必须今天退"],
+        fetchImpl: yes,
+      }),
+    ).toBe("finished");
+    const no = (async () => responding(0.2)) as unknown as typeof fetch;
+    expect(
+      await judgeMessageFinished({
+        endpoint,
+        settings: halfSettings(),
+        messages: ["我买的那个东西"],
+        fetchImpl: no,
+      }),
+    ).toBe("unfinished");
+  });
+
+  it("fails open to unknown: no question / endpoint failure / empty messages", async () => {
+    expect(
+      await judgeMessageFinished({
+        endpoint,
+        settings: settingsWith({}),
+        messages: ["x"],
+      }),
+    ).toBe("unknown");
+    const fail = (async () =>
+      new Response("err", { status: 502 })) as unknown as typeof fetch;
+    expect(
+      await judgeMessageFinished({
+        endpoint,
+        settings: halfSettings(),
+        messages: ["x"],
+        fetchImpl: fail,
+      }),
+    ).toBe("unknown");
+    expect(
+      await judgeMessageFinished({
+        endpoint,
+        settings: halfSettings(),
+        messages: [],
+      }),
+    ).toBe("unknown");
   });
 });

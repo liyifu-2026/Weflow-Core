@@ -99,6 +99,12 @@ export async function currentChannelCursor(
   nextCursor: string,
   logger: Logger = DEFAULT_LOGGER,
   groupChatDeps?: GroupChatDeps,
+  /**
+   * Phase 4 短静默窗：组合根从 decision 设置计算后传入（halfSentence
+   * 开启时传基准窗，正则延长同值失效——收窗时由决策模型判续窗）。
+   * 缺省 = 出厂 12s/30s，行为与未接入一致。
+   */
+  turnAdmissionOptions?: { quietWindowMs?: number },
 ): Promise<void> {
   const numericCursor = Number(nextCursor);
   if (!Number.isSafeInteger(numericCursor) || numericCursor < 0) {
@@ -111,6 +117,7 @@ export async function currentChannelCursor(
     CHANNEL_SOURCE,
     logger,
     groupChatDeps,
+    turnAdmissionOptions,
   );
 }
 
@@ -151,6 +158,7 @@ async function ingestNormalizedEvents(
   source: string,
   logger: Logger,
   groupChatDeps?: GroupChatDeps,
+  turnAdmissionOptions?: { quietWindowMs?: number },
 ): Promise<void> {
   for (const rawEvent of events) {
     let event: NormalizedChannelEvent;
@@ -172,6 +180,9 @@ async function ingestNormalizedEvents(
           logger,
           groupChatDeps: groupChatDeps,
           deferredGlobalPause,
+          ...(turnAdmissionOptions?.quietWindowMs !== undefined
+            ? { turnAdmissionQuietWindowMs: turnAdmissionOptions.quietWindowMs }
+            : {}),
         });
         const eventCursor = eventCursorValue(rawEvent.cursor);
         if (eventCursor !== null) {
@@ -239,9 +250,13 @@ async function ingestNormalizedEvent(
     logger: Logger;
     groupChatDeps: GroupChatDeps | undefined;
     deferredGlobalPause: { conversationId: string; messageId: string }[];
+    /** Phase 4 短静默窗基准值（毫秒）；缺省 = 出厂 12s */
+    turnAdmissionQuietWindowMs?: number;
   },
 ): Promise<void> {
   const { source, logger, groupChatDeps, deferredGlobalPause } = ctx;
+  // Phase 4 短静默窗：基准值由组合根按 decision.quietWindowMs 传入
+  const turnAdmissionQuietWindowMs = ctx.turnAdmissionQuietWindowMs;
   // 全局 Agent 开关：安全关键，fresh 读（不经过缓存）
   const settings = await readRuntimeSettings(transaction, logger, {
     fresh: true,
@@ -585,6 +600,8 @@ async function ingestNormalizedEvent(
           messageId,
           text: event.content,
           now: new Date(),
+          quietWindowMs: turnAdmissionQuietWindowMs,
+          unfinishedWindowMs: turnAdmissionQuietWindowMs,
           existingRevision: existingAdmission?.revision,
           existingCount: existingAdmission?.messageCount,
         });

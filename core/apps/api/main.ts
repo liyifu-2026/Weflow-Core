@@ -64,9 +64,14 @@ import { processHandoffReminders } from "../../modules/handoff/application/hando
 import { startMemoryMaintenance } from "../../modules/memory/application/memory-maintenance.js";
 import { routeMediaToHuman } from "../../modules/handoff/application/route-media-to-human.js";
 import { readRuntimeSettings } from "../../modules/operations/application/runtime-settings.js";
-import { resolveSlotChainRuntime } from "../../modules/operations/application/model-gateway.js";
 import { createOptionalCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
 import { createBehaviorSettingsReader } from "../../modules/agent/application/behavior-settings.js";
+import {
+  extractDecisionSettings,
+  type DecisionSettings,
+} from "../../modules/agent/application/decision-triage.js";
+import { resolveSlotChainRuntime } from "../../modules/operations/application/model-gateway.js";
+import type { DecisionModelEndpoint } from "../../infrastructure/model_runtime/decision-model-client.js";
 import {
   extractGroupChatSettings,
   resolveGroupChatPolicy,
@@ -273,9 +278,74 @@ await runProcess({
       redisUrl: config.redisUrl,
       logger,
     });
+    // 决策模型设置读取器（Phase 4 半句判定；独立实例自带缓存）
+    const readAdmissionSettings = createOptionalCachedExtensionSettingsReader(
+      postgres.db,
+      config.behaviorSettingsRef,
+    );
+    // 决策模型端点缓存解析（Phase 4 半句判定在 core-api 进程收窗时用；
+    // decision 槽位未绑定 = undefined，半句判定整体关闭）。
+    let decisionEndpointCache: {
+      at: number;
+      value: DecisionModelEndpoint | undefined;
+    } = { at: 0, value: undefined };
+    const resolveDecisionEndpointCached = async (): Promise<
+      DecisionModelEndpoint | undefined
+    > => {
+      if (Date.now() - decisionEndpointCache.at < 15_000) {
+        return decisionEndpointCache.value;
+      }
+      try {
+        const chain = await resolveSlotChainRuntime(postgres.db, "decision");
+        const endpoint = chain[0];
+        decisionEndpointCache = {
+          at: Date.now(),
+          value: endpoint
+            ? {
+                baseUrl: endpoint.baseUrl,
+                apiKey: endpoint.apiKey ?? "",
+                model: endpoint.displayName,
+                timeoutMs: 500,
+              }
+            : undefined,
+        };
+      } catch {
+        // 解析失败沿用旧缓存（fail-open）
+      }
+      return decisionEndpointCache.value;
+    };
+    const readDecisionSettings =
+      async (): Promise<DecisionSettings | undefined> => {
+        try {
+          return extractDecisionSettings(await readAdmissionSettings());
+        } catch {
+          return undefined;
+        }
+      };
+    /** Phase 4 半句判定依赖：开关关/端点未绑定 → undefined（原行为） */
+    const buildHalfSentenceDeps = async () => {
+      const [endpoint, settings] = await Promise.all([
+        resolveDecisionEndpointCached(),
+        readDecisionSettings(),
+      ]);
+      if (!endpoint || !settings || !settings.halfSentenceEnabled) {
+        return undefined;
+      }
+      return {
+        endpoint,
+        settings,
+        extensionMs: settings.quietWindowMs,
+      };
+    };
     // 合并窗口调度器（Phase 1）：到期登记合并建 Turn；CAS 认领多实例安全
     const stopTurnAdmissionDispatcher = startTurnAdmissionDispatcher({
-      process: () => processTurnAdmissions(postgres.db, logger),
+      process: async () =>
+        processTurnAdmissions(
+          postgres.db,
+          logger,
+          new Date(),
+          await buildHalfSentenceDeps(),
+        ),
       logger,
     });
     // 定时发送 dispatcher（SCHEDULED-SEND-PLAN）：到点直发预承诺内容，
@@ -377,8 +447,19 @@ await runProcess({
         dependencies: {
           currentCursor: (db) =>
             currentChannelCursor(db, "channel-host").then(String),
-          ingestEvents: (db, events, nextCursor) =>
-            ingestChannelEvents(db, events, nextCursor, logger, {
+          ingestEvents: async (db, events, nextCursor) => {
+            // Phase 4：半句判定开启时 ingest 按短基准窗登记（正则延长同值
+            // 失效，收窗时由决策模型判续窗）；关闭/读取失败 = 出厂 12s/30s。
+            let turnAdmissionOptions:
+              | { quietWindowMs: number }
+              | undefined;
+            const decisionSettings = await readDecisionSettings();
+            if (decisionSettings?.halfSentenceEnabled) {
+              turnAdmissionOptions = {
+                quietWindowMs: decisionSettings.quietWindowMs,
+              };
+            }
+            await ingestChannelEvents(db, events, nextCursor, logger, {
               resolvePolicy: async (conversationRef) => {
                 try {
                   return resolveGroupChatPolicy(
@@ -389,7 +470,8 @@ await runProcess({
                   return extractGroupChatSettings(undefined).global;
                 }
               },
-            }),
+            }, turnAdmissionOptions);
+          },
         },
       });
       const stopChannelHostOutboundPoller = startChannelOutboundPoller({

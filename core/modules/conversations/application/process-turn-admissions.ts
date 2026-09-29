@@ -10,7 +10,7 @@
  * CAS 认领（scheduled+revision 匹配）防多实例重复建 turn；
  * 失败回写 scheduled/attempt+1 重试，超限置 failed。
  */
-import { and, eq, lte } from "drizzle-orm";
+import { and, desc, eq, lte } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { Logger } from "pino";
 import * as schema from "../../../infrastructure/postgres/schema.js";
@@ -19,8 +19,14 @@ import { readRuntimeSettings } from "../../operations/application/runtime-settin
 import { resolveExecutionProfileForAdmission } from "../../agent/application/execution-profile-service.js";
 import {
   claimDueTurnAdmission,
+  halfSentenceRescheduleDelayMs,
   type ClaimedAdmission,
 } from "./turn-admission.js";
+import {
+  judgeMessageFinished,
+  type DecisionSettings,
+} from "../../agent/application/decision-triage.js";
+import type { DecisionModelEndpoint } from "../../../infrastructure/model_runtime/decision-model-client.js";
 
 const MAX_ATTEMPTS = 3;
 
@@ -31,6 +37,13 @@ export async function processTurnAdmissions(
   db: NodePgDatabase<typeof schema>,
   logger: Logger,
   now = new Date(),
+  /** Phase 4 半句判定依赖：未注入或开关关闭 = 到期即建轮（原行为） */
+  halfSentence?: {
+    endpoint: DecisionModelEndpoint;
+    settings: DecisionSettings;
+    /** 续窗时长（毫秒）；组合根按 decision.quietWindowMs 传入 */
+    extensionMs: number;
+  },
 ): Promise<number> {
   const due = await db
     .select({
@@ -56,7 +69,7 @@ export async function processTurnAdmissions(
     });
     if (!claimed) continue; // stale：已被其他实例认领或窗口被新消息重置
     try {
-      await dispatchClaimedAdmission(db, claimed, logger);
+      await dispatchClaimedAdmission(db, claimed, logger, halfSentence);
       processed += 1;
     } catch (error) {
       await requeueOrFailed(db, claimed, error, logger, now);
@@ -69,6 +82,11 @@ async function dispatchClaimedAdmission(
   db: NodePgDatabase<typeof schema>,
   claimed: ClaimedAdmission,
   logger: Logger,
+  halfSentence?: {
+    endpoint: DecisionModelEndpoint;
+    settings: DecisionSettings;
+    extensionMs: number;
+  },
 ): Promise<void> {
   // 复检 1：Handoff 进行中（人工接管）→ 不建 turn
   if (await isAgentPaused(db, claimed.conversationId)) {
@@ -100,6 +118,54 @@ async function dispatchClaimedAdmission(
   if (!admission.allowed) {
     await markDone(db, claimed, "profile_unavailable");
     return;
+  }
+  // Phase 4 半句判定：短窗到期后问决策模型「说完了吗」——未说完且未超
+  // 续窗次数 → 续窗再等；说完/判定不可用/超次数 → 照常建轮（fail-open）。
+  if (halfSentence && halfSentence.settings.halfSentenceEnabled) {
+    const recent = await db
+      .select({ text: schema.messages.text })
+      .from(schema.messages)
+      .where(
+        and(
+          eq(schema.messages.conversationId, claimed.conversationId),
+          eq(schema.messages.direction, "inbound"),
+        ),
+      )
+      .orderBy(desc(schema.messages.occurredAt))
+      .limit(8);
+    const verdict = await judgeMessageFinished({
+      endpoint: halfSentence.endpoint,
+      settings: halfSentence.settings,
+      messages: recent.map((row) => row.text),
+    });
+    if (verdict === "unfinished") {
+      const delayMs = halfSentenceRescheduleDelayMs(
+        claimed.attempt,
+        halfSentence.extensionMs,
+      );
+      if (delayMs !== null) {
+        await db
+          .update(schema.turnAdmissionStates)
+          .set({
+            status: "scheduled",
+            scheduledAt: new Date(Date.now() + delayMs),
+            attempt: claimed.attempt + 1,
+            errorCode: "half_sentence_extended",
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(
+                schema.turnAdmissionStates.conversationId,
+                claimed.conversationId,
+              ),
+              eq(schema.turnAdmissionStates.revision, claimed.revision),
+              eq(schema.turnAdmissionStates.status, "dispatching"),
+            ),
+          );
+        return;
+      }
+    }
   }
   await db
     .insert(schema.agentTurns)
