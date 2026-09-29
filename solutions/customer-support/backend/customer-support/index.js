@@ -35,6 +35,48 @@ const SEED_SETTINGS = {
         "除该 JSON 外不要输出任何其他内容。",
     },
   },
+  // 决策模型（System One）问题集与阈值：开关默认全关，影子期数据校准后才
+  // 逐项打开（评审方案 96.5/100）。q_* 键名是引擎契约（decision-triage.ts
+  // DECISION_QUESTION_IDS），instructions/criteria 文本属业务话术可自由调整。
+  decision: {
+    shadowEnabled: false,
+    triageEnabled: false,
+    worthReplyEnabled: false,
+    timeoutMs: 500,
+    thresholds: {
+      humanProbability: 0.85,
+      humanConfidence: 0.6,
+      simpleProbability: 0.8,
+      noReplyProbability: 0.9,
+    },
+    questions: {
+      q_need_human: {
+        type: "noul",
+        instructions:
+          "判断该客户最新消息是否需要转给人工客服处理。需要转人工的情形：" +
+          "客户情绪激烈或明确表达不满、涉及退款赔偿等敏感诉求、问题明显超出自动客服能力、" +
+          "客户明确要求人工服务。普通咨询、寒暄、简单确认都不需要转人工。",
+      },
+      q_tier: {
+        type: "choice",
+        instructions:
+          "判断该客户消息适合哪种处理档位。simple=寒暄问候、简单确认或纯情绪安抚，" +
+          "不需要业务知识即可得体回复；standard=涉及产品、订单、售后等需要业务知识的实质问题。",
+        criteria: {
+          simple: "寒暄/问候/简单确认/纯情绪安抚",
+          standard: "需要业务知识的实质问题",
+          other: "无法判断",
+        },
+      },
+      q_worth_reply: {
+        type: "noul",
+        instructions:
+          "判断该消息是否需要客服作出回应。需要回应的情形：包含问题、诉求、情绪表达或" +
+          "对客服上条消息的实质反馈。不需要回应的情形：纯表情、语气词（如\"哦\"\"哈哈\"）、" +
+          "无实义的闲聊碎片。拿不准时视为需要回应。",
+      },
+    },
+  },
   behavior: {
     roundSummaryLabels: { customer: "客户", agent: "客服" },
   },

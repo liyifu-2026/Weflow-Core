@@ -43,7 +43,11 @@ export type AgentTurnEventType =
   /** 轮次执行抛错（重试前落库；payload: errorCode/message），排错统一入口 */
   | "turn_error"
   /** 队列重试耗尽等终态失败（payload: errorCode/handoffReason） */
-  | "turn_failed";
+  | "turn_failed"
+  /** 决策模型影子调用（只观测不消费；payload: answers/latencyMs/inputTokens/model 或 errorCode） */
+  | "decision_model_shadow"
+  /** 决策模型主动判定被消费（payload: 同影子 + 消费到的 verdict 摘要） */
+  | "decision_model_call";
 
 export async function recordAgentTurnEvent(
   db: NodePgDatabase<typeof schema> | AgentTurnDatabase,

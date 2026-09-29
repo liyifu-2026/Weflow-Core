@@ -81,16 +81,22 @@ const SLOTS: Array<{ key: string; label: string; desc: string }> = [
   { key: "asr", label: "语音转写", desc: "语音消息转文字专用小模型" },
   { key: "triage", label: "预判分流", desc: "高危/简单判定的极速小模型" },
   { key: "fast", label: "直答", desc: "简单题直答的轻量对话模型" },
+  {
+    key: "decision",
+    label: "结构化决策",
+    desc: "决策模型（System One）判定端点；行为开关在扩展设置 decision 键，默认全关",
+  },
 ];
 
 /** reka-ui Select 不接受空字符串 value，「未绑定/无」用哨兵值表示 */
 const NONE = "__none__";
 
-const CAPABILITIES = ["text", "vision", "asr"] as const;
+const CAPABILITIES = ["text", "vision", "asr", "decision"] as const;
 const CAPABILITY_LABELS: Record<string, string> = {
   text: "文本",
   vision: "视觉",
   asr: "语音",
+  decision: "决策",
 };
 
 const data = ref<GatewayResponse | null>(null);

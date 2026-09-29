@@ -24,9 +24,18 @@ import { recordAgentTurnEvent } from "./agent-turn-events.js";
 import { processAgentTurn, processPlannedToolTurn } from "./turn-runner.js";
 import type { FileStorage } from "../../../infrastructure/file_storage/types.js";
 import type { imageToContentPart } from "./image-content.js";
-import { commitAgentTurnHandoff } from "./agent-turn-outcome-command.js";
+import { commitAgentTurnHandoff, commitAgentTurnNoAction } from "./agent-turn-outcome-command.js";
 import type { TriageVerdict } from "./triage-classifier.js";
 import type { BehaviorSettings } from "./behavior-settings.js";
+import type { DecisionModelEndpoint } from "../../../infrastructure/model_runtime/decision-model-client.js";
+import {
+  classifyWithDecisionModel,
+  decisionAuditPayload,
+  isDecisionSeamActive,
+  shouldSkipForWorthReply,
+  verdictFromDecision,
+  type DecisionSettings,
+} from "./decision-triage.js";
 import { isTerminal, normalizeStatus } from "./turn-utils.js";
 
 type Database = NodePgDatabase<typeof schema>;
@@ -95,6 +104,16 @@ export class AgentTurnExecutor {
         }) => Promise<TriageVerdict>;
         fastClient?: TextModel | undefined;
         fastModel?: string | undefined;
+      };
+      /**
+       * 决策模型缝（System One，2026-09-30）：可选；未提供或全开关关闭时
+       * 零行为变化。shadow 只落审计；triage/worthReply 主动消费判定结果，
+       * 失败按各落点的 fail-open 阶梯回退（triage→LLM 档，worthReply→主决策）。
+       */
+      decisionModel?: {
+        endpoint: DecisionModelEndpoint;
+        settings: DecisionSettings;
+        fetchImpl?: typeof fetch | undefined;
       };
       /**
        * 行为参数（R2 设置中心）：会话 TTL/轮数/wait 缺省/ReAct 预算的
@@ -202,7 +221,106 @@ export class AgentTurnExecutor {
         let decisionClient = this.modelClient;
         let decisionModel = this.model;
         let fastDirectReply = false;
-        if (this.dependencies.triage) {
+        // 决策模型缝（System One，评审方案 96.5/100）：可选、默认全关，
+        // 关闭 = 本块整体跳过。shadow 只观测落审计；主动模式按阈值消费：
+        // 高危转人工先于 no-reply 跳过（转人工必须赢）；判定失败一律
+        // 回退既有路径（triage→LLM 档、worthReply→主决策），永不阻断轮次。
+        const decisionDeps = this.dependencies.decisionModel;
+        let decisionHandledTriage = false;
+        if (decisionDeps && isDecisionSeamActive(decisionDeps.settings)) {
+          const context = await this.loadTriageContext(
+            input.turnId,
+            before.conversationId,
+          );
+          const result = await classifyWithDecisionModel({
+            endpoint: decisionDeps.endpoint,
+            settings: decisionDeps.settings,
+            context,
+            fetchImpl: decisionDeps.fetchImpl,
+          });
+          const shadowOnly =
+            decisionDeps.settings.shadowEnabled &&
+            !decisionDeps.settings.triageEnabled &&
+            !decisionDeps.settings.worthReplyEnabled;
+          const eventType = shadowOnly
+            ? ("decision_model_shadow" as const)
+            : ("decision_model_call" as const);
+          const recordDecisionEvent = (payload: Record<string, unknown>) =>
+            recordAgentTurnEvent(this.db, {
+              turnId: before.turnId,
+              conversationId: before.conversationId,
+              eventType,
+              payload,
+            });
+          if (result.kind === "ok") {
+            const consumed: Record<string, unknown> = {};
+            if (!shadowOnly) {
+              if (decisionDeps.settings.triageEnabled) {
+                const verdict = verdictFromDecision(
+                  result,
+                  decisionDeps.settings,
+                );
+                consumed.triage = {
+                  route: verdict.route,
+                  tier: verdict.tier,
+                  reason: verdict.reason,
+                };
+                decisionHandledTriage = true;
+                if (
+                  verdict.route === "human" &&
+                  verdict.needHumanProbability !== undefined
+                ) {
+                  await recordDecisionEvent({
+                    ...decisionAuditPayload(result),
+                    consumed,
+                  });
+                  await commitAgentTurnHandoff(this.db, {
+                    conversationId: before.conversationId,
+                    turnId: before.turnId,
+                    reason: "triage_decision_model",
+                  });
+                  return this.resultAfterExecution(before, resumed);
+                }
+                if (
+                  verdict.tier === "simple" &&
+                  this.dependencies.triage?.fastClient &&
+                  this.dependencies.triage?.fastModel
+                ) {
+                  // 与 LLM 直答档同语义：全套闸门不变，仅换档位、不续步。
+                  decisionClient = this.dependencies.triage.fastClient;
+                  decisionModel = this.dependencies.triage.fastModel;
+                  fastDirectReply = true;
+                }
+              }
+              if (
+                decisionDeps.settings.worthReplyEnabled &&
+                shouldSkipForWorthReply(result, decisionDeps.settings)
+              ) {
+                consumed.worthReply = "no_reply_needed";
+                await recordDecisionEvent({
+                  ...decisionAuditPayload(result),
+                  consumed,
+                });
+                await commitAgentTurnNoAction(this.db, {
+                  conversationId: before.conversationId,
+                  turnId: before.turnId,
+                  reason: "no_reply_needed",
+                });
+                return this.resultAfterExecution(before, resumed);
+              }
+            }
+            await recordDecisionEvent({
+              ...decisionAuditPayload(result),
+              consumed,
+            });
+          } else if (result.kind !== "disabled") {
+            await recordDecisionEvent({
+              errorCode:
+                result.kind === "failed" ? result.errorCode : result.kind,
+            });
+          }
+        }
+        if (this.dependencies.triage && !decisionHandledTriage) {
           const verdict = await this.dependencies.triage.classify(
             await this.loadTriageContext(input.turnId, before.conversationId),
           );
@@ -381,6 +499,7 @@ export class AgentTurnExecutor {
   ): Promise<{
     triggerText: string;
     recentInboundTexts: string[];
+    chatType?: string | undefined;
   }> {
     try {
       const [turn] = await this.db
@@ -396,20 +515,28 @@ export class AgentTurnExecutor {
             .where(eq(schema.messages.messageId, triggerMessageId))
             .limit(1)
         : [];
-      const recent = await this.db
-        .select({ text: schema.messages.text })
-        .from(schema.messages)
-        .where(
-          and(
-            eq(schema.messages.conversationId, conversationId),
-            eq(schema.messages.direction, "inbound"),
-          ),
-        )
-        .orderBy(desc(schema.messages.occurredAt))
-        .limit(5);
+      const [recent, conversation] = await Promise.all([
+        this.db
+          .select({ text: schema.messages.text })
+          .from(schema.messages)
+          .where(
+            and(
+              eq(schema.messages.conversationId, conversationId),
+              eq(schema.messages.direction, "inbound"),
+            ),
+          )
+          .orderBy(desc(schema.messages.occurredAt))
+          .limit(5),
+        this.db
+          .select({ chatType: schema.conversations.chatType })
+          .from(schema.conversations)
+          .where(eq(schema.conversations.conversationId, conversationId))
+          .limit(1),
+      ]);
       return {
         triggerText: trigger?.text ?? "",
         recentInboundTexts: recent.map((row) => row.text).reverse(),
+        chatType: conversation[0]?.chatType ?? undefined,
       };
     } catch {
       return { triggerText: "", recentInboundTexts: [] };

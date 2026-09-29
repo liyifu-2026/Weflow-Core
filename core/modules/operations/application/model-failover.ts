@@ -225,17 +225,39 @@ async function probeAsrConnection(
   }
 }
 
-/** 探测单模型的连接性：文本/视觉模型发一次最小 chat 补全，ASR 模型按协议发音频；只验证可达与认证。 */
+/** 探测单模型的连接性：文本/视觉模型发一次最小 chat 补全，ASR 模型按协议发音频，决策模型发一次最小 systemone 判定；只验证可达与认证。 */
 export async function probeModelConnection(
   endpoint: {
     baseUrl: string;
     apiKey?: string | undefined;
     displayName: string;
     capabilities?: string[] | undefined;
-    protocol?: "chat_inline" | "audio_transcriptions" | undefined;
+    protocol?:
+      | "chat_inline"
+      | "audio_transcriptions"
+      | "system_one"
+      | undefined;
   },
   timeoutMs: number,
 ): Promise<{ ok: true; latencyMs: number } | { ok: false; error: string }> {
+  if (endpoint.protocol === "system_one") {
+    const { callDecisionModel } = await import(
+      "../../../infrastructure/model_runtime/decision-model-client.js"
+    );
+    const startedAt = Date.now();
+    const result = await callDecisionModel(
+      {
+        baseUrl: endpoint.baseUrl,
+        apiKey: endpoint.apiKey ?? "",
+        model: endpoint.displayName,
+        timeoutMs,
+      },
+      { state: "ping", questions: { q_probe: { type: "noul" } } },
+    );
+    return result.ok
+      ? { ok: true, latencyMs: Date.now() - startedAt }
+      : { ok: false, error: `systemone_${result.errorCode}` };
+  }
   const isAsr =
     endpoint.protocol === "audio_transcriptions" ||
     (endpoint.protocol === "chat_inline" &&
@@ -290,7 +312,11 @@ export function probeModelAndRecord(
     apiKey?: string | undefined;
     displayName: string;
     capabilities?: string[] | undefined;
-    protocol?: "chat_inline" | "audio_transcriptions" | undefined;
+    protocol?:
+      | "chat_inline"
+      | "audio_transcriptions"
+      | "system_one"
+      | undefined;
   },
   timeoutMs: number,
 ): Promise<{

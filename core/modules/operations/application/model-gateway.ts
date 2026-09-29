@@ -19,12 +19,21 @@ import * as schema from "../../../infrastructure/postgres/schema.js";
 import type { TextModel } from "../../model/contracts/text-model.js";
 import type { FailoverLink } from "./model-failover.js";
 
-/** 合法能力标签（总纲：文本/视觉/语音） */
-export const MODEL_CAPABILITIES = ["text", "vision", "asr"] as const;
+/** 合法能力标签（总纲：文本/视觉/语音/结构化决策） */
+export const MODEL_CAPABILITIES = [
+  "text",
+  "vision",
+  "asr",
+  "decision",
+] as const;
 export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
 
-/** ASR 端点协议：MiMo 内联音频 vs 标准 audio/transcriptions multipart */
-export const MODEL_PROTOCOLS = ["chat_inline", "audio_transcriptions"] as const;
+/** 端点协议：chat 内联音频 / 标准 audio/transcriptions multipart / System One 结构化决策 */
+export const MODEL_PROTOCOLS = [
+  "chat_inline",
+  "audio_transcriptions",
+  "system_one",
+] as const;
 export type ModelProtocol = (typeof MODEL_PROTOCOLS)[number];
 
 export function isProtocolListValue(value: unknown): value is ModelProtocol {
@@ -34,8 +43,19 @@ export function isProtocolListValue(value: unknown): value is ModelProtocol {
   );
 }
 
-/** 平台模型槽位（既有五槽位；新槽位不得随意增加） */
-export const MODEL_SLOTS = ["text", "vision", "asr", "triage", "fast"] as const;
+/**
+ * 平台模型槽位（六槽位）。decision 槽（2026-09-30 决策模型接入，评审方案
+ * 96.5/100）绑定 System One 结构化决策端点，服务于 triage 影子/分流与
+ * worth-reply 判定；开关全在扩展设置 decision 键，默认全关零行为变化。
+ */
+export const MODEL_SLOTS = [
+  "text",
+  "vision",
+  "asr",
+  "triage",
+  "fast",
+  "decision",
+] as const;
 export type ModelSlot = (typeof MODEL_SLOTS)[number];
 
 const SLOT_KEY: Record<ModelSlot, string> = {
@@ -44,6 +64,7 @@ const SLOT_KEY: Record<ModelSlot, string> = {
   asr: "model_slot_asr",
   triage: "model_slot_triage",
   fast: "model_slot_fast",
+  decision: "model_slot_decision",
 };
 
 /** 模型注册条目的对外视图（apiKey 永不回显） */
@@ -289,6 +310,7 @@ const SLOT_REQUIRED_CAPABILITY: Partial<Record<ModelSlot, ModelCapability>> = {
   asr: "asr",
   vision: "vision",
   text: "text",
+  decision: "decision",
 };
 
 /** 绑定槽位到模型（modelId=null 解绑；写审计；能力不符拒绝） */

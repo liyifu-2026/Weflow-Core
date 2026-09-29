@@ -1,0 +1,136 @@
+/**
+ * 决策模型客户端单测：注入 fetch，验证响应收敛、错误折叠（永不抛错）、
+ * 超时与 URL 拼接。协议样例依据百炼 System One 文档（2026-09-30）。
+ */
+import { describe, expect, it } from "vitest";
+import {
+  callDecisionModel,
+  readChoiceProbability,
+  readDecisionConfidence,
+  readNoulProbability,
+} from "../infrastructure/model_runtime/decision-model-client.js";
+
+const endpoint = {
+  baseUrl: "https://example.maas.aliyuncs.com/",
+  apiKey: "sk-test",
+  model: "decision-model-preview-2026-09-24",
+  timeoutMs: 500,
+};
+
+const okBody = {
+  answers: {
+    q_need_human: { answer: 0.12, confidence: 0.4 },
+    q_tier: {
+      answer: "simple",
+      probabilities: { simple: 0.91, standard: 0.07, other: 0.02 },
+      confidence: 0.88,
+    },
+  },
+  usage: { input_tokens: 168 },
+  model: "decision-model-preview-2026-09-24",
+  latency_ms: 58.3,
+};
+
+describe("decision model client", () => {
+  it("parses a successful systemone response", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify(okBody), { status: 200 });
+    }) as unknown as typeof fetch;
+    const result = await callDecisionModel(endpoint, {
+      state: { trigger: "您好", recent: [] },
+      questions: { q_need_human: { type: "noul" } },
+      fetchImpl,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.inputTokens).toBe(168);
+    expect(result.latencyMs).toBeCloseTo(58.3);
+    expect(result.model).toBe("decision-model-preview-2026-09-24");
+    expect(readNoulProbability(result.answers.q_need_human)).toBeCloseTo(0.12);
+    expect(readChoiceProbability(result.answers.q_tier, "simple")).toBeCloseTo(
+      0.91,
+    );
+    expect(readDecisionConfidence(result.answers.q_tier)).toBeCloseTo(0.88);
+    // URL 拼接：尾斜杠去除 + 路径与 Bearer 头
+    expect(calls[0]?.url).toBe(
+      "https://example.maas.aliyuncs.com/compatible-mode/v1/systemone",
+    );
+    const headers = calls[0]?.init.headers as Record<string, string>;
+    expect(headers.authorization).toBe("Bearer sk-test");
+    const body = JSON.parse(String(calls[0]?.init.body)) as {
+      model: string;
+      state: unknown;
+    };
+    expect(body.model).toBe("decision-model-preview-2026-09-24");
+  });
+
+  it("folds http errors into failed without throwing", async () => {
+    const fetchImpl = (async () =>
+      new Response("boom", { status: 500 })) as unknown as typeof fetch;
+    const result = await callDecisionModel(endpoint, {
+      state: "x",
+      questions: { q: { type: "noul" } },
+      fetchImpl,
+    });
+    expect(result).toEqual({ ok: false, errorCode: "http_500" });
+  });
+
+  it("folds network failures into failed", async () => {
+    const fetchImpl = (async () => {
+      throw new Error("fetch failed");
+    }) as unknown as typeof fetch;
+    const result = await callDecisionModel(endpoint, {
+      state: "x",
+      questions: { q: { type: "noul" } },
+      fetchImpl,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errorCode).toBe("network");
+  });
+
+  it("folds aborts into timeout", async () => {
+    const fetchImpl = (async () => {
+      const error = new Error("aborted");
+      error.name = "AbortError";
+      throw error;
+    }) as unknown as typeof fetch;
+    const result = await callDecisionModel(endpoint, {
+      state: "x",
+      questions: { q: { type: "noul" } },
+      fetchImpl,
+    });
+    expect(result).toEqual({ ok: false, errorCode: "timeout" });
+  });
+
+  it("folds malformed bodies into bad_response", async () => {
+    const fetchImpl = (async () =>
+      new Response('{"answers": "not-an-object"}', {
+        status: 200,
+      })) as unknown as typeof fetch;
+    const result = await callDecisionModel(endpoint, {
+      state: "x",
+      questions: { q: { type: "noul" } },
+      fetchImpl,
+    });
+    expect(result).toEqual({ ok: false, errorCode: "bad_response" });
+  });
+
+  it("keeps raw answer values it cannot shape", async () => {
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({ answers: { q1: { weird: true } } }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    const result = await callDecisionModel(endpoint, {
+      state: "x",
+      questions: { q1: { type: "noul" } },
+      fetchImpl,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.answers.q1).toEqual({ answer: { weird: true } });
+    expect(readNoulProbability(result.answers.q1)).toBeUndefined();
+  });
+});

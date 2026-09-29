@@ -166,9 +166,11 @@ describe("processDueScheduledSends", () => {
 
     expect(fire).not.toHaveBeenCalled();
     const shifted = setCalls[0]!.patch.sendAt as Date;
-    expect(shifted.getDate()).toBe(sendAt.getDate() + 1);
-    expect(shifted.getHours()).toBe(8);
-    expect(shifted.getMinutes()).toBe(0);
+    // 次日 08:00（逐字段构造期望值，月边界安全——getDate()+1 在月末会跨月）
+    const expected = new Date(sendAt);
+    expected.setDate(expected.getDate() + 1);
+    expected.setHours(8, 0, 0, 0);
+    expect(shifted.getTime()).toBe(expected.getTime());
   });
 });
 

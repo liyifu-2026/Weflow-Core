@@ -56,6 +56,7 @@ import {
   classifyForTriage,
   extractTriagePolicy,
 } from "../../modules/agent/application/triage-classifier.js";
+import { extractDecisionSettings } from "../../modules/agent/application/decision-triage.js";
 import { createBehaviorSettingsReader } from "../../modules/agent/application/behavior-settings.js";
 import { createOptionalCachedExtensionSettingsReader } from "../../infrastructure/settings/extension-settings.js";
 import {
@@ -149,6 +150,11 @@ await runProcess({
       { client: OpenAiCompatibleClient; model: string } | undefined;
     let fastEndpoint:
       { client: OpenAiCompatibleClient; model: string } | undefined;
+    // 决策模型端点（System One）：decision 槽位绑定即启用缝（开关仍在
+    // 扩展设置 decision 键，默认全关）；timeoutMs 由设置逐调用覆盖。
+    let decisionEndpoint:
+      | { baseUrl: string; apiKey: string; model?: string; timeoutMs: number }
+      | undefined;
     // 记忆提取引用的模型名快照（随热加载刷新，经闭包读取最新值）。
     let memoryModelName = modelSettings.textModel.name;
     // 旧配置回落名快照：text 槽位未绑定/解析失败时，主模型名回落到
@@ -248,7 +254,9 @@ await runProcess({
     // 以 model_slot_* 绑定为唯一事实源；applyModelSettings 先落
     // model-settings 组旧值，槽位绑定在此覆盖。随热加载轮询刷新。
     const applySlotEndpoints = async (): Promise<void> => {
-      const resolveEndpoint = async (slot: "triage" | "fast") => {
+      const resolveEndpoint = async (
+        slot: "triage" | "fast" | "decision",
+      ) => {
         try {
           const chain = await resolveSlotChainRuntime(postgres.db, slot);
           return chain[0];
@@ -260,10 +268,12 @@ await runProcess({
           return undefined;
         }
       };
-      const [triageEndpointSlot, fastEndpointSlot] = await Promise.all([
-        resolveEndpoint("triage"),
-        resolveEndpoint("fast"),
-      ]);
+      const [triageEndpointSlot, fastEndpointSlot, decisionEndpointSlot] =
+        await Promise.all([
+          resolveEndpoint("triage"),
+          resolveEndpoint("fast"),
+          resolveEndpoint("decision"),
+        ]);
       if (triageEndpointSlot) {
         triageEndpoint = {
           client: new OpenAiCompatibleClient({
@@ -286,13 +296,24 @@ await runProcess({
           model: fastEndpointSlot.displayName,
         };
       }
-      if (triageEndpointSlot || fastEndpointSlot) {
+      if (decisionEndpointSlot) {
+        decisionEndpoint = {
+          baseUrl: decisionEndpointSlot.baseUrl,
+          apiKey: decisionEndpointSlot.apiKey ?? "",
+          model: decisionEndpointSlot.displayName,
+          timeoutMs: 500,
+        };
+      } else {
+        decisionEndpoint = undefined;
+      }
+      if (triageEndpointSlot || fastEndpointSlot || decisionEndpointSlot) {
         logger.info(
           {
             triage: triageEndpointSlot?.displayName ?? "(legacy/none)",
             fast: fastEndpointSlot?.displayName ?? "(legacy/none)",
+            decision: decisionEndpointSlot?.displayName ?? "(none)",
           },
-          "model gateway slot endpoints applied (triage/fast)",
+          "model gateway slot endpoints applied (triage/fast/decision)",
         );
       }
     };
@@ -459,25 +480,47 @@ await runProcess({
     }
     // 对话轮次执行器，确保同一对话的任务串行执行
     const conversationTurns = new ConversationTurnExecutor();
-    /** 按 job 构建分流依赖：快照当前生效的 triage/fast 端点（热加载后即新值）。 */
-    const buildTriageDeps = () => {
+    /** 按 job 构建分流依赖：快照当前生效的 triage/fast/decision 端点（热加载后即新值）。
+     * 缝存在性 = triage 端点 OR decision 端点（decision 开关全关时执行器内仍零行为）。 */
+    const buildTriageDeps = async () => {
       const currentTriage = triageEndpoint;
-      if (!currentTriage) return undefined;
+      const currentDecision = decisionEndpoint;
+      if (!currentTriage && !currentDecision) return undefined;
       const currentFast = fastEndpoint;
+      const decisionSettings = currentDecision
+        ? extractDecisionSettings(await readPipelineSettings())
+        : undefined;
       return {
-        classify: async (context: {
-          triggerText: string;
-          recentInboundTexts: string[];
-        }) =>
-          classifyForTriage({
-            policy: extractTriagePolicy(await readPipelineSettings()),
-            client: currentTriage.client,
-            model: currentTriage.model,
-            triggerText: context.triggerText,
-            recentInboundTexts: context.recentInboundTexts,
-          }),
-        ...(currentFast
-          ? { fastClient: currentFast.client, fastModel: currentFast.model }
+        ...(currentTriage
+          ? {
+              triage: {
+                classify: async (context: {
+                  triggerText: string;
+                  recentInboundTexts: string[];
+                }) =>
+                  classifyForTriage({
+                    policy: extractTriagePolicy(await readPipelineSettings()),
+                    client: currentTriage.client,
+                    model: currentTriage.model,
+                    triggerText: context.triggerText,
+                    recentInboundTexts: context.recentInboundTexts,
+                  }),
+                ...(currentFast
+                  ? {
+                      fastClient: currentFast.client,
+                      fastModel: currentFast.model,
+                    }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(currentDecision && decisionSettings
+          ? {
+              decisionModel: {
+                endpoint: currentDecision,
+                settings: decisionSettings,
+              },
+            }
           : {}),
       };
     };
@@ -505,7 +548,7 @@ await runProcess({
             legacyTextModelName,
           );
           const activeModel = primary.name;
-          const triage = buildTriageDeps();
+          const triage = await buildTriageDeps();
           // Phase 4 视觉直读：仅当 text 槽位主模型声明视觉能力时才注入
           // 媒体文件存储（把最新入站图片直接喂给主模型）。非视觉模型一律
           // 不注入，图片维持文本占位——避免把 image_url 喂给不支持图像的
@@ -537,7 +580,7 @@ await runProcess({
                 ? { preResolveAiEmployeePrompt }
                 : {}),
               ...(resolveAiEmployeeId ? { resolveAiEmployeeId } : {}),
-              ...(triage ? { triage } : {}),
+              ...(triage ? triage : {}),
               behaviorSettings: readBehaviorSettings,
               decisionTimeoutMs: config.model?.decisionTimeoutMs,
             },
