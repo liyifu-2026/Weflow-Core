@@ -10,7 +10,7 @@
     3. WeChatGUI.send_file 以文件消息发送给目标。
 
 用法：
-    python demo_forward_voice.py                      # 小哲→文件传输助手（安全演示）
+    python demo_forward_voice.py                      # 文件传输助手→文件传输助手（安全演示）
     python demo_forward_voice.py --target 豆芽        # 指定转发目标
     python demo_forward_voice.py --who 群名 --target 某人
 """
@@ -31,7 +31,7 @@ except AttributeError:
 
 from wechatauto import WeChat
 
-SRC_DEFAULT = "小哲"
+SRC_DEFAULT = "文件传输助手"
 TGT_DEFAULT = "文件传输助手"
 
 

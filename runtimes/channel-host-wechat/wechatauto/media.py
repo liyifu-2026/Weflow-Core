@@ -19,8 +19,11 @@ server_id、packed_info），本模块负责把媒体内容从本地取回/解�
 
     - AES 密钥: 16 字节 ASCII（字母/数字），仅在 Weixin.exe 进程内存中。
       通过 AES-ECB 解首块密文、校验 JPEG/PNG 魔数反推出（内存正则扫描）。
-    - XOR 密钥: 单字节，从同图缩略图 ``<md5>_t.dat`` 尾部 JPEG 结束标记
-      ``FF D9`` 反推（``key = tail[0] ^ 0xFF``）。
+    - XOR 密钥: 单字节，等于 cfgDword 低字节（本机 2026-09-19 实测
+      295/295 个 Sns 缓存容器与聊天 .dat 一致）；拿不到 cfg 时才退回
+      缩略图尾部统计反推（``key = tail[0] ^ 0xFF``）。
+    - 尾部页脚: Sns 缓存有 189/295 个容器在 ``FF D9`` 之后还追加 24 字节
+      页脚，所以「明文末尾 == FF D9」不能当硬判据，解密后按结束标记裁剪。
 
 用法::
 
@@ -43,6 +46,7 @@ import tempfile
 import threading
 import time
 from typing import List, Optional, Tuple
+from wechatauto.logger import wxlog
 
 from .logger import wxlog
 from .utils.lock import uilock
@@ -64,6 +68,29 @@ def _jpeg_like(pt: bytes) -> bool:
 
 def aligned_aes_block_size(aes_size: int) -> int:
     return aes_size + (16 - aes_size % 16) if aes_size % 16 else aes_size + 16
+
+
+# Sns 缓存容器会在图片结束标记之后再追加一段页脚（实测 24 字节）。只按
+# 「明文末尾 == FF D9」判定密钥，会让这类容器退回错误密钥并留下坏尾。
+_FOOTER_MAX = 32
+
+_IMG_END_MARK = (
+    (b"\xff\xd8", b"\xff\xd9"),
+    (b"\x89PNG\r\n\x1a\n", b"\x49\x45\x4e\x44\xae\x42\x60\x82"),
+)
+
+
+def strip_container_footer(plain: bytes) -> Tuple[bytes, int]:
+    """按图片结束标记裁掉尾部页脚，返回 (明文, 被裁掉的字节数)。"""
+    for soi, end in _IMG_END_MARK:
+        if not plain.startswith(soi) or len(plain) <= len(end):
+            continue
+        if plain.endswith(end):
+            return plain, 0
+        i = plain.rfind(end)
+        if i > 0 and len(plain) - i - len(end) <= _FOOTER_MAX:
+            return plain[:i + len(end)], len(plain) - i - len(end)
+    return plain, 0
 
 
 class MediaDownloader:
@@ -229,7 +256,11 @@ class MediaDownloader:
         return None
 
     def _derive_xor_key(self, dat_path: str) -> int:
-        """从同图缩略图 <md5>_t.dat 尾部 FF D9 反推单字节 XOR 密钥"""
+        """从同图缩略图 <md5>_t.dat 尾部 FF D9 反推单字节 XOR 密钥。
+
+        结束标记允许出现在文件末尾之前（最多回看 ``_FOOTER_MAX`` 字节）——
+        Sns 缓存在 FF D9 之后还挂着页脚，只比对末两字节会退化成错误密钥。
+        """
         for cand in (
             dat_path[:-4] + "_t.dat",
             dat_path[:-4] + "_h.dat",
@@ -239,17 +270,35 @@ class MediaDownloader:
                 continue
             try:
                 with open(cand, "rb") as f:
-                    f.seek(-2, 2)
-                    tail = f.read(2)
+                    f.seek(0, 2)
+                    back = min(f.tell(), 2 + _FOOTER_MAX)
+                    f.seek(-back, 2)
+                    tail = f.read()
             except OSError:
                 continue
-
-            if len(tail) == 2:
-                key = tail[0] ^ 0xFF
-                if tail[1] ^ 0xD9 == key:
+            for off in range(len(tail) - 1):
+                key = tail[-2 - off] ^ 0xFF
+                if tail[-1 - off] ^ key == 0xD9:
                     return key
 
         return 0x88
+
+    def _install_xor_key(self) -> int:
+        """账号级单字节 XOR 密钥：cfgDword 低字节(权威) → 缩略图统计 → 0x88。
+
+        缓存到 ``self._xor_key``。逐文件猜尾部只作兜底，因为带页脚的容器
+        会让尾部判据失效。
+        """
+        if self._xor_key is not None:
+            return self._xor_key
+        derived = self._derive_cfg_key()
+        if derived:
+            self._xor_key = derived[1]
+        else:
+            self._xor_key = self._get_xor_key(self._collect_templates())
+        if self._xor_key is None:
+            self._xor_key = 0x88
+        return self._xor_key
 
     def _scan_aes_key(self, deadline: Optional[float] = None) -> Optional[str]:
         """从 Weixin.exe 进程内存扫描 16 字符 ASCII 密钥，用密文反测（有界单遍）。
@@ -259,7 +308,6 @@ class MediaDownloader:
         保证多 GB 内存的进程不会拖垮调用方。持续轮询等待用户看图属于
         交互场景，由 detect_image_key(wait_seconds=...) 负责；
         Channel Host 请求路径禁止调用本方法。
-
         微信 4.x 的图片 AES 密钥仅在查看图片大图时临时加载进内存，驻留约
         数分钟后释放。
         """
@@ -296,7 +344,8 @@ class MediaDownloader:
                 )
                 pt = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
                 out = pt.update(probe) + pt.finalize()
-            except Exception:
+            except Exception as exc:
+                wxlog.debug(f'图片密钥试解失败：{exc!r}')
                 return False
             return _jpeg_like(out)
 
@@ -353,8 +402,10 @@ class MediaDownloader:
             probe = self._probe_ct()
             if not probe:
                 return None
-            dat = self._dbg_last_dat()
-            xor_key = self._derive_xor_key(dat) if dat else 0x88
+            # XOR 权威派生链（上游 1.2.2.5+）：cfgDword 低字节 → 缩略图
+            # 统计 → 0x88；逐文件猜尾部只作 _derive_xor_key 兜底，
+            # 因为带页脚的容器会让尾部判据失效。
+            xor_key = self._install_xor_key()
             aes_key = self._current_aes_key()
             if not aes_key:
                 if wait_seconds > 0:
@@ -515,7 +566,7 @@ class MediaDownloader:
 
         aes_size, xor_size = struct.unpack_from("<LL", data, 6)
         if xor_key is None:
-            xor_key = self._derive_xor_key(dat_path)
+            xor_key = self._install_xor_key()
         if aes_key is None:
             aes_key = self._resolve_aes_key(allow_scan=allow_key_scan)
             if not aes_key:
@@ -535,7 +586,12 @@ class MediaDownloader:
         pad = pt[-1] if pt else 0
         if 1 <= pad <= 16 and all(b == pad for b in pt[-pad:]):
             pt = pt[:-pad]
-        return pt + raw_data + bytes(b ^ (xor_key & 0xFF) for b in xor_data)
+        out = pt + raw_data + bytes(b ^ (xor_key & 0xFF) for b in xor_data)
+        out, footer = strip_container_footer(out)
+        if footer:
+            wxlog.debug("V2 尾部 %d 字节页脚已按结束标记裁剪: %s"
+                        % (footer, dat_path))
+        return out
 
     # ------------------------------------------------------------------
     # 定位本地文件
@@ -781,14 +837,134 @@ class MediaDownloader:
             f.write(data)
         return out
 
+    def _voice_index(self, user: str):
+        """该会话在各 media 分片里的 ``(chat_name_id, svr_id) -> 音频字节数``。
+
+        一次性按会话取，别每条语音都全表扫一遍。返回 ``(已知会话数, 索引)``：
+        已知会话数为 0 说明这个会话在 media 库里连 Name2Id 都没有。
+        """
+        known = 0
+        idx = {}
+        for rel, path, _ in self.db._db_files:
+            if not os.path.basename(path).startswith("media_"):
+                continue
+            conn = self.db._open(rel)
+            try:
+                cids = [r[0] for r in conn.execute(
+                    "SELECT rowid FROM Name2Id WHERE user_name=?", (user,))]
+                if not cids:
+                    continue
+                known += 1
+                marks = ",".join("?" * len(cids))
+                for cid, svr, ln in conn.execute(
+                        "SELECT chat_name_id, svr_id, length(voice_data) "
+                        "FROM VoiceInfo WHERE chat_name_id IN (%s)" % marks,
+                        tuple(cids)):
+                    idx[str(svr)] = max(idx.get(str(svr), 0), ln or 0)
+            except Exception:
+                continue
+            finally:
+                conn.close()
+        return known, idx
+
+    @staticmethod
+    def _voice_reason(svr: str, size: int, ds, known: int) -> str:
+        """把「取到什么」归成一个可回答的原因（单条与批量共用一份判据）。"""
+        if not svr or svr == "0":
+            return "no_server_id"
+        if size > 0:
+            return "ok"
+        if not known:
+            return "session_not_in_media_index"
+        if ds == 0:
+            return "audio_not_downloaded"      # 微信没把音频落盘，读库无能为力
+        if ds is None:
+            # 这张消息表没有 download_status 列（版本差异），只能保守判断
+            return "audio_not_downloaded"
+        return "audio_missing_from_media_db"   # 状态说该有，VoiceInfo 里却没有
+
+    def list_voice_status(self, user: str,
+                          limit: int = 500) -> List[dict]:
+        """列出会话里的语音消息，并逐条说明**音频到底在不在本地**。
+
+        ``download_voice()`` 取不到时只返回 ``None``，调用方分不清「微信本地根本没
+        存这段音频」和「库读挂了」——issue #20「26 条语音只识别到 19 条」就是被这个
+        歧义卡住的。本机 975 条语音实测：``download_status != 0`` 与「音频在本地」
+        完全一一对应（914 条在 / 59 条 ds=0 且确实不在），所以这个字段就是判据。
+
+        Returns:
+            按时间降序的 dict 列表，字段：
+
+            - ``local_id`` / ``server_id`` / ``create_time`` / ``self_sent``
+            - ``download_status``：消息表原值；老版本表没这列时为 ``None``
+            - ``available``：能否取到非空音频
+            - ``bytes``：音频字节数（不可用时为 0）
+            - ``reason``：``ok`` / ``audio_not_downloaded``（微信没把这段音频
+              落盘，读取路径无能为力，只能在界面上播放一次）/
+              ``audio_missing_from_media_db``（``download_status`` 说该有，但
+              ``VoiceInfo`` 里查不到——这才可能是库的问题）/
+              ``session_not_in_media_index`` / ``no_server_id`` / ``empty_blob``
+        """
+        rows = self.db.get_voice_rows(user, limit=limit)
+        if not rows:
+            return []
+        known, idx = self._voice_index(user)
+        out = []
+        for r in rows:
+            svr = str(r.get("server_id") or "")
+            ds = r.get("download_status")
+            size = idx.get(svr, 0)
+            reason = self._voice_reason(svr, size, ds, known)
+            out.append({
+                "local_id": r.get("local_id"),
+                "server_id": r.get("server_id"),
+                "create_time": r.get("create_time"),
+                "self_sent": r.get("real_sender_id") == 2,
+                "download_status": ds,
+                "available": reason == "ok",
+                "bytes": size,
+                "reason": reason,
+            })
+        return out
+
+    def voice_status(self, user: str, local_id: int) -> dict:
+        """单条语音的可用性说明（字段同 :meth:`list_voice_status`）。
+
+        取不到这条语音时返回 ``{'available': False, 'reason': 'no_voice_row'}``。
+        """
+        rows = self.db.get_voice_rows(user, limit=1, local_id=local_id)
+        if not rows:
+            return {"local_id": local_id, "available": False,
+                    "reason": "no_voice_row", "bytes": 0,
+                    "download_status": None, "server_id": None,
+                    "self_sent": False, "create_time": None}
+        known, idx = self._voice_index(user)
+        r = rows[0]
+        svr = str(r.get("server_id") or "")
+        size = idx.get(svr, 0)
+        ds = r.get("download_status")
+        reason = self._voice_reason(svr, size, ds, known)
+        return {"local_id": r.get("local_id"), "server_id": r.get("server_id"),
+                "create_time": r.get("create_time"),
+                "self_sent": r.get("real_sender_id") == 2,
+                "download_status": ds, "available": reason == "ok",
+                "bytes": size, "reason": reason}
+
     def download_voice(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
         """语音：media_*.db VoiceInfo.voice_data（SILK 二进制），落盘 .silk
 
         微信按账号/时间把语音分片存到多个 media_*.db，逐个搜索直到找到。
+
+        返回 ``None`` 不等于库读坏了：微信只把**在界面上播放/接收过**的语音写进
+        ``VoiceInfo``，没落盘的那条再怎么试都没有。想知道具体是哪一种，用
+        :meth:`voice_status`（单条）或 :meth:`list_voice_status`（整个会话），
+        失败时这里也会把原因写进 debug 日志。
         """
         row = self.db.get_message_row(user, local_id, local_type=34)
         if not row or row["local_type"] != 34 or not row["server_id"]:
+            wxlog.debug("语音 %s/%s 取不到：消息行缺失或没有 server_id" % (user, local_id))
             return None
+        out_path = None
         for rel, path, _ in self.db._db_files:
             if not os.path.basename(path).startswith("media_"):
                 continue
@@ -808,10 +984,13 @@ class MediaDownloader:
             finally:
                 conn.close()
             if v and v["voice_data"]:
-                out = self._out(save_dir, "%s_%s.silk" % (user, local_id))
-                with open(out, "wb") as f:
+                out_path = self._out(save_dir, "%s_%s.silk" % (user, local_id))
+                with open(out_path, "wb") as f:
                     f.write(v["voice_data"])
-                return out
+                return out_path
+        st = self.voice_status(user, local_id)
+        wxlog.debug("语音 %s/%s 取不到音频，原因=%s（download_status=%s）"
+                    % (user, local_id, st.get("reason"), st.get("download_status")))
         return None
 
     def download_video(self, user: str, local_id: int, save_dir: Optional[str] = None) -> Optional[str]:
@@ -956,6 +1135,19 @@ class MediaDownloader:
             return None
         time.sleep(1.0)
 
+        opened = False
+        for _retry in range(3):
+            try:
+                from .wx import WeChat
+                wx = WeChat()
+                opened = wx.ChatWith(chat_name or user)
+                time.sleep(2.0)
+                break
+            except Exception as e:
+                wxlog.debug("ChatWith 第 %d 次抛错：%s: %s",
+                            _retry, type(e).__name__, str(e)[:100])
+                time.sleep(1.0)
+
         clicked = False
         try:
             for _retry in range(3):
@@ -970,11 +1162,16 @@ class MediaDownloader:
 
             lst = _uia._message_list()
             if lst is None:
+                wxlog.warning(
+                    "消息列表没渲染出来，原图取不到：会话 %r 大概率没打开"
+                    "（主窗停在发现/朋友圈页，或 user 传成了显示名导致搜索不命中）"
+                    % (chat_name or user,))
                 return None
             inp = WinInput()
             lst_rect = lst.BoundingRectangle
-
-            # 收集消息列表内的「图片」气泡（群聊图片气泡类名带 ReferItemView）
+            wxlog.debug("消息列表 rect=(%d,%d,%d,%d) ChatWith=%s",
+                        lst_rect.left, lst_rect.top, lst_rect.right,
+                        lst_rect.bottom, opened)
             images = []
             for ch in lst.GetChildren():
                 try:
@@ -984,11 +1181,20 @@ class MediaDownloader:
                         r = ch.BoundingRectangle
                         cx = int((r.left + r.right) / 2)
                         cy = int((r.top + r.bottom) / 2)
-                        if (lst_rect.left <= cx <= lst_rect.right
-                                and lst_rect.top <= cy <= lst_rect.bottom):
+                        in_lst = (lst_rect.left <= cx <= lst_rect.right and
+                                  lst_rect.top <= cy <= lst_rect.bottom)
+                        wxlog.debug("图片气泡 rect=(%d,%d,%d,%d) 在列表内=%s",
+                                    r.left, r.top, r.right, r.bottom, in_lst)
+                        if in_lst:
                             images.append(ch)
-                except Exception:
+                except Exception as e:
+                    wxlog.debug("读列表子节点失败：%s", e)
                     continue
+            wxlog.debug("列表内图片气泡：%d 个", len(images))
+            if not images:
+                # RecyclerListView 是虚拟化的，只实例化可视区那十来行；目标
+                # 那条图没在视野里就扫不到，这里只报不猜（滚动定位另说）。
+                wxlog.warning("可视区里没有图片气泡：消息表有这条图，但它没渲染出来")
 
             deadline = time.monotonic() + timeout
             for img_ch in images:
@@ -999,13 +1205,16 @@ class MediaDownloader:
                 # 用相对偏移（而非固定像素），窗口宽度/DPI 变化时可自适应。
                 cx = r.left + int((r.right - r.left) * 0.12)
                 cy = int((r.top + r.bottom) / 2)
+                wxlog.debug("点击图缩略图 (%d,%d)", cx, cy)
+
                 inp.real_click(cx, cy)
                 time.sleep(3.0)
 
                 preview_win = None
                 candidates = [w for w in auto.GetRootControl().GetChildren()
                               if "PreviewWindow" in (w.ClassName or "")]
-                # 优先选包含「图片原始大小」按钮的预览窗口
+                wxlog.debug("点击后预览窗：%d 个", len(candidates))
+                # 优先选包含"图片原始大小"按钮的预览窗口
                 for w in candidates:
                     if self._find_preview_button(w, "图片原始大小"):
                         preview_win = w
@@ -1017,9 +1226,11 @@ class MediaDownloader:
                         * (w.BoundingRectangle.bottom - w.BoundingRectangle.top),
                     )
                 if not preview_win:
+                    wxlog.debug("点击后没有出现预览窗，换下一个气泡")
                     continue
 
                 btn = self._find_preview_button(preview_win, "图片原始大小")
+                wxlog.debug("「图片原始大小」按钮命中=%s", btn is not None)
                 if btn:
                     try:
                         btn.Click()
@@ -1030,6 +1241,8 @@ class MediaDownloader:
                     time.sleep(3.0)
 
                 h_dat = self._find_h_dat(user, md5)
+                wxlog.debug("点击后 h_dat=%s size=%s",
+                            h_dat, os.path.getsize(h_dat) if h_dat else None)
                 if h_dat and os.path.getsize(h_dat) > 102400:
                     clicked = True
                     break
@@ -1043,7 +1256,8 @@ class MediaDownloader:
                     pass
                 time.sleep(1.0)
         except Exception as e:
-            wxlog.debug(f"原图下载 UI 流程异常: {type(e).__name__}: {e}")
+            wxlog.debug("原图流程抛错：%s: %s", type(e).__name__, str(e)[:200])
+            pass
 
         if not clicked:
             return None

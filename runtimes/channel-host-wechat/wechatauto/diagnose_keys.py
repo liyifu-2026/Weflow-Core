@@ -43,8 +43,8 @@ weixin_pids = []
 try:
     r = subprocess.run(
         ["tasklist", "/FI", "IMAGENAME eq Weixin.exe", "/FO", "CSV", "/NH"],
-        capture_output=True, text=True)
-    print("tasklist:\n%s" % (r.stdout.strip() or "(no Weixin.exe)"))
+        capture_output=True, text=True, encoding="gbk", errors="replace")
+    print("tasklist:\n%s" % ((r.stdout or "").strip() or "(no Weixin.exe)"))
     for line in r.stdout.strip().splitlines():
         parts = line.strip('"').split('","')
         if len(parts) >= 2 and parts[1].isdigit():

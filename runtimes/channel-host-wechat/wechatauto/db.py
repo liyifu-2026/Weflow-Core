@@ -38,6 +38,7 @@ from ctypes import wintypes
 from typing import Dict, List, Optional, Tuple
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from wechatauto.logger import wxlog
 
 PAGE_SZ = 4096
 RESERVE_SZ = 80  # IV(16) + HMAC(64)
@@ -501,14 +502,11 @@ class WeChatDB:
         )
         self.keys_file = keys_file or os.path.join(self.workdir, "keys.json")
         self._keys: Dict[str, bytes] = {}
-        # C2：实例级可重入锁，串行化 _open 全路径（缓存命中判断 → 解密/
-        # 合并 → quick_check）。主轮询、HTTP 媒体线程、发送线程会并发
-        # 打开库，解密缓存重建会用 'wb' 截断重写、'r+b' 原地改写同一
-        # 缓存文件，并发进入会互相踩出损坏缓存。
-        self._open_lock = threading.RLock()
-        # A5：每个库的「连续重建失败轮数」（一轮 = 一次 _open 内 3 次重试
-        # 全部失败）。密钥失效时此前每秒原样重试、永不重提密钥；用它触发
-        # 密钥重提取自愈。读写都在 _open_lock 内，线程安全。
+        # A5（Weflow）：每个库的「连续重建失败轮数」（一轮 = 一次 _open 的
+        # 主库解密校验全失败）。密钥因微信重登轮换后，此前每秒原样重试、
+        # 永不重提密钥；用它触发密钥重提取自愈。读写都在该库的构建锁
+        # （_build_lock_for）内，线程安全。并发防踩缓存由上游 per-rel 构建
+        # 锁 + tmp 唯一命名 + 原子替换兜底（等价覆盖 Weflow C2 补丁）。
         self._rebuild_failures: Dict[str, int] = {}
         self._db_files = self._collect_db_files()
         self.master_key: Optional[str] = None
@@ -903,8 +901,29 @@ class WeChatDB:
                     self._keys.setdefault(rel, key)
             # 只保留能通过页1 校验的（丢弃错账号/陈旧条目）
             if self._keys:
-                self._keys = {rel: k for rel, k in self._keys.items()
-                              if self._key_works(rel)}
+                valid: Dict[str, bytes] = {}
+                for rel, k in self._keys.items():
+                    try:
+                        if self._key_works(rel):
+                            valid[rel] = k
+                    except Exception:
+                        continue          # 缓存里可能残留已不存在的库条目，忽略
+                self._keys = valid
+                # 规范化存储形式：48 字节（key+salt）只适用于「明文头」库；
+                # 若能以 32 字节裸密钥通过页1 校验，说明是标准库 → 截回 32 字节。
+                # （否则解密会走错分支，产出 file is not a database 的文件）
+                for rel in list(self._keys):
+                    k = self._keys[rel]
+                    if len(k) != 48:
+                        continue
+                    try:
+                        with open(self._db_path(rel), "rb") as f:
+                            _p1 = f.read(PAGE_SZ)
+                    except Exception:
+                        continue
+                    if _verify_enc_key(k[:32], _p1):
+                        self._keys[rel] = k[:32]
+                self._save_keys()
             
             missing = [
                 rel for rel, path, _ in self._db_files
@@ -1037,20 +1056,15 @@ class WeChatDB:
         return None
 
     def _key_works(self, rel: str) -> bool:
+        """该库密钥是否能通过页1 校验（rel 已不存在等异常一律 False）。"""
         key = self._keys.get(rel)
         if not key:
             return False
         try:
             path = self._db_path(rel)
-        except KeyError:
-            # 微信升级/换账号后，旧密钥缓存里可能残留已不存在的库名
-            # （如 message_2.db 被合并/移除）——视为陈旧条目丢弃，
-            # 不得让整个密钥加载流程因此崩掉。
-            return False
-        try:
             with open(path, "rb") as f:
                 page1 = f.read(PAGE_SZ)
-        except OSError:
+        except Exception:
             return False
         return _verify_enc_key(key, page1)
 
@@ -1158,7 +1172,14 @@ class WeChatDB:
         return out
 
     def _keys_from_candidates(self, cands) -> Dict[str, bytes]:
-        """把候选材料对**当前 self._db_files** 逐个 HMAC 校验，返回可用密钥。"""
+        """把候选材料对**当前 self._db_files** 逐个 HMAC 校验，返回可用密钥。
+
+        存储形式按库的实际布局决定：**先按标准形式（文件头 salt）校验**，通过就
+        存 32 字节裸密钥；只有标准形式验不过时（明文头库）才用候选自带的显式
+        salt 并存成 48 字节 key+salt。
+        顺序很关键：若先试显式 salt，标准库也会被存成 48 字节，解密时就会走
+        「明文头」分支，产出非 SQLite 文件（实测踩过：file is not a database）。
+        """
         keys: Dict[str, bytes] = {}
         for cand, salt in cands:
             for rel, path, _ in self._db_files:
@@ -1169,8 +1190,11 @@ class WeChatDB:
                         page1 = f.read(PAGE_SZ)
                 except OSError:
                     continue
-                if _verify_enc_key(cand, page1, salt=salt):
-                    keys[rel] = cand + (salt or b"")
+                if _verify_enc_key(cand, page1):
+                    keys[rel] = cand                      # 标准库：32 字节
+                    break
+                if salt and _verify_enc_key(cand, page1, salt=salt):
+                    keys[rel] = cand + salt               # 明文头库：48 字节
                     break
         return keys
 
@@ -1185,7 +1209,8 @@ class WeChatDB:
         best = None
         try:
             dirs = _find_account_dirs(self.db_dir)
-        except Exception:
+        except Exception as exc:
+            wxlog.debug(f'枚举账号目录失败，跳过账号自愈：{exc!r}')
             return False
         for d in dirs:
             acct = os.path.basename(d)
@@ -1239,13 +1264,16 @@ class WeChatDB:
         try:
             r = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq Weixin.exe", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="gbk", errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
         except OSError:
             return []
+        # 中文 Windows 的 tasklist 输出是 GBK：不显式指定编码时，UTF-8 模式
+        # （-X utf8 / PYTHONUTF8=1）下解码失败会让 stdout 变成 None，
+        # “取密钥”这一步就会以 AttributeError 收场（已实测复现）。
         pids = []
-        for line in r.stdout.strip().splitlines():
+        for line in (r.stdout or "").strip().splitlines():
             parts = line.strip('"').split('","')
             if len(parts) >= 2 and parts[1].isdigit():
                 pids.append(int(parts[1]))
@@ -1456,7 +1484,7 @@ class WeChatDB:
         微信重登会轮换库密钥：缓存密钥解不开新库，quick_check 永远不过。
         只有当 extract_keys 重新提取的密钥能通过该库页 1 HMAC（_key_works，
         与提取时的校验同一密码学判据）时才更新缓存，避免一次失败的提取
-        毁掉仍可用的好缓存。调用方持有 _open_lock，无需自行加锁。
+        毁掉仍可用的好缓存。调用方持有该库的构建锁（_build_lock_for），无需自行加锁。
         """
         try:
             extracted = self.extract_keys()
@@ -1485,13 +1513,13 @@ class WeChatDB:
         try:
             r = _sp.run(
                 ["tasklist", "/FI", "IMAGENAME eq Weixin.exe", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="gbk", errors="replace",
                 creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0),
             )
         except OSError:
             return
         pids = []
-        for line in r.stdout.strip().splitlines():
+        for line in (r.stdout or "").strip().splitlines():
             parts = line.strip('"').split('","')
             if len(parts) >= 2 and parts[1].isdigit():
                 pids.append(int(parts[1]))
@@ -1528,19 +1556,23 @@ class WeChatDB:
         print("[wechatauto] 密钥诊断完成，以上为自动检测结果。完整排查请运行 "
               "python -m wechatauto.diagnose_keys", file=sys.stderr)
 
+    def _build_lock_for(self, rel: str) -> threading.Lock:
+        """按库文件取一把构建锁（注册表本身用一把小锁保护）。"""
+        reg = getattr(self, "_build_locks", None)
+        if reg is None:
+            reg = self._build_locks = {}
+            self._build_locks_guard = threading.Lock()
+        with self._build_locks_guard:
+            return reg.setdefault(rel, threading.Lock())
+
     def _open(self, rel: str) -> sqlite3.Connection:
-        """打开解密(并合并 -wal 增量)后的只读库（串行化入口）。
+        """同一份库的并发解密要串行：两个线程各自解一遍是几秒级的重复重活，
+        还会互相踩中间产物（监听所有会话时几百个会话同时开库必现）。"""
+        with self._build_lock_for(rel):
+            return self._open_unlocked(rel)
 
-        C2：多线程并发调用 _open 时，解密缓存重建会并发截断/改写同一个
-        缓存文件（'wb' 全量重建、'r+b' 合并 WAL）。用实例级 RLock 把整条
-        路径（缓存命中判断 → 解密重建 → _merge_wal → quick_check）串行化；
-        RLock 可重入，防御 _open 内部路径再次调用 _open 造成自死锁。
-        """
-        with self._open_lock:
-            return self._open_locked(rel)
-
-    def _open_locked(self, rel: str) -> sqlite3.Connection:
-        """_open 的实际实现（调用方必须已持有 _open_lock）。
+    def _open_unlocked(self, rel: str) -> sqlite3.Connection:
+        """打开解密(并合并 -wal 增量)后的只读库。
 
         解密结果缓存到 workdir；主库或 WAL 有变化时：
         - 主库被 checkpoint 改写（mtime/size 变化）或 WAL 被重置 → 全量重建；
@@ -1560,6 +1592,18 @@ class WeChatDB:
         src = self._db_path(rel)
         dst = os.path.join(self.workdir, rel.replace(os.sep, "__"))
         key = self._keys[rel]
+        if len(key) == 48:
+            # 兼容历史上误存的形式：48 字节 = key+salt，仅适用于「明文头」库；
+            # 标准 SQLCipher 库若存成 48 字节，解密会保留文件头 16 字节、从
+            # offset 16 开始解 → 产出非 SQLite 文件（file is not a database）。
+            # 用页1 校验判定：文件头 salt 能验过 → 标准形式，截回 32 字节。
+            try:
+                with open(src, "rb") as _f:
+                    _p1 = _f.read(PAGE_SZ)
+                if _verify_enc_key(key[:32], _p1):
+                    key = key[:32]
+            except OSError:
+                pass
         src_mtime = os.path.getmtime(src)
         src_size = os.path.getsize(src)
         wal_path = self._wal_path(rel)
@@ -1585,60 +1629,91 @@ class WeChatDB:
                 old = None
         build = (not old or old["mtime"] != src_mtime or old["size"] != src_size
                  or old["wal_mtime"] != wal_mtime or old["wal_size"] != wal_size)
-        # A5：本轮 _open 是否已尝试过密钥重提取（防同一轮内反复内存扫描）
-        rotated = False
-        attempt = 0
-        while build:
-            attempt += 1
-            full = (not old or old["mtime"] != src_mtime or old["size"] != src_size
-                    or wal_size < old["wal_size"] or wal_size == 0)
-            if full:
-                self._decrypt_file(src, dst, key)
-                applied = 0
-            else:
-                applied = old["applied"]
-            if wal_path and wal_size > self.WAL_HEADER_SZ:
-                applied = self._merge_wal(dst, wal_path, key, applied)
-            else:
-                applied = 0
-            if self._check_merged(dst):
-                # A5：重建成功即清零该库的连续失败计数
+        # 构建策略：**先做主库自洽快照当底线，再尝试合并 WAL**。
+        # 主库在上次 checkpoint 时是自洽的（SQLite 保证），所以「仅解密主库」
+        # 一定可读，代价是可能缺最近少量消息；WAL 合并成功则用更新的那份。
+        # 关键：任何中间产物都写在 tmp，**成功才原子替换** dst，失败不会毁掉
+        # 上一份已验证副本。
+        # 中间产物按「进程 + 线程」唯一命名：固定名 dst+".tmp" 会被并发打开同一份
+        # 库的另一个线程用 os.replace 掉，这边就 FileNotFoundError（监听所有会话、
+        # 几百个会话同时开库时必现）。唯一命名后异常退出会留下残留文件，故构建前
+        # 顺手清掉 10 分钟前的陈旧中间产物。
+        tmp = "%s.%d.%x.tmp" % (dst, os.getpid(), threading.get_ident())
+        applied = 0
+        if build:
+            for stale in glob.glob(dst + ".*.tmp*"):
+                try:
+                    if time.time() - os.path.getmtime(stale) > 600:
+                        os.remove(stale)
+                except OSError:
+                    pass
+            # 微信 checkpoint 会**就地改写主库页**：单次读取可能读到“撕裂”状态
+            # （页头与内容来自不同时刻）→ quick_check 会失败。故解密后必须校验，
+            # 失败就重读（每次重读都是一次新的快照）。
+            best = None
+            for attempt in range(1, 5):
+                self._decrypt_file(src, tmp, key)
+                if self._check_merged(tmp):
+                    best = tmp
+                    break
+                wxlog.debug('主库解密快照校验失败（第 %d/4 次）: %s' % (attempt, rel))
+                time.sleep(0.35)
+            if best is not None:
+                # A5：本轮解密校验通过（当前密钥有效）→ 清零连续失败计数
                 self._rebuild_failures.pop(rel, None)
-                build = False
+            if best is None:
+                if os.path.exists(dst) and self._check_merged(dst):
+                    wxlog.warning('主库持续处于撕裂状态，改用上一份可用副本（可能略旧）: %s'
+                                  % rel)
+                    build = False
+                else:
+                    # A5（Weflow）：连续多轮构建失败且无可用副本，最常见原因是
+                    # 微信重登后轮换了库密钥（缓存密钥解不开新库，页 1 校验永远
+                    # 不过；上游此路径只会 raise 解密校验失败、永不重提密钥）。
+                    # 按「连续失败轮数」节流地重提取密钥自愈：重提取成功则下次
+                    # 访问即以新密钥重建，本轮仍抛出明确错误；仍失败抛 key_invalid
+                    # 便于上层观测与告警。调用方持有该库的构建锁。
+                    failures = self._rebuild_failures.get(rel, 0) + 1
+                    self._rebuild_failures[rel] = failures
+                    if (failures >= self._KEY_REEXTRACT_AFTER_ROUNDS
+                            and failures % self._KEY_REEXTRACT_REPEAT_EVERY == 0
+                            and self._reextract_stale_key(rel)):
+                        print("[wechatauto] 密钥已重新提取成功，下次访问将以新密钥"
+                              "重建 %s" % rel, file=sys.stderr)
+                        self._rebuild_failures.pop(rel, None)
+                    raise RuntimeError(
+                        "key_invalid: 数据库连续 %d 轮重建失败，密钥可能已因微信"
+                        "重登失效: %s。已尝试自动重提取密钥仍无法解密，请重启微信"
+                        "（保持登录窗口打开）后重试；也可删除密钥缓存后重试: %s"
+                        % (failures, rel, self.keys_file)
+                    )
+            if build:
+                best_applied = 0
+                if wal_path and wal_size > self.WAL_HEADER_SZ:
+                    merged = tmp + ".wal"
+                    ok_wal = False
+                    for attempt in (1, 3):
+                        try:
+                            shutil.copyfile(best, merged)
+                            got = self._merge_wal(merged, wal_path, key, 0)
+                            if self._check_merged(merged):
+                                os.replace(merged, best)
+                                best_applied, ok_wal = got, True
+                                break
+                        except Exception as exc:
+                            wxlog.debug('WAL 合并第 %d 次失败：%r' % (attempt, exc))
+                        time.sleep(0.3)
+                    if not ok_wal:
+                        best_applied = -1          # 标记：本轮未合并 WAL
+                        wxlog.warning('WAL 合并失败（微信持续写入），改用仅主库快照'
+                                      '（可能缺少最近消息）: %s' % rel)
+                os.replace(best, dst)
+                applied = best_applied
                 os.makedirs(os.path.dirname(stamp), exist_ok=True)
                 with open(stamp, "w") as f:
                     f.write("%d,%r,%d,%r,%d,%d"
                             % (STAMP_VERSION, src_mtime, src_size, wal_mtime, wal_size, applied))
-            elif attempt >= 3:
-                # A5：微信重登轮换库密钥后，启动缓存的 self._keys[rel] 解不开
-                # 新库，此前这里每秒原样重试、永不重提密钥（死循环）。改为按
-                # 「连续重建失败轮数」计数，达到阈值时重新提取密钥自愈；仍
-                # 失败则抛出 key_invalid 明确错误，便于上游观测与告警。
-                failures = self._rebuild_failures.get(rel, 0) + 1
-                self._rebuild_failures[rel] = failures
-                if (
-                    failures >= self._KEY_REEXTRACT_AFTER_ROUNDS
-                    and failures % self._KEY_REEXTRACT_REPEAT_EVERY == 0
-                    and not rotated
-                ):
-                    rotated = True
-                    if self._reextract_stale_key(rel):
-                        print("[wechatauto] 密钥已重新提取成功，重建 %s" % rel,
-                              file=sys.stderr)
-                        # 换上新密钥后给一次全新的重建预算
-                        self._rebuild_failures.pop(rel, None)
-                        key = self._keys[rel]
-                        old = None
-                        attempt = 0
-                        continue
-                raise RuntimeError(
-                    "key_invalid: 数据库连续 %d 轮重建失败，密钥可能已因微信"
-                    "重登失效: %s。已尝试自动重提取密钥仍无法解密，请重启微信"
-                    "（保持登录窗口打开）后重试；也可删除密钥缓存后重试: %s"
-                    % (failures, rel, self.keys_file)
-                )
-            else:
-                old = None  # 合并结果损坏 → 全量重建重试
+            build = False
         conn = sqlite3.connect(f"file:{dst}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         conn.text_factory = _sqlite_text_factory
@@ -1827,7 +1902,7 @@ class WeChatDB:
             return
         removed = 0
         for n in names:
-            if n.endswith(".db") or n.endswith(".stamp"):
+            if n.endswith(".db") or n.endswith(".stamp") or n.endswith(".tmp"):
                 try:
                     os.remove(os.path.join(self.workdir, n))
                     removed += 1
@@ -1954,8 +2029,16 @@ class WeChatDB:
         但超大群（数万条）不再把每个分片的全部行取回 Python。
         合并排序保持与旧实现相同的稳定语义：重复 sort_seq 时先分片顺序、
         再分片内 local_id 升序（已在分片内 ORDER BY 固定）。
+
+        非法入参一律**空返回**而不是回落到某个窗口：``limit<=0`` 直接空；
+        ``offset<0`` 也空——负数切片的 ``rows[-1:20]`` 在行数不足时会吐出最后
+        一条，等于把「参数错了」伪装成「查到了数据」。
         """
-        cap = max(0, int(limit)) + max(0, int(offset))
+        limit = int(limit)
+        offset = int(offset)
+        if limit <= 0 or offset < 0:
+            return []
+        cap = limit + offset
         rows = self._run_msg_query(
             user,
             lambda tables: self._shard_rows(
@@ -1966,6 +2049,57 @@ class WeChatDB:
             return []
         rows.sort(key=lambda r: r["sort_seq"], reverse=True)
         return [self._msg_row_to_dict(r, user) for r in rows[offset:offset + limit]]
+
+    def get_voice_rows(self, user: str, limit: int = 500,
+                       local_id: Optional[int] = None) -> List[dict]:
+        """语音消息（``local_type=34``）的原始行，额外带 ``download_status``。
+
+        ``download_status`` 没放进 :meth:`_shard_rows` 的通用 SELECT：那是每条消息
+        都要走的热点，多取一列不划算；而「这条语音的音频在不在本地」只有语音消息需要
+        回答，所以单独开一条窄查询。
+
+        老版本的消息表可能没有 ``download_status`` 这一列——这时**不能**让它像通用
+        路径那样 ``except: continue`` 把整个分片的行丢掉（那会把「读不到」伪装成
+        「没有语音」），而是退化成人无此列的 None。
+
+        Args:
+            user: 会话 username（wxid 或 ``xxx@chatroom``）。
+            limit: 最多返回多少条。
+            local_id: 只取这一条时传入（跨分片同号会返回多条，由调用方挑）。
+
+        Returns:
+            按 ``sort_seq`` 降序的 dict 列表：``local_id`` / ``server_id`` /
+            ``real_sender_id`` / ``create_time`` / ``sort_seq`` / ``download_status``。
+        """
+        want = max(1, int(limit))
+        sql_ext = "WHERE local_type=34" + (" AND local_id=?" if local_id else "")
+        params = (local_id,) if local_id else ()
+        cols = ("local_id, server_id, real_sender_id, create_time, sort_seq")
+
+        def _run(tables):
+            out = []
+            for conn, table in tables:
+                order = " ORDER BY sort_seq DESC, local_id DESC LIMIT %d" % want
+                try:
+                    out += [dict(r) for r in conn.execute(
+                        "SELECT %s, download_status FROM %s %s%s"
+                        % (cols, table, sql_ext, order), params)]
+                except sqlite3.Error:
+                    # 这张表没有 download_status（版本差异）→ 退化取值，
+                    # 绝不能像通用路径那样 continue 把整个分片的行丢掉
+                    try:
+                        out += [dict(r, download_status=None) for r in conn.execute(
+                            "SELECT %s FROM %s %s%s"
+                            % (cols, table, sql_ext, order), params)]
+                    except sqlite3.Error:
+                        continue
+            return out
+
+        rows = self._run_msg_query(user, _run)
+        if not rows:
+            return []
+        rows.sort(key=lambda r: r.get("sort_seq") or 0, reverse=True)
+        return rows[:want]
 
     def get_message_rows_for_media(self, user: str, local_id: int) -> List[dict]:
         """返回跨分片 local_id 命中的全部消息行（供媒体分发判定类型）。
@@ -2028,11 +2162,10 @@ class WeChatDB:
         sender_id = row["real_sender_id"]
         sender_username = ""
         if sender_id and not self.is_self_sender(sender_id, user):
-            sender_index = self._sender_id_index()
-            sender_username = sender_index.get(int(sender_id), "")
-            if not sender_username:
-                # fallback: 尝试从 contact.db 获取昵称
-                sender_username = self.get_nickname(str(sender_id))
+            # SenderName2Id 里没有就留空：拿数字 rowid 去查
+            # contact.username 永远查不到，反而混进「纯数字」
+            #（上游 1.2.4 结论）。
+            sender_username = self._sender_id_index().get(int(sender_id), "")
         return {
             "local_id": row["local_id"],
             "local_type": row["local_type"],
@@ -2086,7 +2219,6 @@ class WeChatDB:
             return []
         rows.sort(key=lambda r: r["sort_seq"])
         return [self._msg_row_to_dict(r, user) for r in rows[:want]]
-
     def _msg_row_to_dict(self, r, conversation_ref: Optional[str] = None) -> dict:
         content = r["message_content"]
         mtype = WeChatDB._msg_type_name(r["local_type"])
@@ -2108,11 +2240,10 @@ class WeChatDB:
         sender_id = r["real_sender_id"]
         sender_username = ""
         if sender_id and not self.is_self_sender(sender_id, conversation_ref):
-            sender_index = self._sender_id_index()
-            sender_username = sender_index.get(int(sender_id), "")
-            if not sender_username:
-                # fallback: 尝试从 contact.db 获取昵称
-                sender_username = self.get_nickname(str(sender_id))
+            # SenderName2Id 里没有就留空：拿数字 rowid 去查
+            # contact.username 永远查不到，反而混进「纯数字」
+            #（上游 1.2.4 结论）。
+            sender_username = self._sender_id_index().get(int(sender_id), "")
         return {
             "local_id": r["local_id"],
             "type": mtype,
@@ -2431,6 +2562,8 @@ class WeChatDB:
                 continue
             conn = self._open(rel)
             try:
+                # 有意全表枚举（需全部 username 建 md5 反查表）：走游标逐行
+                # 迭代、不 fetchall，内存占用与表大小无关，故不加 LIMIT。
                 if base == "contact.db":
                     rows = conn.execute("SELECT username FROM contact")
                 else:
@@ -2478,6 +2611,17 @@ class WeChatDB:
             break
         self._sender_id_cache = idx
         return idx
+
+    def nickname_map(self, refresh: bool = False) -> Dict[str, str]:
+        """``username(wxid) -> 备注或昵称`` 的映射，带进程内缓存。
+
+        监听回调里每条消息都要把发送者 wxid 换成能看的名字，逐条查 contact.db 太贵；
+        缓存策略与 :meth:`_sender_id_index` 一致（微信运行期间昵称基本不变）。
+        需要拿最新值时传 ``refresh=True``。
+        """
+        if refresh or getattr(self, '_nick_cache', None) is None:
+            self._nick_cache = self._nickname_index()
+        return self._nick_cache
 
     def _resolve_sender(self, sender_id, sender_index, nicks, self_nick) -> str:
         if self.is_self_sender(sender_id):
@@ -2921,11 +3065,25 @@ class Listener:
         """
         self._all_callback = callback
         self._discover_new = discover
-        sessions = self.db.get_sessions(limit=500)
-        for s in sessions:
-            username = s["username"]
-            if username not in self._callbacks:
-                self.add_listener(username, callback)
+        for s in self.db.get_sessions(limit=500):
+            self._add_global(s["username"])
+
+    def _add_global(self, user: str) -> None:
+        """把全局回调挂到某个会话上。
+
+        注意**不能**因为「这个会话已经有回调」就跳过：``add_listener`` 是往列表
+        里追加，一个会话本来就可以同时挂「单会话回调」和「全局回调」。以前用
+        ``if username not in self._callbacks`` 判重，结果先 ``AddListenChat`` 过的
+        会话永远不会再收到 ``AddListenAll`` 的回调——全局监听漏掉了最活跃那批会话。
+        真正要防的是同一个回调被挂两次。
+        """
+        cb = self._all_callback
+        if cb is None:
+            return
+        existing = self._callbacks.get(user)
+        if existing is not None and cb in existing:
+            return
+        self.add_listener(user, cb)
 
     @property
     def watermark(self) -> Dict[str, int]:
@@ -2963,11 +3121,8 @@ class Listener:
         # 自动发现新会话（add_all 的 discover 模式）
         if getattr(self, '_discover_new', False) and getattr(self, '_all_callback', None):
             try:
-                sessions = self.db.get_sessions(limit=500)
-                for s in sessions:
-                    username = s["username"]
-                    if username not in self._callbacks:
-                        self.add_listener(username, self._all_callback)
+                for s in self.db.get_sessions(limit=500):
+                    self._add_global(s["username"])
             except Exception:
                 pass
         for user, callbacks in list(self._callbacks.items()):

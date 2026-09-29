@@ -30,9 +30,10 @@ from typing import Dict, Iterable, List, Optional, Union
 from PIL import Image
 
 from wechatauto import uia
+from wechatauto import rhythm
 from wechatauto.languages import MOMENTS, get_lang
 from wechatauto.logger import wxlog
-from wechatauto.param import WxParam, WxResponse
+from wechatauto.param import WxResponse
 from wechatauto.ui.base import BaseUISubWnd
 from wechatauto.utils.tools import find_all_windows_from_root
 from wechatauto.utils.win32 import SetClipboardText
@@ -74,7 +75,13 @@ def _lang(table, key: str) -> str:
 
 
 def _send_scroll(x: int, y: int, delta: int = -120, times: int = 1) -> None:
-    """在屏幕坐标 (x, y) 处向该窗口发送滚轮事件（模拟用户滚动）。
+    """在屏幕坐标 (x, y) 处滚动该窗口。
+
+    滚轮事件是按**光标当前位置**投递的。原来的写法把 MOVE 和 WHEEL 连着发、
+    两者之间零停顿，系统还没处理完这次移动，滚轮就已经落到旧位置那个窗口上了
+    ——实测朋友圈时间线纹丝不动（顶部 cell 连续多屏不变），``find_moment`` 于是
+    把它当成「已经到底」提前放弃。改成：同步 ``SetCursorPos`` 落位 → 读回确认
+    → 稍等目标窗口进入 hover → 再发滚轮。
 
     Args:
         x, y: 目标屏幕坐标（需落在朋友圈时间线区域）。
@@ -82,29 +89,31 @@ def _send_scroll(x: int, y: int, delta: int = -120, times: int = 1) -> None:
         times: 重复次数。
     """
     import ctypes
+    from ctypes import wintypes
 
-    INPUT_MOUSE = 0
-    MOVE = 0x0001
     WHEEL = 0x0800
-    ABS = 0x8000
 
     class MI(ctypes.Structure):
-        _fields_ = [("dx", ctypes.wintypes.DWORD), ("dy", ctypes.wintypes.DWORD),
-                    ("mouseData", ctypes.wintypes.DWORD), ("dwFlags", ctypes.wintypes.DWORD),
-                    ("time", ctypes.wintypes.DWORD), ("dwExtraInfo", ctypes.c_void_p)]
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_void_p)]
 
     class I(ctypes.Structure):
-        _fields_ = [("type", ctypes.wintypes.DWORD), ("mi", MI)]
+        _fields_ = [("type", wintypes.DWORD), ("mi", MI)]
 
-    sw = ctypes.windll.user32.GetSystemMetrics(0)
-    sh = ctypes.windll.user32.GetSystemMetrics(1)
-    for _ in range(times):
-        dx0 = int(x * 65535 / max(sw - 1, 1))
-        dy0 = int(y * 65535 / max(sh - 1, 1))
-        move = I(INPUT_MOUSE, MI(dx0, dy0, 0, MOVE | ABS, 0, 0))
-        ctypes.windll.user32.SendInput(1, ctypes.byref(move), ctypes.sizeof(I))
-        wheel = I(INPUT_MOUSE, MI(0, 0, ctypes.wintypes.DWORD(delta & 0xFFFFFFFF), WHEEL, 0, 0))
-        ctypes.windll.user32.SendInput(1, ctypes.byref(wheel), ctypes.sizeof(I))
+    u = ctypes.windll.user32
+    x, y = int(x), int(y)
+    for _ in range(8):                      # 等光标真的落位（最多 ~0.4s）
+        u.SetCursorPos(x, y)
+        p = wintypes.POINT()
+        u.GetCursorPos(ctypes.byref(p))
+        if abs(p.x - x) <= 2 and abs(p.y - y) <= 2:
+            break
+        time.sleep(0.05)
+    time.sleep(0.3)                         # 让目标窗口先收到 hover/进入事件
+    for _ in range(max(1, int(times))):
+        wheel = I(0, MI(0, 0, wintypes.DWORD(int(delta) & 0xFFFFFFFF), WHEEL, 0, 0))
+        u.SendInput(1, ctypes.byref(wheel), ctypes.sizeof(I))
         time.sleep(0.05)
 
 
@@ -497,7 +506,8 @@ class MomentList(BaseUISubWnd):
             return False
         try:
             return self.control.Exists(wait)
-        except Exception:
+        except Exception as exc:
+            wxlog.debug(f'朋友圈控件 Exists 探测失败：{exc!r}')
             return False
 
     def refresh(self) -> None:
@@ -674,10 +684,17 @@ class Moment:
 
 
     def _scroll(self, delta: int = -120, times: int = 1) -> None:
-        """在时间线中心滚动。负 delta=向下(看更早)，正=向上(看最新)。"""
+        """在时间线中心滚动。负 delta=向下(看更早)，正=向上(看最新)。
+
+        滚轮和点击一样吃前台状态：微信窗口不是前台窗口时滚轮事件不会落到时间线
+        上（实测：非前台时连发三轮，顶部 cell 的 DB 对齐位置一动不动；先确保前台
+        后同一份代码立刻 3→6）。`_locate_more_click` 早就为点击写了这一步，滚轮
+        这边此前没有，于是 find_moment 把「滚不动」当成「已经到底」提前放弃。
+        """
         rect = self._time_line_rect()
         if not rect:
             return
+        self._ensure_window_foreground()
         x = int((rect[0] + rect[2]) // 2)
         y = int((rect[1] + rect[3]) // 2)
         _send_scroll(x, y, delta=delta, times=times)
@@ -747,6 +764,83 @@ class Moment:
         if not lst:
             return []
         return lst.get_items(refresh=refresh)
+
+    @staticmethod
+    def _rect_usable(item) -> bool:
+        """cell 的矩形是否还能用来定位点击。
+
+        UIA 句柄失效（cell 被回收）或已经滚出视口时，``BoundingRectangle`` 会变成
+        ``(0,0,0,0)``——这时任何基于坐标的动作都会报 ``Can not move cursor``，
+        表现出来就是「明明定位到了，点赞/评论却说打不开菜单」。
+        """
+        try:
+            r = item.control.BoundingRectangle
+        except Exception:
+            return False
+        return (r.right - r.left) > 1 and (r.bottom - r.top) > 1
+
+    @staticmethod
+    def _same_post(nick: str, text: str, when: str, cand) -> bool:
+        """判断候选 cell 是不是同一条动态（用于句柄失效后重新认领）。
+
+        昵称必须完全相等；正文按「前 10 字互相包含」比对——UIA 摘要会把正文
+        截断，DB 校正过的正文又可能比摘要长，精确比签名会认不出自己那条。
+        时间两边都知道时必须相等。正文和时间都为空的只剩昵称，认不出。
+        """
+        norm = lambda s: ''.join((s or '').split())
+        if (cand.publisher or '').strip() != nick:
+            return False
+        c_text = norm(cand.text)
+        if text or c_text:
+            if not (text and c_text):
+                return False
+            if text[:10] not in c_text and c_text[:10] not in text:
+                return False
+        if when and cand.timestamp and cand.timestamp.strip() != when:
+            return False
+        return True
+
+    def _reattach_item(self, item: MomentItem) -> bool:
+        """句柄失效时在同屏重新认领同一条动态，原地换 control（不换对象）。
+
+        调用方手里的 item 继续可用。认不出时宁可返回 False——同一个人往往有多条
+        动态，错挂就等于给另一条点赞。
+        """
+        if self._rect_usable(item):
+            return True
+        try:
+            if not item._parsed:
+                return False          # 解析要读 control.Name，死句柄读不到，无从比对
+            nick = (item.nickname or '').strip()
+            text = ''.join((item.content or '').split())
+            when = (item.time or '').strip()
+        except Exception:
+            return False
+        if not nick or (not text and not when):
+            return False
+        for it in self._read_visible_items(refresh=True):
+            try:
+                if not self._same_post(nick, text, when, it):
+                    continue
+            except Exception:
+                continue              # 新 cell 解析失败（句柄同样坏了）
+            if self._rect_usable(it):
+                item.control = it.control
+                wxlog.debug('cell 句柄已失效，已在同屏重新认领同一条并换上新句柄')
+                return True
+        return False
+
+    def _settle_item(self, item: MomentItem, publisher: Optional[str] = None,
+                     keyword: Optional[str] = None):
+        """命中之后确保这条真的还能操作：先换句柄，换不到再滚入视野重试一次。"""
+        if item is None or self._reattach_item(item):
+            return item
+        wxlog.debug('当前视野没有同一条的新句柄，重新滚入视野后再试')
+        try:
+            self._scroll_item_fully_visible(publisher=publisher, keyword=keyword)
+        except Exception:
+            return None
+        return item if self._reattach_item(item) else None
 
     def _scroll_item_fully_visible(self, publisher: Optional[str] = None,
                                    keyword: Optional[str] = None,
@@ -1053,9 +1147,13 @@ class Moment:
             for item in items:
                 if self._matches(item, publisher, keyword):
                     wxlog.debug(f'第 {screen} 屏命中目标朋友圈')
+                    settled = self._settle_item(item, publisher, keyword)
+                    if settled is None:
+                        wxlog.debug('命中但 cell 句柄已失效且找不回，放弃（避免后续点击落在空矩形上）')
+                        return None
                     if db_posts:
-                        self._correct_nickname_from_db(db_posts, item)
-                    return item
+                        self._correct_nickname_from_db(db_posts, settled)
+                    return settled
 
             # 2) 无 DB：只能向下逐屏
             if target_idx is None:
@@ -1102,9 +1200,13 @@ class Moment:
                 for it in items:
                     if publisher and self._matches(it, publisher, None):
                         wxlog.debug(f'第 {screen} 屏按发布者兜底命中（diff={diff}）')
+                        settled = self._settle_item(it, publisher, None)
+                        if settled is None:
+                            wxlog.debug('兜底命中但 cell 句柄已失效且找不回，放弃')
+                            return None
                         if db_posts:
-                            self._correct_nickname_from_db(db_posts, it)
-                        return it
+                            self._correct_nickname_from_db(db_posts, settled)
+                        return settled
                 near_miss += 1
                 if near_miss >= 4:
                     if downward_only:
@@ -1416,6 +1518,10 @@ class Moment:
         if max_retry < 1:
             return False
         for attempt in range(max_retry):
+            if not self._reattach_item(item):
+                # 句柄失效且当前视野找不到同一条：先按下面的微调滚找回，
+                # 下一轮再试（_find_more_button 在空矩形上只会白跑）。
+                wxlog.debug(f'cell 句柄不可用（第 {attempt + 1} 次），微调滚动后重找')
             pt = self._find_more_button(item)
             if pt is not None:
                 before_shot = self._float_region_shot(item)
@@ -1543,21 +1649,31 @@ class Moment:
             return False
         try:
             r = btn.BoundingRectangle
-            x, y = int((r.left + r.right) // 2), int((r.top + r.bottom) // 2)
+            x, y = rhythm.point((r.left, r.top, r.right, r.bottom))
         except Exception:
             return False
         try:
             import pyautogui
             pyautogui.click(x, y)
-            time.sleep(0.5)
+            rhythm.nap(0.5)
             return True
         except Exception as e:
             wxlog.debug(f'点击浮层按钮 {name} 失败：{e}')
             return False
 
-    def _like_open(self) -> bool:
-        """在 “…” 浮层已弹出的前提下，点击「赞」。"""
-        return self._click_float_button('赞', timeout=2.5)
+    def _like_open(self, cancel: bool = False) -> bool:
+        """在 “…” 浮层已弹出的前提下，点击「赞」（``cancel=True`` 用于取消赞）。
+
+        取消赞在有的版本里是独立文案「取消」，有的版本还是那个「赞」按钮再点
+        一次，所以先按取消文案找，找不到再点「赞」。
+        """
+        rhythm.gate('like')
+        names = ([_lang(MOMENTS, '取消'), _lang(MOMENTS, '赞')] if cancel
+                 else [_lang(MOMENTS, '赞')])
+        for nm in names:
+            if self._click_float_button(nm, timeout=2.5):
+                return True
+        return False
 
     def LikeMoment(self, publisher: Optional[str] = None,
                    keyword: Optional[str] = None, db=None,
@@ -1579,11 +1695,7 @@ class Moment:
                                 db=db, max_screens=max_screens)
         if item is None:
             return WxResponse.failure('未能定位到目标朋友圈')
-        if not self._locate_more_click(item, max_retry=max_retry):
-            return WxResponse.failure('未能打开 “…” 浮层')
-        if self._like_open():
-            return WxResponse.success('点赞成功')
-        return WxResponse.failure('未能在浮层中找到点赞按钮')
+        return self.Like(item, max_retry=max_retry)
 
 
     def _comment_open(self) -> bool:
@@ -1609,13 +1721,13 @@ class Moment:
                 wxlog.debug('未找到评论输入框 EditControl（可能为自绘控件）')
                 return False
             r = hit.BoundingRectangle
-            cx, cy = int((r.left + r.right) // 2), int((r.top + r.bottom) // 2)
-            if cx == 0 and cy == 0:
+            if (r.left + r.right) // 2 == 0 and (r.top + r.bottom) // 2 == 0:
                 wxlog.debug('评论输入框 EditControl 坐标为零，跳过手动聚焦')
                 return False
+            cx, cy = rhythm.point((r.left, r.top, r.right, r.bottom))
             import pyautogui
             pyautogui.click(cx, cy)
-            time.sleep(0.3)
+            rhythm.nap(0.3)
             return True
         except Exception:
             return False
@@ -1676,6 +1788,7 @@ class Moment:
             import pyautogui
         except Exception as e:
             return WxResponse.failure(f'pyautogui 不可用：{e}')
+        rhythm.gate('comment')
 
         try:
             theme = self._comment_box_theme()
@@ -1690,9 +1803,12 @@ class Moment:
         if rect:
             left, top, right, bottom = rect
             rl = left
-            rt = max(0, int(bottom) + 8)
+            # 评论框贴在时间线视口**底边内侧**（4.1.13 实测「发送」中心 y≈bottom-61），
+            # 不是悬在视口下方；只找 bottom+8 以下会落到任务栏上，永远匹配不到。
+            # 从底边往上 320 找到下方 88，新旧两种布局都能覆盖。
+            rt = max(0, int(bottom) - 320)
             rw = (right - left)
-            rh = 80
+            rh = 320 + 88
             region = (rl, rt, rw, rh)
         try:
             import numpy as np
@@ -1775,14 +1891,7 @@ class Moment:
                                 db=db, max_screens=max_screens)
         if item is None:
             return WxResponse.failure('未能定位到目标朋友圈')
-        if not self._locate_more_click(item, max_retry=max_retry):
-            return WxResponse.failure('未能打开 “…” 浮层')
-        if not self._comment_open():
-            return WxResponse.failure('未能在浮层中找到“评论”按钮')
-        self._comment_input_focus()
-        if not self._type_comment(content):
-            return WxResponse.failure('输入评论内容失败')
-        return self._click_comment_send()
+        return self.Comment(item, content, max_retry=max_retry)
 
     def ReplyCommentMoment(self, publisher: Optional[str] = None,
                            keyword: Optional[str] = None,
@@ -1825,8 +1934,10 @@ class Moment:
                     as_tree: bool = False) -> WxResponse:
         """定位指定朋友圈并读取其全部可见评论（含回复）。
 
-        评论直接取目标可见 cell 的 UIA 文本解析；单条评论若带“回复”，
-        解析结果中 ``reply_to`` 记录被回复者昵称。
+        评论先按目标可见 cell 的 UIA 文本解析；单条评论若带“回复”，
+        解析结果中 ``reply_to`` 记录被回复者昵称。4.1.13 合并布局下点赞与
+        评论落在兄弟 cell ``mmui::TimelineCommentCell`` 且不进 UIA 树，
+        此时自动兜底为「评论区矩形 + 截图 OCR」（见 :meth:`_read_comment_cell_ocr`）。
 
         Args:
             publisher: 发布者昵称。
@@ -1859,6 +1970,7 @@ class Moment:
             item = full
         try:
             item._ensure_parsed()
+            likes = list(item.likes)
             comments = [
                 {
                     'author': c.author,
@@ -1868,22 +1980,90 @@ class Moment:
                 }
                 for c in item.comments
             ]
+            source = 'uia'
+            if not likes and not comments:
+                # 4.1.13 合并布局：赞/评在兄弟 cell 里，正文 cell 解析必然为空，
+                # 交给 OCR 路线兜底（见 _read_comment_cell_ocr）。
+                got = self._read_comment_cell_ocr(item)
+                if got is not None:
+                    likes = list(got[0])
+                    comments = [
+                        {
+                            'author': c.author,
+                            'content': c.content,
+                            'reply_to': c.reply_to,
+                            'raw': c.raw,
+                        }
+                        for c in got[1]
+                    ]
+                    source = 'uia+ocr'
         except Exception as e:
             return WxResponse.failure(f'解析评论失败：{e}')
         data = {
-            'source': 'uia',
+            'source': source,
             'publisher': item.publisher,
             'content': item.text,
             'time': item.timestamp,
-            'likes': list(item.likes),
+            'likes': likes,
             'comment_count': len(comments),
             'comments': comments,
         }
         if as_tree:
             data['tree'] = self._comments_tree(comments)
-        if not comments:
-            return WxResponse.failure('该朋友圈当前可见区无评论（可能被折叠）')
-        return WxResponse.success(message=f'获取到 {len(comments)} 条评论', data=data)
+        if not comments and not likes:
+            return WxResponse.failure('该朋友圈当前可见区无赞无评（可能被折叠）')
+        return WxResponse.success(
+            message=f'获取到 {len(comments)} 条评论 / {len(likes)} 个点赞',
+            data=data)
+
+    def _read_comment_cell_ocr(self, item: MomentItem, retries: int = 3):
+        """用「评论区 cell 矩形 + 内置 OCR」读点赞与评论。
+
+        微信 4.1.13 合并布局下，点赞人和评论**不在**正文 cell 里，而在紧随其后
+        的兄弟 cell ``mmui::TimelineCommentCell``；该 cell 的 Name 只有字面量
+        「评论区」、零子节点，文字压根不进 UIA 树，只能截图识别（与
+        :meth:`ReplyComment` 同一条已验证的路子）。
+
+        行内判定：含冒号的是评论（渲染格式 ``昵称：内容``）；不含冒号的是点赞行
+        —— 爱心图标 OCR 不出来，剩下的就是点赞人列表。
+
+        Returns:
+            ``(likes, comments)``；cell 定位不到或滚完仍识别不出任何行时返回
+            ``None``，交由上层按“可见区无赞无评”处理。
+        """
+        box = self._locate_comment_cell(item)
+        if box is None:
+            return None
+        lines = []
+        for _ in range(max(1, retries)):
+            try:
+                from PIL import ImageGrab
+                from wechatauto.guia import ScreenOCR
+                lines = ScreenOCR.recognize(ImageGrab.grab(bbox=box))
+            except Exception as e:
+                wxlog.debug(f'评论区 OCR 失败：{e}')
+                return None
+            if lines:
+                break
+            # 评论区常压在视口下沿之外，滚到能看见下一条动态再读
+            if not self._scroll_comments_down(item, box, max_tries=4):
+                break
+            box = self._locate_comment_cell(item) or box
+            time.sleep(0.3)
+        if not lines:
+            return None
+        likes: List[str] = []
+        comments: List[MomentComment] = []
+        for t, *_ in sorted(lines, key=lambda r: r[2]):
+            s = (t or '').strip()
+            if not s:
+                continue
+            if '：' in s or ':' in s:
+                comments.append(MomentComment.from_text(s))
+            else:
+                likes.extend(_split_like_names(s))
+        wxlog.debug(f'评论区 OCR：赞{len(likes)} 评{len(comments)} box={box}')
+        return likes, comments
 
     def _get_comments_db(self, publisher: Optional[str],
                          keyword: Optional[str], db,
@@ -2025,6 +2205,14 @@ class Moment:
 
     def _invoke_action_menu(self, item: MomentItem) -> Optional['MomentActionMenu']:
         action_button = None
+        # 与 _scroll / _locate_more_click 同理：非前台时第一下点击只用来激活窗口，
+        # 菜单不会弹，随后 exists(0.5) 判定失败、报「未能打开朋友圈操作菜单」。
+        self._ensure_window_foreground()
+        if not self._reattach_item(item):
+            # 死句柄上 RightClick()/Click() 只会抛 "Can not move cursor ...
+            # BoundingRectangle is (0,0,0,0)"，先换到新句柄再动手。
+            wxlog.debug('cell 句柄已失效且当前视野找不回同一条，放弃右键')
+            return None
         try:
             for child in item.control.GetChildren():
                 if child.ControlTypeName == 'ButtonControl':
@@ -2046,7 +2234,16 @@ class Moment:
             return None
         return menu
 
-    def Like(self, item: MomentItem, cancel: bool = False) -> WxResponse:
+    def Like(self, item: MomentItem, cancel: bool = False,
+             max_retry: int = 8) -> WxResponse:
+        """点赞 / 取消点赞一条动态。
+
+        先走 “…” 浮层那条（``LikeMoment`` 用的同一条，也是录屏里跑通过的那条），
+        弹不出浮层再退回 ``MomentActionMenu`` 老路线。以前这两个方法各走一条，
+        浮层路线一改就只剩 ``LikeMoment`` 能用——同一个动作不该留两份实现。
+        """
+        if self._locate_more_click(item, max_retry=max_retry) and self._like_open(cancel=cancel):
+            return WxResponse.success('已取消点赞' if cancel else '点赞成功')
         menu = self._invoke_action_menu(item)
         if not menu:
             return WxResponse.failure('未能打开朋友圈操作菜单')
@@ -2055,7 +2252,15 @@ class Moment:
         finally:
             menu.close()
 
-    def Comment(self, item: MomentItem, content: str, reply_to: Optional[str] = None) -> WxResponse:
+    def Comment(self, item: MomentItem, content: str, reply_to: Optional[str] = None,
+                max_retry: int = 8) -> WxResponse:
+        """评论一条动态。
+
+        不带 ``reply_to`` 时先走 “…” 浮层 → 评论 → 输入 → 模板匹配点「发送」
+        （与 ``CommentMoment`` 同一条路线）；连浮层都弹不出来才退回老的独立评论
+        窗口 ``MomentCommentDialog``。已经进到输入框那条**不会**再回落，避免
+        同一条评论发两次。两条路线各自都带 ``rhythm.gate('comment')``。
+        """
         if reply_to:
             comment = item.find_comment(reply_to)
             if not comment:
@@ -2064,6 +2269,11 @@ class Moment:
             if not ctrl:
                 return WxResponse.failure('未定位到评论控件')
             ctrl.Click()
+        elif self._locate_more_click(item, max_retry=max_retry) and self._comment_open():
+            self._comment_input_focus()
+            if not self._type_comment(content):
+                return WxResponse.failure('输入评论内容失败')
+            return self._click_comment_send()
         else:
             menu = self._invoke_action_menu(item)
             if not menu:
@@ -2562,7 +2772,8 @@ class MomentActionMenu(BaseUISubWnd):
             return False
         try:
             return self.control.Exists(wait)
-        except Exception:
+        except Exception as exc:
+            wxlog.debug(f'朋友圈控件 Exists 探测失败：{exc!r}')
             return False
 
     def _find_button(self, names: Iterable[str]) -> Optional[uia.Control]:
@@ -2589,6 +2800,7 @@ class MomentActionMenu(BaseUISubWnd):
         button = self._find_button(target_names)
         if not button:
             return WxResponse.failure('未找到点赞按钮')
+        rhythm.gate('like')
         button.Click()
         return WxResponse.success('操作成功')
 
@@ -2650,7 +2862,8 @@ class MomentCommentDialog(BaseUISubWnd):
             return False
         try:
             return self.control.Exists(wait)
-        except Exception:
+        except Exception as exc:
+            wxlog.debug(f'朋友圈控件 Exists 探测失败：{exc!r}')
             return False
 
     def send(self, content: str) -> WxResponse:
@@ -2663,16 +2876,22 @@ class MomentCommentDialog(BaseUISubWnd):
         if not self.edit or not self.edit.Exists(0):
             return WxResponse.failure('未找到评论输入框')
 
+        # 这条是「评论窗口已弹出」之后的最后一步，和 _click_comment_send 一样是
+        # 对外可见的写动作，必须过节流（前置校验不过时不占用写动作额度）。
+        rhythm.gate('comment')
         try:
             self.edit.Click()
+            rhythm.nap(0.35)
             self.edit.SendKeys('{Ctrl}a')
             SetClipboardText(content)
             self.edit.SendKeys('{Ctrl}v')
+            rhythm.nap(0.5)
 
             if self.send_button and self.send_button.Exists(0):
                 self.send_button.Click()
             else:
                 self.edit.SendKeys('{Enter}')
+            rhythm.nap(0.4)
         except Exception as exc:  # pragma: no cover - UI 交互异常仅记录日志
             wxlog.debug(f'发送朋友圈评论失败：{exc}')
             return WxResponse.failure('发送评论失败')
@@ -3285,6 +3504,13 @@ class MomentDB:
         if dims_hit:
             # 宽高精确命中
             if len(dims_hit) == 1:
+                if size > 0:
+                    d = abs(dims_hit[0]["plain_size"] - size)
+                    if d > max(_MAX_SIZE_DEV, size * 0.10):
+                        # totalSize 是 CDN 声明值、缓存是微信重编码版，
+                        # 偏差大不等于认错图，所以只记录不否决
+                        wxlog.debug(f"唯一 dims 候选与声明 size 差 {d}B："
+                                    f"{dims_hit[0]['path']}")
                 return dims_hit[0]["path"]
             # 同尺寸多张图：用 size 消歧（唯一最小值才采纳，且偏差受限）
             if size > 0:

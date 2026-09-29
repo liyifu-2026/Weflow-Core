@@ -139,11 +139,59 @@ class _DBMessageParent:
 
 
 class _AllMessageChat:
-    """AddListenAll 使用的轻量 Chat 占位（仅含 .who，不触发 GUI 初始化）。"""
+    """``AddListenAll`` 回调里拿到的会话对象。
 
-    def __init__(self, username: str):
+    构造时**不碰 GUI**（每条消息都 new 一个 Chat 会触发 ``WeChatGUI`` 初始化），
+    只带 username 和解析好的昵称。想在回调里直接回话时，用 ``factory`` 按需升级
+    成真正的 :class:`Chat` 并缓存下来，``SendMsg`` 原样转发过去。
+    """
+
+    def __init__(self, username: str, nickname: str = '', factory=None, db=None):
         self.who = username
         self._wxid = username
+        self._nickname = nickname or ''
+        self._factory = factory
+        self._chat = None
+        self._db = db          # 只读库用（查群成员），不需要 GUI
+
+    @property
+    def nickname(self) -> str:
+        return self._nickname or self.who
+
+    def __str__(self):
+        return self.nickname
+
+    def __repr__(self):
+        return f'<{PROJECT_NAME} - _AllMessageChat("{self.who}")>'
+
+    def GetGroupMembers(self) -> List[dict]:
+        """群成员列表（与 :meth:`Chat.GetGroupMembers` 同义，只读库、不建 GUI）。
+
+        全局监听回调里拿到的就是本类实例，所以这里也要能查名字。
+        """
+        wxid = self._wxid or ''
+        if not wxid.endswith('@chatroom') or self._db is None:
+            return []
+        try:
+            return self._db.get_group_members(wxid)
+        except Exception:
+            return []
+
+    @property
+    def chat(self):
+        if self._chat is None and self._factory is not None:
+            try:
+                self._chat = self._factory(self.who)
+            except Exception as e:
+                wxlog.debug(f'全局监听会话升级为 Chat 失败：{e}')
+        return self._chat
+
+    def SendMsg(self, msg: str, **kw):
+        chat = self.chat
+        if chat is None:
+            from wechatauto.exceptions import WechatautoError
+            raise WechatautoError('全局监听回调里无法回复：未能构造 Chat')
+        return chat.SendMsg(msg, **kw)
 
 
 def _extract_group_sender(content) -> str:
@@ -189,11 +237,20 @@ def _pick_msg_class(is_self: bool, mtype: Optional[str], content: str):
     return get('SelfOtherMessage' if is_self else 'FriendOtherMessage')
 
 
-def _db_row_to_message(row: dict, chat: 'Chat', self_wxid: str = None) -> 'Message':
+def _db_row_to_message(row: dict, chat: 'Chat', self_wxid: str = None,
+                       db=None) -> 'Message':
     """把 db.py 的消息行转换为现有 Message 子类实例。
 
     direction 判定：``sender_id == 2`` 视为自己（与 guia 发送校验一致），
     也可用 self_wxid 比对兜底。
+
+    发送者身份：``real_sender_id`` 是 ``message_resource.db`` 里 ``SenderName2Id``
+    的 rowid，db 层已经把它换成真 wxid 放在 ``sender_username``，但老代码既没往下传，
+    ``msg.wxid`` 存的又还是那个数字，于是调用方只能靠文本消息正文里的 ``wxid_xxx:\\n``
+    前缀刮发送者——图片/语音/文件这些类型没有前缀，就彻底拿不到是谁发的。现在：
+    ``msg.sender_wxid`` 给真实 wxid（解析不到时退回正文前缀，再退回那个数字，
+    保持老代码能读到的值不变），``msg.sender`` 给备注/昵称（非文本消息也能对上人了），
+    ``msg.wxid`` 对自己的消息给 ``self_wxid`` 而不是常量 2。
     """
     from wechatauto.db import WeChatDB
     from wechatauto.msgs.mattr import SystemMessage
@@ -220,11 +277,25 @@ def _db_row_to_message(row: dict, chat: 'Chat', self_wxid: str = None) -> 'Messa
     msg.local_id = row.get('local_id')
     msg.sort_seq = row.get('sort_seq')
     msg.create_time = row.get('create_time')
-    msg.wxid = sender_id
     msg.attr = 'self' if is_self else 'friend'
-    sender = _extract_group_sender(content) or getattr(chat, 'who', '')
-    msg.sender = sender or getattr(chat, 'who', '')
-    msg.sender_remark = msg.sender
+
+    sender_wxid = str(row.get('sender_username') or '').strip()
+    if sender_wxid.isdigit():
+        sender_wxid = ''          # 1.2.4 之前兜底遗留：把数字 rowid 冒充成了用户名
+    if not sender_wxid:
+        sender_wxid = _extract_group_sender(content)   # 正文前缀仍然更准的场景
+
+    msg.sender_wxid = sender_wxid
+    msg.wxid = sender_wxid or (self_wxid if is_self else sender_id)
+    db = db if db is not None else getattr(chat, '_db', None)
+    disp = ''
+    if sender_wxid and db is not None:
+        try:
+            disp = db.nickname_map().get(sender_wxid, '')
+        except Exception:
+            disp = ''
+    msg.sender = disp or sender_wxid or getattr(chat, 'who', '')
+    msg.sender_remark = disp or msg.sender
     return msg
 
 
@@ -446,7 +517,22 @@ class Chat:
         """获取当前聊天窗口最近 50 条消息。"""
         rows = self._db.get_messages(self._wxid, limit=50)
         self_wxid = self._db.get_self_info()['username']
-        return [_db_row_to_message(r, self, self_wxid) for r in rows]
+        return [_db_row_to_message(r, self, self_wxid, self._db) for r in rows]
+
+    def GetGroupMembers(self) -> List[dict]:
+        """群成员列表（静态读库，不点界面）：``username`` / ``nick_name`` /
+        ``remark`` / ``is_owner``。不是群聊时返回空列表。
+
+        配合监听回调里的 ``msg.sender_wxid`` 用：群里那些**不在你通讯录**的人，
+        只有这张表能给出名字。
+        """
+        wxid = self._wxid or ''
+        if not wxid.endswith('@chatroom'):
+            return []
+        try:
+            return self._db.get_group_members(wxid)
+        except Exception:
+            return []
 
     def GetNewMessage(self, max_backlog: int = 5000) -> List['Message']:
         """获取新消息（首次调用仅建立基线，返回空列表）。
@@ -480,7 +566,7 @@ class Chat:
         # 水位只推进到实际取回的最后一条（而非数据库最新位置）
         self._last_seq = rows[-1]['sort_seq']
         self_wxid = self._db.get_self_info()['username']
-        return [_db_row_to_message(r, self, self_wxid) for r in rows]
+        return [_db_row_to_message(r, self, self_wxid, self._db) for r in rows]
 
     def GetMessageById(self, msg_id) -> Optional['Message']:
         """根据消息 local_id 获取消息实例。"""
@@ -491,7 +577,7 @@ class Chat:
         row = self._db.get_message_row(self._wxid, local_id)
         if not row:
             return None
-        return _db_row_to_message(row, self)
+        return _db_row_to_message(row, self, db=self._db)
 
     def GetMessageByHash(self, msg_hash: str) -> Optional['Message']:
         """根据消息哈希值获取消息实例。"""
@@ -499,7 +585,7 @@ class Chat:
             return None
         self_wxid = self._db.get_self_info()['username']
         for row in self._db.get_messages(self._wxid, limit=200):
-            m = _db_row_to_message(row, self, self_wxid)
+            m = _db_row_to_message(row, self, self_wxid, self._db)
             if m.hash == msg_hash or getattr(m, 'hash_text', None) == msg_hash:
                 return m
         return None
@@ -509,7 +595,7 @@ class Chat:
         rows = self._db.get_messages(self._wxid, limit=1)
         if not rows:
             return None
-        return _db_row_to_message(rows[0], self)
+        return _db_row_to_message(rows[0], self, db=self._db)
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +624,7 @@ class WeChat(Chat, Listener):
         self.listen: Dict[str, tuple] = {}
         self._listener = None
         self._listen_wrappers: Dict[str, Callable] = {}
+        self._all_chat_cache: Dict[str, object] = {}
         self._listener_is_listening = False
         self._listener_stop_event = threading.Event()
         self._current_chat: Optional['Chat'] = None
@@ -639,8 +726,31 @@ class WeChat(Chat, Listener):
             if not hwnd:
                 return False
             root = _uia.ControlFromHandle(hwnd)
-        except Exception:
+        except Exception as exc:
+            wxlog.debug(f'UIA 根控件获取失败：{exc!r}')
             return False
+
+        # 树没物化时 ControlFromHandle 只拿到 Qt 空壳（微信重启/升级后 gate byte
+        # 归零），下面每条查找都会落空，最后报出来的却是「找不到导航按钮」，
+        # 很容易被误判成版本不兼容。先按需唤醒 mmui 树，再重新锚定根控件。
+        def _tree_ready(node) -> bool:
+            try:
+                return _find_descendant(
+                    node,
+                    lambda c: (getattr(c, 'ClassName', '') or '').startswith('mmui::MainTabBar')
+                    or (getattr(c, 'ClassName', '') or '') == 'mmui::SNSContentView',
+                    max_depth=15) is not None
+            except Exception:
+                return False
+
+        if root is not None and not _tree_ready(root):
+            try:
+                from wechatauto.uia_driver import WeChatUIA
+                if WeChatUIA().ensure_materialized(timeout=6.0):
+                    root = _uia.ControlFromHandle(hwnd) or root
+                    wxlog.debug('进朋友圈前已唤醒 mmui 树')
+            except Exception as exc:
+                wxlog.debug(f'唤醒 mmui 树失败：{exc!r}')
 
         def _has_timeline() -> bool:
             try:
@@ -649,7 +759,8 @@ class WeChat(Chat, Listener):
                     return True
                 sc = _find_descendant(root, lambda c: getattr(c, 'ClassName', '') == 'mmui::SNSContentView', max_depth=30)
                 return sc is not None
-            except Exception:
+            except Exception as exc:
+                wxlog.debug(f'朋友圈控件探测失败：{exc!r}')
                 return False
 
         if _has_timeline():
@@ -726,6 +837,13 @@ class WeChat(Chat, Listener):
             wrapper = self._make_listen_cb(chat, _cb)
             self._listen_wrappers[name] = wrapper
             self._listener.add_listener(chat._wxid, wrapper)
+        # 全局监听也要在重建监听器时补挂：否则 StopListening() 之后再
+        # StartListening()，AddListenAll 的回调就悄悄没了，而
+        # _listen_all_active 还是 True，再调 AddListenAll 只会回「已开启全局监听」。
+        if (getattr(self, '_listen_all_active', False)
+                and getattr(self, '_listen_all_wrapper', None)):
+            self._listener.add_all(self._listen_all_wrapper,
+                                   discover=getattr(self, '_listen_all_discover', True))
         self._listener.start()
         self._listener_is_listening = True
         self._listener_stop_event.clear()
@@ -741,7 +859,7 @@ class WeChat(Chat, Listener):
 
         def _wrapper(row: dict, listener) -> None:
             try:
-                msg = _db_row_to_message(row, chat, self_wxid)
+                msg = _db_row_to_message(row, chat, self_wxid, self._db)
                 callback(msg, chat)
             except Exception:
                 import traceback
@@ -791,10 +909,15 @@ class WeChat(Chat, Listener):
         """监听所有会话的新消息（包括好友、群聊、文件传输助手等）。
 
         Args:
-            callback: 回调函数，参数为 (Message 对象, Chat-like 对象)。
-                Chat-like 对象的 .who 属性为会话原始 username。
+            callback: 回调函数，参数为 (Message 对象, Chat 对象)。第二个参数的
+                ``.who`` 是会话 username、``.nickname`` 是显示名；想直接在回调里
+                回话就调 ``chat.SendMsg(...)``（第一次用时按需构造真 Chat 并缓存，
+                不会为每条消息都初始化 GUI）。
             discover: 为 True 时自动发现新出现的会话（如新群聊）并注册
                 回调，无需重复调用。默认 True。
+
+        已经用 ``AddListenChat`` 单独监听过的会话**同样**会收到这里的回调
+        （一个会话可以挂多个回调）。
 
         Returns:
             WxResponse
@@ -816,15 +939,27 @@ class WeChat(Chat, Listener):
 
         def _wrap(row: dict, listener) -> None:
             try:
-                username = row.get('username', '')
-                fake_chat = _AllMessageChat(username)
-                msg = _db_row_to_message(row, fake_chat, self_wxid)
-                callback(msg, fake_chat)
+                username = row.get('username', '') or ''
+                chat = self._all_chat_cache.get(username)
+                if chat is None:
+                    try:
+                        nick = self._db.get_nickname(username) or ''
+                    except Exception:
+                        nick = ''
+                    chat = _AllMessageChat(
+                        username, nick,
+                        factory=lambda who: Chat(who, self._gui, self._db),
+                        db=self._db)
+                    self._all_chat_cache[username] = chat
+                msg = _db_row_to_message(row, chat, self_wxid, self._db)
+                callback(msg, chat)
             except Exception:
                 import traceback
                 wxlog.debug(f'全局监听回调发生错误：{traceback.format_exc()}')
 
         self._listen_all_callback = callback
+        self._listen_all_wrapper = _wrap
+        self._listen_all_discover = discover
         self._listen_all_active = True
         if self._listener is not None:
             self._listener.add_all(_wrap, discover=discover)
@@ -836,6 +971,7 @@ class WeChat(Chat, Listener):
             return WxResponse.failure('未开启全局监听')
         self._listen_all_active = False
         self._listen_all_callback = None
+        self._listen_all_wrapper = None
         if self._listener is not None:
             self._listener._discover_new = False
             self._listener._all_callback = None

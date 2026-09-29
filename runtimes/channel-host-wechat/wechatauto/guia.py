@@ -56,6 +56,7 @@ from typing import Dict, List, Optional, Tuple
 
 from PIL import Image
 
+from wechatauto import rhythm
 from wechatauto.logger import wxlog
 from wechatauto.param import WxResponse
 from wechatauto.utils.lock import uilock
@@ -185,6 +186,36 @@ def _rect_intersection_area(
     return max(0, right - left) * max(0, bottom - top)
 
 
+# 「代码本身坏了」和「这次没测出来」不是一回事：前者必须上屏，后者可以静默回落。
+# 少了这层区分时，一个缺 import 的 NameError 会被宽 except 伪装成 OCR 未命中。
+CODE_DEFECT_ERRORS = (NameError, UnboundLocalError, AttributeError,
+                      TypeError, ImportError)
+
+
+def _log_swallowed(where: str, e: BaseException) -> None:
+    """宽 ``except Exception`` 吞掉异常时按性质分级记录。
+
+    控制台默认 INFO，所以 debug 等于只进日志文件：「DB 这次查不到」这类可恢复
+    失败不该刷屏，代码缺陷则必须上屏——否则又能藏成一个版本。
+    """
+    if isinstance(e, CODE_DEFECT_ERRORS):
+        wxlog.error(f'{where}：代码缺陷，不是这次没测出来 —— '
+                    f'{type(e).__name__}: {e}')
+    else:
+        wxlog.debug(f'{where}：{type(e).__name__}: {e}')
+
+# 竖屏（手机式窄窗口）布局：微信新版支持把窗口缩到手机比例，界面切换为
+# 单列布局——会话列表占满窗口宽度，打开会话后聊天区同样占满窗口宽度。
+# 两档位（wide / portrait）各自独立校准，分别存于布局文件。
+PORTRAIT_MIN_HW = 1.2            # 高/宽 ≥ 此值 → 视为竖屏（手机式）布局
+PORTRAIT_SIDEBAR_RATIO = 1.0     # 竖屏下「侧栏」= 整窗宽（单列）
+MIN_WINDOW_PORTRAIT = 600        # 竖屏主窗口的最小高度（像素）
+# 会话列表中「名字列」的左边界（相对侧栏宽）：小于此值视为头像/角标/图标。
+# 实测：宽屏（3072 宽、侧栏 610）名字列起点 ≈0.39（带角标的行 ≈0.28）；
+# 手机式竖屏（848×1824，“侧栏”= 整窗宽）≈0.278。
+# 取 0.25 留余量，两档都过；头像/角标（≤0.15）仍被滤掉。
+NAME_COL_MIN_RATIO = 0.25
+
 # 多特征兜底：类名只是「软条件」之一，还需 进程名/可见/大尺寸/标题 等特征
 # 联合判断，避免 Qt 升级改名（Qt51514 → Qt6xxx）后主窗口定位失效。
 PROCESS_NAME = 'weixin.exe'              # 微信进程名（小写）
@@ -193,6 +224,13 @@ MAIN_TITLE_KEYWORDS = ('微信', 'Weixin', 'WeChat')
 
 # 布局校准配置目录：~/.wechatauto/layout-<机器标识>.json
 LAYOUT_CONFIG_DIR = os.path.join(os.path.expanduser('~'), '.wechatauto')
+
+
+def _layout_profile(w: int, h: int) -> str:
+    """按窗口长宽比判定布局档位：``'portrait'``（手机式竖屏）或 ``'wide'``。"""
+    if w > 0 and h > 0 and h / w >= PORTRAIT_MIN_HW:
+        return 'portrait'
+    return 'wide'
 
 
 def _machine_id() -> str:
@@ -254,7 +292,12 @@ def _restore_keep_maximize(user32, hwnd: int):
 # ---------------------------------------------------------------------------
 
 class WinInput:
-    """基于 Win32 的真实鼠标/键盘输入（DPI 感知）。"""
+    """基于 Win32 的真实鼠标/键盘输入（DPI 感知）。
+
+    所有停顿/光标移动都过 :mod:`wechatauto.rhythm`：真人不会两次点同一个像素、
+    也不会每 0.15s 动一次。档位用 ``rhythm.set_profile('natural'|'calm'|'fast')``
+    或环境变量 ``WECHATAUTO_RHYTHM`` 调。
+    """
 
     def __init__(self):
         user32 = ctypes.windll.user32
@@ -274,13 +317,13 @@ class WinInput:
         物理像素，两者在同一坐标系，无需额外缩放。
         """
         u = self._user32
-        u.SetCursorPos(int(x), int(y))
-        time.sleep(0.15)
+        rhythm.move_to(u, int(x), int(y))
+        rhythm.nap(0.15)
         down = MOUSEEVENTF_RIGHTDOWN if right else MOUSEEVENTF_LEFTDOWN
         up = MOUSEEVENTF_RIGHTUP if right else MOUSEEVENTF_LEFTUP
         u.mouse_event(down, 0, 0, 0, 0)
         u.mouse_event(up, 0, 0, 0, 0)
-        time.sleep(0.3)
+        rhythm.nap(0.3)
 
     def send_input_click(self, x: int, y: int, right: bool = False):
         """SendInput 绝对坐标点击（按真实屏幕尺寸缩放）。
@@ -291,8 +334,8 @@ class WinInput:
         同因改用 SendInput），SendInput 可直接命中弹出右键菜单。
         """
         u = self._user32
-        u.SetCursorPos(int(x), int(y))
-        time.sleep(0.15)
+        rhythm.move_to(u, int(x), int(y))
+        rhythm.nap(0.15)
         n = int(x * 65535 // self.screen_w)
         m = int(y * 65535 // self.screen_h)
         down = MOUSEEVENTF_ABSOLUTE | (MOUSEEVENTF_RIGHTDOWN if right else MOUSEEVENTF_LEFTDOWN)
@@ -304,14 +347,14 @@ class WinInput:
             inp.u.mi.dy = m
             inp.u.mi.dwFlags = flags
             u.SendInput(1, ctypes.byref(inp), ctypes.sizeof(MOUSE_INPUT))
-            time.sleep(0.06)
-        time.sleep(0.3)
+            rhythm.nap(0.06)
+        rhythm.nap(0.3)
 
     def wheel(self, delta: int = -300):
         """滚轮滚动（delta 为正向上，负向下）。"""
         u = self._user32
         u.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
-        time.sleep(0.4)
+        rhythm.nap(0.4)
 
     # -- 键盘 ----------------------------------------------------------
     def key(self, vk: int, ctrl: bool = False, shift: bool = False):
@@ -335,7 +378,7 @@ class WinInput:
         """
         flags = KEYEVENTF_KEYUP if not down else 0
         ctypes.windll.user32.keybd_event(vk & 0xFFFF, 0, flags, 0)
-        time.sleep(0.05)
+        rhythm.key_hold()
 
     def type_unicode(self, text: str):
         """以 SendInput Unicode 方式键入文本（绕开键盘布局/大小写问题）。"""
@@ -350,9 +393,9 @@ class WinInput:
             up.u.ki.wScan = ord(ch)
             up.u.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
             u.SendInput(1, ctypes.byref(down), ctypes.sizeof(INPUT))
-            time.sleep(0.02)
+            rhythm.key_hold()
             u.SendInput(1, ctypes.byref(up), ctypes.sizeof(INPUT))
-            time.sleep(0.04)
+            rhythm.type_gap()
 
     def type_pinyin(self, pinyin: str):
         """以虚拟键逐字母输入拼音（供中文输入法组合，如 ``ceshi`` → 测试）。"""
@@ -361,7 +404,7 @@ class WinInput:
                 self.key(ord(ch) - 32)
             elif ch == ' ':
                 self.key(VK_SPACE)
-            time.sleep(0.05)
+            rhythm.type_gap()
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +533,9 @@ class WeChatGUI:
                  calibrate: bool = False):
         self._input = WinInput()
         self._sidebar_ratio = SIDEBAR_RATIO
+        self._portrait_sidebar_ratio = PORTRAIT_SIDEBAR_RATIO
         self._send_button_ratio = SEND_BUTTON_RATIO
+        self.layout_profile = 'wide'      # 由 _update_layout() 按窗口比例刷新
         self.main_hwnd = hwnd or self._find_main_window(title)
         if not self.main_hwnd:
             raise RuntimeError('未找到微信主窗口，请确认微信已登录并运行')
@@ -565,8 +610,9 @@ class WeChatGUI:
             score += 3
         rr = wintypes.RECT()
         u.GetWindowRect(hwnd, ctypes.byref(rr))
-        if (rr.right - rr.left) >= MIN_WINDOW_SIZE \
-                or (rr.bottom - rr.top) >= MIN_WINDOW_SIZE:
+        w_, h_ = rr.right - rr.left, rr.bottom - rr.top
+        if w_ >= MIN_WINDOW_SIZE or h_ >= MIN_WINDOW_SIZE \
+                or (0 < w_ < h_ and h_ >= MIN_WINDOW_PORTRAIT):
             score += 2
         return score >= 5
 
@@ -603,7 +649,8 @@ class WeChatGUI:
             w = rr.right - rr.left
             ht = rr.bottom - rr.top
             if w > 0 and ht > 0:
-                if w >= MIN_WINDOW_SIZE or ht >= MIN_WINDOW_SIZE:
+                if w >= MIN_WINDOW_SIZE or ht >= MIN_WINDOW_SIZE \
+                        or (w < ht and ht >= MIN_WINDOW_PORTRAIT):
                     score += 2
                 if score >= 5:
                     scored.append((score, w * ht, h))
@@ -699,10 +746,18 @@ class WeChatGUI:
         比例优先取布局校准结果（``_sidebar_ratio`` / ``_send_button_ratio``），
         未校准时回落到模块默认常量。
         """
-        sb_ratio = getattr(self, '_sidebar_ratio', SIDEBAR_RATIO)
+        self.layout_profile = _layout_profile(self.render_w, self.render_h)
         send_ratio = getattr(self, '_send_button_ratio', SEND_BUTTON_RATIO)
-        self.sidebar_right = max(120, int(self.render_w * sb_ratio))
-        self.right_pane_left = self.sidebar_right
+        if self.layout_profile == 'portrait':
+            # 手机式竖屏：单列——列表占满窗宽；打开会话后聊天区同样占满
+            sb_ratio = getattr(self, '_portrait_sidebar_ratio',
+                               PORTRAIT_SIDEBAR_RATIO)
+            self.sidebar_right = max(120, int(self.render_w * sb_ratio))
+            self.right_pane_left = 0
+        else:
+            sb_ratio = getattr(self, '_sidebar_ratio', SIDEBAR_RATIO)
+            self.sidebar_right = max(120, int(self.render_w * sb_ratio))
+            self.right_pane_left = self.sidebar_right
         sx0, sy0, sx1, sy1 = SEARCH_BOX_RATIO
         self.search_box = (
             int(self.sidebar_right * sx0), int(self.render_h * sy0),
@@ -754,8 +809,12 @@ class WeChatGUI:
             def _target():
                 try:
                     result[0] = fn()
-                except Exception:
-                    pass
+                except Exception as ex:
+                    # 探针内部出错只说明这一项测不出来（回落默认比例是对的），
+                    # 但必须留痕：这里静默 pass 过一次，缺 import 的 NameError
+                    # 一路伪装成「OCR 未命中」，藏了整整一个版本。
+                    wxlog.debug(f'校准探针 {getattr(fn, "__name__", fn)} 异常：'
+                                f'{type(ex).__name__}: {ex}')
             t = threading.Thread(target=_target, daemon=True)
             t.start()
             t.join(timeout)
@@ -766,25 +825,37 @@ class WeChatGUI:
             self.bring_to_front()
             time.sleep(0.8)
             self._update_render_rect()
-            layout: Dict[str, object] = {'machine': _machine_id()}
-            # 1) 侧栏宽度：OCR「搜索」锚点（限制 5s 超时）
-            sb = _run_with_timeout(self._detect_sidebar_ratio, timeout=5)
-            layout['sidebar_ratio'] = float(sb) if sb else SIDEBAR_RATIO
-            # 2) 发送按钮：OCR「发送」（仅右下角检索区，限制 5s 超时）
-            try:
-                lines = _run_with_timeout(
-                    lambda: self.ocr((int(self.render_w * 0.5),
-                                      int(self.render_h * 0.7),
-                                      self.render_w, self.render_h)),
-                    timeout=5)
-                lines = lines or []
-            except Exception:
-                lines = []
+            profile = _layout_profile(self.render_w, self.render_h)
+            entry: Dict[str, object] = {'profile': profile}
+            # 1) 侧栏宽度
+            #    wide：OCR「搜索」锚点（限制 5s 超时）反推侧栏右边界；
+            #    portrait：手机式单列布局，列表即整窗宽，比例恒为 1.0
+            #    （该锚点的 0.28 经验值只适用于宽屏侧栏，竖屏下不适用）
+            if profile == 'portrait':
+                entry['sidebar_ratio'] = PORTRAIT_SIDEBAR_RATIO
+            else:
+                sb = _run_with_timeout(self._detect_sidebar_ratio, timeout=5)
+                entry['sidebar_ratio'] = float(sb) if sb else SIDEBAR_RATIO
+            # 2) 发送按钮：OCR「发送」（仅右下角检索区）
+            #    OCR 会偶发漏检（按钮只在输入框有内容时可见），重试一次；
+            #    两次都没抓到就保持默认比例（实测默认区已能覆盖「发送」）
             send = None
-            for text, x, y, w, h in lines:
-                if (text or '').strip() == '发送':
-                    send = (x, y, w, h)
+            for _attempt in range(2):
+                try:
+                    lines = _run_with_timeout(
+                        lambda: self.ocr((int(self.render_w * 0.5),
+                                          int(self.render_h * 0.7),
+                                          self.render_w, self.render_h)),
+                        timeout=5)
+                except Exception:
+                    lines = None
+                for text, x, y, w, h in (lines or []):
+                    if (text or '').strip() == '发送':
+                        send = (x, y, w, h)
+                        break
+                if send:
                     break
+                time.sleep(0.6)
             if send:
                 sx, sy, sw, sh = send
                 # 检索区需略大于按钮本体，OCR 才能稳定命中；四周留边距
@@ -793,32 +864,69 @@ class WeChatGUI:
                 y0 = max(0, sy - pad_y)
                 x1 = min(self.render_w, sx + sw + pad_x)
                 y1 = min(self.render_h, sy + sh + pad_y)
-                layout['send_button_ratio'] = [
+                entry['send_button_ratio'] = [
                     x0 / self.render_w, y0 / self.render_h,
                     x1 / self.render_w, y1 / self.render_h]
             else:
-                layout['send_button_ratio'] = list(SEND_BUTTON_RATIO)
-            layout['render_w'] = self.render_w
-            layout['render_h'] = self.render_h
-            layout['date'] = time.strftime('%Y-%m-%d %H:%M:%S')
+                entry['send_button_ratio'] = list(SEND_BUTTON_RATIO)
+            entry['render_w'] = self.render_w
+            entry['render_h'] = self.render_h
+            entry['date'] = time.strftime('%Y-%m-%d %H:%M:%S')
+            layout = self._merge_layout_file(profile, entry)
             if save:
                 try:
                     with open(_layout_path(), 'w', encoding='utf-8') as f:
                         json.dump(layout, f, ensure_ascii=False, indent=2)
                 except Exception as e:
                     wxlog.debug(f'保存布局校准文件失败：{e}')
-            self._apply_layout(layout)
+            self._apply_layout(entry)
             wxlog.info(
-                f'布局校准完成：sidebar_ratio={layout["sidebar_ratio"]:.3f}, '
-                f'send_button_ratio={layout["send_button_ratio"]}')
+                f'布局校准完成（{profile}）：sidebar_ratio={entry["sidebar_ratio"]:.3f}, '
+                f'send_button_ratio={entry["send_button_ratio"]}')
             return True
         except Exception as e:
-            wxlog.debug(f'布局校准失败：{e}')
+            # 编程错误和「OCR 没认到锚点」不是一回事：前者说明这段代码本身坏了，
+            # 落到默认比例只是碰巧没炸，必须上屏；后者是可恢复的，静默回落即可。
+            if isinstance(e, CODE_DEFECT_ERRORS):
+                wxlog.error(f'布局校准异常（代码缺陷，不是识别失败）：'
+                            f'{type(e).__name__}: {e}')
+            else:
+                wxlog.warning(f'布局校准失败，回落默认比例：{type(e).__name__}: {e}')
             return False
 
+    @staticmethod
+    def _merge_layout_file(profile: str, entry: dict) -> dict:
+        """把本次校准结果并入布局文件（保留另一档位的配置）。
+
+        新格式：``{"version": 2, "machine": ..., "profiles": {"wide": {...},
+        "portrait": {...}}}``；旧的扁平格式（只有 sidebar_ratio 等）视为
+        ``wide`` 档位，迁移后不再丢失。
+        """
+        data: Dict[str, object] = {'version': 2, 'machine': _machine_id(),
+                                   'profiles': {}}
+        p = _layout_path()
+        if os.path.isfile(p):
+            try:
+                with open(p, encoding='utf-8') as f:
+                    old = json.load(f)
+            except Exception:
+                old = {}
+            if isinstance(old, dict):
+                if isinstance(old.get('profiles'), dict):
+                    data['profiles'] = dict(old['profiles'])
+                elif 'sidebar_ratio' in old:          # v1 扁平格式 → 宽屏档
+                    data['profiles']['wide'] = old
+        data['profiles'][profile] = entry
+        return data
+
     def _apply_layout(self, d: dict) -> None:
-        """应用布局校准结果并重算各布局区域。"""
-        self._sidebar_ratio = float(d.get('sidebar_ratio', SIDEBAR_RATIO))
+        """应用某一档位的布局校准结果并重算各布局区域。"""
+        prof = d.get('profile') or _layout_profile(self.render_w, self.render_h)
+        if prof == 'portrait':
+            self._portrait_sidebar_ratio = float(
+                d.get('sidebar_ratio', PORTRAIT_SIDEBAR_RATIO))
+        else:
+            self._sidebar_ratio = float(d.get('sidebar_ratio', SIDEBAR_RATIO))
         sb = d.get('send_button_ratio')
         if isinstance(sb, (list, tuple)) and len(sb) == 4:
             try:
@@ -828,10 +936,12 @@ class WeChatGUI:
         self._update_layout()
 
     def _load_layout(self) -> bool:
-        """运行前自动加载本机已校准的布局配置，返回是否成功采用。
+        """运行前自动加载本机已校准的**当前档位**布局配置，返回是否成功采用。
 
-        窗口尺寸与校准当时差异过大（>15%，如窗口缩放/未最大化）时视为
-        布局不匹配，拒绝采用并触发重新校准。
+        新格式按 profiles 分档；旧扁平格式视为 wide 档。当前档位没有配置
+        （例如第一次把窗口缩成手机比例）时返回 False → 触发该档位自动校准。
+        窗口尺寸与校准当时差异过大（>15%，如窗口缩放/未最大化）时同样视为
+        布局不匹配，拒绝采用。
         """
         p = _layout_path()
         if not os.path.isfile(p):
@@ -841,14 +951,25 @@ class WeChatGUI:
                 d = json.load(f)
         except Exception:
             return False
-        if abs(float(d.get('render_w', 0) or 0) - self.render_w) \
+        profile = _layout_profile(self.render_w, self.render_h)
+        entry = None
+        if isinstance(d.get('profiles'), dict):
+            entry = d['profiles'].get(profile)
+        elif 'sidebar_ratio' in d:
+            entry = d if profile == 'wide' else None
+        if not isinstance(entry, dict):
+            wxlog.info(f'布局校准缺少 {profile} 档位配置，触发该档位校准')
+            return False
+        if abs(float(entry.get('render_w', 0) or 0) - self.render_w) \
                 / max(self.render_w, 1) > 0.15:
             wxlog.info(
                 f'布局配置与当前窗口尺寸差异过大，忽略并重新校准'
-                f'（校准={d.get("render_w")} vs 当前={self.render_w}）')
+                f'（{profile} 校准={entry.get("render_w")} vs 当前={self.render_w}）')
             return False
-        self._apply_layout(d)
-        wxlog.info(f'已加载布局校准：sidebar_ratio={self._sidebar_ratio:.3f}')
+        self._apply_layout(entry)
+        ratio = (self._portrait_sidebar_ratio if profile == 'portrait'
+                 else self._sidebar_ratio)
+        wxlog.info(f'已加载布局校准（{profile}）：sidebar_ratio={ratio:.3f}')
         return True
 
     def use_window(self, top_hwnd: int) -> bool:
@@ -1105,7 +1226,7 @@ class WeChatGUI:
                    scale: int = 3) -> List[Tuple[str, int, int, int, int]]:
         """对渲染窗口相对区域放大 scale 倍后 OCR，返回渲染相对坐标。
 
-        微信 4.x 的小字号标题（尤其含生僻字如「卢立竺」）原尺寸 OCR 常
+        微信 4.x 的小字号标题（尤其含生僻字的标题）原尺寸 OCR 常
         漏识别或读出乱码，放大后识别率显著提升。坐标按 1/scale 还原。
         """
         screen_box = self._rel_to_screen(rel_box)
@@ -1123,10 +1244,11 @@ class WeChatGUI:
     # 会话列表
     # ------------------------------------------------------------------
     def get_sessions(self, zoomed: bool = False) -> List[Dict[str, object]]:
-        """OCR 识别左侧会话列表，返回 [{name, x, y, w, h}]（渲染相对坐标）。
+        """OCR 识别会话列表（渲染相对坐标），返回 [{name, x, y, w, h}]。
 
-        会话名文本约占侧栏宽的 30%~100%；左侧 <30% 为头像/未读角标，
-        右侧为时间戳。均按比例过滤，跨分辨率一致。
+        名字列约占侧栏宽的 25%~100%（宽屏实测 ≈0.39、手机式竖屏 ≈0.278，
+        带角标的行更靠左 ≈0.28）；左侧 <25% 为头像/未读角标/图标，均按比例
+        过滤，跨分辨率/档位一致（竖屏档下“侧栏”= 整窗宽，阈值同以此为基准）。
 
         zoomed=True 时对整块侧栏放大 3 倍后 OCR，用于原尺寸扫不到
         （生僻字/小字号）时兜底；速度较慢，仅按需启用。
@@ -1139,7 +1261,7 @@ class WeChatGUI:
             t = (text or '').strip()
             if not t:
                 continue
-            if x < self.sidebar_right * 0.30:   # 头像/图标/角标区
+            if x < self.sidebar_right * NAME_COL_MIN_RATIO:   # 头像/图标/角标区
                 continue
             if any(k in t for k in ('搜索', '聊天', '通讯录')):
                 continue
@@ -1195,8 +1317,8 @@ class WeChatGUI:
                        tol: int = 30) -> Optional[Tuple[int, int]]:
             """多轮 OCR 投票找会话行，抗单轮识别抖动。
 
-            WinRT OCR 对生僻字/小字号（如「卢立竺」）存在抖动：同一行
-            不同轮次可能读出「卢立竺」或「亠人五」。逐轮扫描并把命中行
+            WinRT OCR 对生僻字/小字号存在抖动：同一行
+            不同轮次可能误识成形近字。逐轮扫描并把命中行
             按 y 聚类，票数达到 min_votes 才返回，显著降低误配率。
             """
             hits = []  # (y, x, w, h)
@@ -1234,7 +1356,7 @@ class WeChatGUI:
             if hit:
                 return hit
             time.sleep(0.4)
-        # 原尺寸扫不到 → 放大 3 倍多轮投票（生僻字/小字号会话，如「卢立竺」）
+        # 原尺寸扫不到 → 放大 3 倍多轮投票（生僻字/小字号会话）
         hit = _scan_vote(zoomed=True)
         if hit:
             return hit
@@ -1278,7 +1400,8 @@ class WeChatGUI:
                     if g > r + 25 and g > b + 25 and g > 100:
                         green += 1
             return green > 20
-        except Exception:
+        except Exception as exc:
+            wxlog.debug(f'绿色像素探测失败：{exc!r}')
             return False
 
     def _get_uia(self, refresh: bool = False):
@@ -1415,7 +1538,8 @@ class WeChatGUI:
             non_white = sum(1 for y in range(0, h, 6) for x in range(0, w, 6)
                             if sum(px[x, y][:3]) / 3 <= 235)
             return non_white > 30
-        except Exception:
+        except Exception as exc:
+            wxlog.debug(f'非白像素探测失败：{exc!r}')
             return False
 
     def _chat_is_open(self, name: str) -> bool:
@@ -1436,7 +1560,29 @@ class WeChatGUI:
             else:
                 frags = (name,)
             return any(f and f in title for f in frags)
-        except Exception:
+        except Exception as exc:
+            wxlog.debug(f'标题片段匹配失败：{exc!r}')
+            return False
+
+    def _typed_into_chat_input(self, expect: str) -> bool:
+        """自检：兜底粘贴有没有落进聊天输入框（点击没抢到焦点时就会这样）。
+
+        落进去等于在别人会话的发送区里挂了一颗雷——下一次回车就发出去了。
+        发现就立刻用 UIA ValuePattern 清空（不发按键）并让调用方放弃。
+        """
+        uia = self._get_uia()
+        if uia is None:
+            return False
+        try:
+            e = uia._chat_input()
+            vp = e.GetValuePattern() if e is not None else None
+            if vp is None or (vp.Value or '').strip() != (expect or '').strip():
+                return False
+            vp.SetValue('')
+            wxlog.warning(f'搜索词 {expect!r} 被粘进了聊天输入框，已清空并放弃搜索兜底')
+            return True
+        except Exception as ex:
+            wxlog.debug(f'聊天输入框自检失败：{type(ex).__name__}: {ex}')
             return False
 
     def _search_chat(self, name: str) -> bool:
@@ -1446,20 +1592,29 @@ class WeChatGUI:
         等节标题。OCR 结果按 y 排序后，跳过节标题/提示行，点选视觉上
         第一条匹配名称的联系人行。
 
-        群聊的成员预览行（如「00，包含：卢立竺」）也含目标名片段，若不
+        群聊的成员预览行（如「00，包含：某好友」）也含目标名片段，若不
         排除会误点群聊而非联系人。群聊节标题「群聊」以下的行优先排除，
         含「包含」的成员预览行直接跳过。
         """
         frag = name[:2]
+        uia = self._get_uia()
+        anchor = uia.search_box_rect() if uia is not None else None
         for _ in range(3):
-            sb = self._rel_to_screen(self.search_box)
-            self.wx_click((sb[0] + sb[2]) // 2, (sb[1] + sb[3]) // 2)
+            if anchor:
+                # 树里有精确矩形，别拿比例猜（猜偏就会粘进别的控件）
+                cx, cy = (anchor[0] + anchor[2]) // 2, (anchor[1] + anchor[3]) // 2
+            else:
+                sb = self._rel_to_screen(self.search_box)
+                cx, cy = (sb[0] + sb[2]) // 2, (sb[1] + sb[3]) // 2
+            self.wx_click(cx, cy)
             time.sleep(0.3)
             self._input.key(VK_A, ctrl=True)
             self._input.key(VK_DELETE)
             self.set_clipboard(name)
             self._input.key(VK_V, ctrl=True)
             time.sleep(0.8)
+            if self._typed_into_chat_input(name):
+                return False
             res = self.ocr_zoomed((SIDEBAR_LEFT, int(self.render_h * 0.08),
                                    self.sidebar_right, self.render_h), scale=2)
             rows = sorted(res, key=lambda r: (r[2], r[1]))
@@ -1714,12 +1869,13 @@ class WeChatGUI:
         fast=True 时仅回车 + 短等待（分段连续发送用），失败返回 False
         由 send_msg 回退到完整流程。
         """
+        rhythm.gate('send')
         box = getattr(self, '_last_input_box', None)
         if fast:
             if not self._input_box_has_text(box):
                 return False
             self._input.key(VK_RETURN)
-            time.sleep(0.5)
+            rhythm.nap(0.5)
             if not self._input_box_has_text(box):
                 return True
             return False
@@ -1732,7 +1888,7 @@ class WeChatGUI:
                 wxlog.debug('发送前输入框无文字，跳过空发')
                 return False
             self._input.key(VK_RETURN)
-            time.sleep(1.0)
+            rhythm.nap(1.0)
             if not self._input_box_has_text(box):
                 return True
             wxlog.debug(f'回车发送未生效（attempt={attempt}），改用「发送」按钮')
@@ -1740,13 +1896,15 @@ class WeChatGUI:
             clicked = False
             for text, x, y, w, h in res:
                 if '发送' in text:
-                    self.wx_click(self.origin_x + x + w // 2,
-                                           self.origin_y + y + h // 2)
+                    px, py = rhythm.point((self.origin_x + x, self.origin_y + y,
+                                           self.origin_x + x + w,
+                                           self.origin_y + y + h))
+                    self.wx_click(px, py)
                     clicked = True
                     break
             if not clicked:
                 return False
-            time.sleep(1.0)
+            rhythm.nap(1.0)
             if not self._input_box_has_text(box):
                 return True
         return False
@@ -1775,6 +1933,8 @@ class WeChatGUI:
                 and self.input_text(text, box=self._last_input_box, fast=True)
                 and self.click_send(fast=True)):
             return WxResponse.success(f'消息已发送：{text}', data={'content': text})
+        # 水位必须在任何 UI 动作之前拍：一旦发出去，DB 顶部就已经包含新行了。
+        mark = self._send_watermark(who) if verify else None
         # UIA 路径：热激活后可直接输入+回车发送，无 OCR 抖动，最快。
         uia = self._get_uia()
         if uia is not None:
@@ -1782,12 +1942,12 @@ class WeChatGUI:
                 if uia.send_text(text):
                     if not verify:
                         return WxResponse.success(f'消息已发送：{text}', data={'content': text})
-                    if self._verify_sent(text, who):
+                    if self._verify_sent(text, who, after=mark):
                         return WxResponse.success(f'消息已发送并确认：{text}', data={'content': text})
                     wait_until = time.time() + 8
                     while time.time() < wait_until:
                         time.sleep(1.0)
-                        if self._verify_sent(text, who):
+                        if self._verify_sent(text, who, after=mark):
                             return WxResponse.success(f'消息已发送并确认：{text}', data={'content': text})
                     return WxResponse.failure('消息已操作发送，但数据库未确认', data={'content': text})
         if not self.ensure_visible():
@@ -1817,13 +1977,13 @@ class WeChatGUI:
                 continue
             if not verify:
                 return WxResponse.success(f'消息已发送：{text}', data={'content': text})
-            if self._verify_sent(text, who):
+            if self._verify_sent(text, who, after=mark):
                 return WxResponse.success(f'消息已发送并确认：{text}', data={'content': text})
             # 可能已发送但 DB 异步落库，轮询确认，不重发避免重复
             wait_until = time.time() + 8
             while time.time() < wait_until:
                 time.sleep(1.0)
-                if self._verify_sent(text, who):
+                if self._verify_sent(text, who, after=mark):
                     return WxResponse.success(f'消息已发送并确认：{text}', data={'content': text})
             return WxResponse.failure('消息已操作发送，但数据库未确认', data={'content': text})
         return WxResponse.failure('发送失败：多次重试未完成')
@@ -1835,36 +1995,95 @@ class WeChatGUI:
             self._cached_db = WeChatDB()
         return self._cached_db
 
-    def _verify_sent(self, text: str, who: Optional[str]) -> bool:
+    def _verify_usernames(self, who: Optional[str]) -> List[str]:
+        """把 ``who`` 解析成候选 username 列表（消息表按 username 键）。
+
+        直接拿显示名查消息表是**静默失败**的：查不到就返回空列表，看起来像
+        「没发出去」。所以先按通讯录解析一遍，再把原名留在后面兜底。
+        水位和回读必须走同一个口径，否则两边量的不是同一个会话。
+        """
         try:
             db = self._get_db()
             resolved = None
             if not who:
-                who = db.get_self_info()['username']
-                resolved = who
-            else:
-                hits = db.search_contact(who)
-                if hits:
-                    who = hits[0]["username"]
-                    resolved = who
-            msgs = db.get_messages(who, limit=3)
-            for pos, m in enumerate(msgs):
-                if text not in (m.get('content') or ''):
-                    continue
-                # 发送者判定走 DB 层自适应（索引反查 + 私聊非对端即自己）
-                if db.is_self_sender(m.get('sender_id'), who):
-                    return True
-                # 兜底：最近一条就是刚写进去的正文——行号语义无法判定时
-                # （微信升级换语义）以「内容 + 时序」为准，不因判定失败误报失败
-                if pos == 0:
-                    return True
-            wxlog.debug(
-                '发送校验未命中：目标=%r 解析为=%r 最近%d条=%r',
-                who, resolved, len(msgs),
-                [(m.get('sender_id'), (m.get('content') or '')[:24]) for m in msgs],
-            )
+                return [db.get_self_info()['username']]
+            names = [h['username'] for h in db.search_contact(who)
+                     if h.get('username')]
+            names.append(who)
+            seen, out = set(), []
+            for n in names:
+                if n not in seen:
+                    seen.add(n)
+                    out.append(n)
+            return out
         except Exception as e:
-            wxlog.info(f'发送校验异常：{e}')
+            _log_swallowed('发送校验解析会话', e)
+            return [who] if who else []
+
+    def _send_watermark(self, who: Optional[str]) -> Optional[dict]:
+        """发送**前**拍一个落库水位，交给 :meth:`_verify_sent` 当门槛。
+
+        没有水位时「最近几条里有一条含目标文本」会被旧消息满足：同一段话昨天
+        发过、今天这次其实没发出去，校验照样返回成功。取顶部若干行的
+        ``(sort_seq, local_id)`` 身份集合 + 最大 sort_seq：真实 sort_seq 大量
+        并列（同会话实测最多 8 行同值），只比 ``>`` 会把刚发出去那条判成旧消息，
+        所以并列时再按身份排除。拍不到（新会话、DB 不可用）返回 None，
+        校验退回不带水位的旧行为——宁可不加门槛，不能因为门槛误判成失败。
+        """
+        try:
+            db = self._get_db()
+            for uname in self._verify_usernames(who):
+                rows = db.get_messages(uname, limit=5)
+                if rows:
+                    return {
+                        'username': uname,
+                        'seq': max(int(r.get('sort_seq') or 0) for r in rows),
+                        'ids': {(int(r.get('sort_seq') or 0),
+                                 int(r.get('local_id') or 0)) for r in rows},
+                    }
+        except Exception as e:
+            _log_swallowed('发送水位读取', e)
+        return None
+
+    def _verify_sent(self, text: str, who: Optional[str], mode: str = 'exact',
+                     after: Optional[dict] = None) -> bool:
+        """回读数据库确认这条消息真的发出去了。
+
+        Args:
+            text: 期望的正文
+            who: 目标会话（空=当前会话按「自己」解析，与旧行为一致）
+            mode: ``exact`` 正文逐字相等（普通文本）；``contains`` 包含匹配
+                （引用/回复/@ 的正文会被微信包进 XML 或加前缀，只能包含匹配）
+            after: 发送前 :meth:`_send_watermark` 拍的水位，只认比它新的行
+
+        普通文本为什么不能是子串匹配：输入框里留着草稿时，粘贴会接在草稿后面，
+        实际发出去的是「校准wechatauto 部署自检 OK」这类拼接正文——库里查得到、
+        内容却是错的，子串匹配照样返回成功。逐字相等才拦得住。
+        """
+        if not text:
+            return False
+        try:
+            db = self._get_db()
+            marked = (after or {}).get('username')
+            names = [marked] if marked else self._verify_usernames(who)
+            for uname in names:
+                for m in db.get_messages(uname, limit=5):
+                    seq = int(m.get('sort_seq') or 0)
+                    if after:
+                        if seq < after['seq']:
+                            continue   # 比水位旧的一定不是这次发的
+                        if (seq, int(m.get('local_id') or 0)) in after['ids']:
+                            continue
+                    # Weflow：发送者判定走 DB 层自适应（实测开发机自己=2、
+                    # X230 自己=1，写死 2 会在另一台判错）——单一事实源
+                    # WeChatDB.is_self_sender（索引反查 + 私聊非对端 + 学习行号）。
+                    if not db.is_self_sender(m.get('sender_id'), uname):
+                        continue
+                    content = m.get('content') or ''
+                    if content == text if mode == 'exact' else text in content:
+                        return True
+        except Exception as e:
+            _log_swallowed('发送回读校验', e)
         return False
 
     # ------------------------------------------------------------------
@@ -1956,8 +2175,9 @@ class WeChatGUI:
                 break
         else:
             wxlog.debug('多次粘贴仍未检测到图片草稿，仍尝试回车')
+        rhythm.gate('send-file')
         self._input.key(VK_RETURN)
-        time.sleep(1.5)
+        rhythm.nap(1.5)
         return True
 
     def _input_box_has_color_draft(self, box: Optional[Tuple[int, int, int, int]] = None,
@@ -2133,6 +2353,9 @@ class WeChatGUI:
 
         target_text 用于在 OCR 结果中匹配目标消息（可选）。
         """
+        # 回复落库的正文带有被回复消息的包装，逐字相等判不了，用包含匹配；
+        # 水位保证「上一次发过的同一句话」不会被当成这一次的确认。
+        mark = self._send_watermark(who) if verify else None
         if not self.ensure_visible():
             return WxResponse.failure('微信窗口不可见（可能锁屏/会话断开）')
         if who:
@@ -2171,7 +2394,7 @@ class WeChatGUI:
             return WxResponse.failure('输入回复内容失败')
         self.click_send()
         if verify:
-            ok = self._verify_sent(text, who)
+            ok = self._verify_sent(text, who, mode='contains', after=mark)
             return (WxResponse.success(f'回复已发送并确认：{text}', data={'content': text})
                     if ok else WxResponse.failure('回复已操作发送，但数据库未确认', data={'content': text}))
         return WxResponse.success(f'回复已发送：{text}', data={'content': text})
@@ -2206,6 +2429,8 @@ class WeChatGUI:
 
         target_text 用于 OCR 定位要引用的消息文案（可选）；省略时引用最近一条。
         """
+        # 引用消息落库的正文里还包着被引用那条，只能包含匹配；水位见 _send_watermark。
+        mark = self._send_watermark(who) if verify else None
         if not self.ensure_visible():
             return WxResponse.failure('微信窗口不可见（可能锁屏/会话断开）')
         if who:
@@ -2249,7 +2474,7 @@ class WeChatGUI:
             return WxResponse.failure('输入引用内容失败')
         self.click_send()
         if verify:
-            ok = self._verify_sent(text, who)
+            ok = self._verify_sent(text, who, mode='contains', after=mark)
             return (WxResponse.success(f'引用已发送并确认：{text}', data={'content': text})
                     if ok else WxResponse.failure('引用已操作发送，但数据库未确认', data={'content': text}))
         return WxResponse.success(f'引用已发送：{text}', data={'content': text})
@@ -2264,6 +2489,8 @@ class WeChatGUI:
 
         流程：输入框键入 '@' → OCR 成员选择弹层定位成员 → 点击 → 输入正文 → 发送。
         """
+        # @ 消息落库正文带有「@昵称」包装，只能包含匹配；水位见 _send_watermark。
+        mark = self._send_watermark(who) if verify else None
         if not self.ensure_visible():
             return WxResponse.failure('微信窗口不可见（可能锁屏/会话断开）')
         if who:
@@ -2290,7 +2517,7 @@ class WeChatGUI:
             return WxResponse.failure('输入消息正文失败')
         self.click_send()
         if verify:
-            ok = self._verify_sent(text, who)
+            ok = self._verify_sent(text, who, mode='contains', after=mark)
             return (WxResponse.success(f'@成员消息已发送并确认', data={'member': member, 'content': text})
                     if ok else WxResponse.failure('@消息已操作发送，但数据库未确认', data={'member': member}))
         return WxResponse.success(f'@成员消息已发送', data={'member': member, 'content': text})

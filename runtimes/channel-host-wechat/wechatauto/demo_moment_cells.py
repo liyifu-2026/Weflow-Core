@@ -2,7 +2,7 @@
 
 Accessibility Insights 显示朋友圈时间线为 mmui::SNSWindow -> ... ->
 List('朋友圈')，其下每个 ListItem 即一条记录，其中：
-  - 作者 cell（如 '诡影藏锋 2小时前'）
+  - 作者 cell（如 '文件传输助手 2小时前'）
   - '评论区' ListItem（整片评论区的容器）
   - 各评论 ListItem（如 '豆芽 仅仅只是正在去学校的路...'）
 
