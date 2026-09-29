@@ -35,10 +35,18 @@ export type DecisionQuestionDef = {
   criteria?: Record<string, unknown> | undefined;
 };
 
-/** 单个问题的判定回包（宽松收敛：answer 保留原始形态） */
+/** 单个问题的判定回包（宽松收敛：真实协议字段 + 原始 answer 兜底） */
 export type DecisionAnswer = {
-  /** noul = P(yes)；choice = 命中选项键；score = 概率加权期望 */
+  /**
+   * 归一化判定值：noul = P(yes)；choice = 命中选项键；score = 加权期望。
+   * 真实协议（2026-09-30 实测）值分别在 noul/choice 字段，这里统一提取；
+   * 完全陌生的形态则保留整个原始对象。
+   */
   answer: unknown;
+  /** noul 判定的原始概率字段（answer 的来源之一，保留便于审计） */
+  noul?: number | undefined;
+  /** choice 判定的原始选项字段 */
+  choice?: unknown;
   probabilities?: Record<string, number> | undefined;
   confidence?: number | undefined;
   legend?: unknown;
@@ -112,22 +120,32 @@ export async function callDecisionModel(
     const answers: Record<string, DecisionAnswer> = {};
     for (const [key, value] of Object.entries(parsed.data.answers)) {
       const shape = questionAnswerSchema.safeParse(value);
-      if (!shape.success || shape.data.answer === undefined) {
-        // 陌生形态或 answer 字段缺失 → 保留原始值，不丢信息
+      if (!shape.success) {
         answers[key] = { answer: value };
         continue;
       }
+      const shaped = shape.data;
+      // 真实协议：noul 值在 `noul` 字段、choice 在 `choice` 字段（2026-09-30
+      // 实测）；answer 字段是文档示例形态。都缺时保留原始对象不丢信息。
+      const answer =
+        shaped.answer !== undefined
+          ? shaped.answer
+          : shaped.noul !== undefined
+            ? shaped.noul
+            : shaped.choice !== undefined
+              ? shaped.choice
+              : value;
       answers[key] = {
-        answer: shape.data.answer,
-        ...(shape.data.probabilities !== undefined
-          ? { probabilities: shape.data.probabilities }
+        answer,
+        ...(shaped.noul !== undefined ? { noul: shaped.noul } : {}),
+        ...(shaped.choice !== undefined ? { choice: shaped.choice } : {}),
+        ...(shaped.probabilities !== undefined
+          ? { probabilities: shaped.probabilities }
           : {}),
-        ...(shape.data.confidence !== undefined
-          ? { confidence: shape.data.confidence }
+        ...(shaped.confidence !== undefined
+          ? { confidence: shaped.confidence }
           : {}),
-        ...(shape.data.legend !== undefined
-          ? { legend: shape.data.legend }
-          : {}),
+        ...(shaped.legend !== undefined ? { legend: shaped.legend } : {}),
       };
     }
     return {
@@ -158,13 +176,17 @@ export async function callDecisionModel(
 const questionAnswerSchema = z
   .object({
     answer: z.unknown(),
+    /** 真实协议（2026-09-30 实测）：noul 值在此字段 */
+    noul: z.number().finite().optional(),
+    /** 真实协议：choice 命中选项键在此字段 */
+    choice: z.unknown(),
     probabilities: z.record(z.string(), z.number().finite()).optional(),
     confidence: z.number().finite().optional(),
     legend: z.unknown().optional(),
   })
   .partial();
 
-/** 从 noul 判定回包读 P(yes)；形态不符（answer 非有限数）返回 undefined。 */
+/** 从 noul 判定回包读 P(yes)：answer 数 → noul 字段 → 不可得 undefined。 */
 export function readNoulProbability(
   answer: DecisionAnswer | undefined,
 ): number | undefined {
@@ -172,15 +194,20 @@ export function readNoulProbability(
   if (typeof answer.answer === "number" && Number.isFinite(answer.answer)) {
     return answer.answer;
   }
+  if (typeof answer.noul === "number" && Number.isFinite(answer.noul)) {
+    return answer.noul;
+  }
   return undefined;
 }
 
-/** 从 choice 判定回包读指定选项的概率（probabilities 表缺该键时 undefined）。 */
+/** 从 choice 判定回包读指定选项的概率：probabilities 表，缺表时命中即 1。 */
 export function readChoiceProbability(
   answer: DecisionAnswer | undefined,
   option: string,
 ): number | undefined {
-  return answer?.probabilities?.[option];
+  const fromTable = answer?.probabilities?.[option];
+  if (fromTable !== undefined) return fromTable;
+  return answer?.choice === option || answer?.answer === option ? 1 : undefined;
 }
 
 /** choice/score 的置信度（noul 文档未承诺，可能缺省）。 */

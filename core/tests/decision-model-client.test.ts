@@ -133,4 +133,45 @@ describe("decision model client", () => {
     expect(result.answers.q1).toEqual({ answer: { weird: true } });
     expect(readNoulProbability(result.answers.q1)).toBeUndefined();
   });
+
+  it("parses the real protocol shapes (noul/choice fields, captured 2026-09-30)", async () => {
+    // 真实抓包：noul 值在 `noul` 字段、choice 在 `choice` 字段 + probabilities
+    const fetchImpl = (async () =>
+      new Response(
+        JSON.stringify({
+          model: "decision-model-preview",
+          request_id: "75a01bf2",
+          answers: {
+            q_tier: {
+              type: "choice",
+              choice: "other",
+              confidence: 0.8,
+              probabilities: { simple: 0.12, standard: 0.01, other: 0.87 },
+            },
+            q_worth_reply: { type: "noul", noul: 0.42 },
+          },
+          usage: { input_tokens: 56 },
+          latency_ms: 51.8,
+        }),
+        { status: 200 },
+      )) as unknown as typeof fetch;
+    const result = await callDecisionModel(endpoint, {
+      state: "x",
+      questions: { q_tier: { type: "choice" }, q_worth_reply: { type: "noul" } },
+      fetchImpl,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(readNoulProbability(result.answers.q_worth_reply)).toBeCloseTo(0.42);
+    expect(readChoiceProbability(result.answers.q_tier, "other")).toBeCloseTo(
+      0.87,
+    );
+    expect(readChoiceProbability(result.answers.q_tier, "simple")).toBeCloseTo(
+      0.12,
+    );
+    // 归一化 answer：noul → 数值；choice → 选项键
+    expect(result.answers.q_worth_reply!.answer).toBeCloseTo(0.42);
+    expect(result.answers.q_tier!.answer).toBe("other");
+    expect(readDecisionConfidence(result.answers.q_tier)).toBeCloseTo(0.8);
+  });
 });
