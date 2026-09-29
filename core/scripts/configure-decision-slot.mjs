@@ -101,18 +101,55 @@ try {
     console.log("未找到 support-pipeline 扩展设置（BFF 尚未注册过？），跳过影子开关");
   } else {
     const settings = rows[0].settings_json;
-    if (settings.decision && settings.decision.shadowEnabled === undefined) {
-      settings.decision.shadowEnabled = true;
+    const current = settings.decision?.shadowEnabled;
+    if (current === undefined) {
+      // decision 键缺失（BFF 新种子未跑过）或开关未定义 → 补齐默认配置并开影子。
+      // 问题集/阈值与 BFF 种子同源（业务话术，改话术去 BFF 种子改）。
+      settings.decision = {
+        ...(settings.decision ?? {}),
+        shadowEnabled: true,
+        triageEnabled: false,
+        worthReplyEnabled: false,
+        timeoutMs: 500,
+        thresholds: {
+          humanProbability: 0.85,
+          humanConfidence: 0.6,
+          simpleProbability: 0.8,
+          noReplyProbability: 0.9,
+        },
+        questions: settings.decision?.questions ?? {
+          q_need_human: {
+            type: "noul",
+            instructions:
+              "判断该客户最新消息是否需要转给人工客服处理。需要转人工的情形：客户情绪激烈或明确表达不满、涉及退款赔偿等敏感诉求、问题明显超出自动客服能力、客户明确要求人工服务。普通咨询、寒暄、简单确认都不需要转人工。",
+          },
+          q_tier: {
+            type: "choice",
+            instructions:
+              "判断该客户消息适合哪种处理档位。simple=寒暄问候、简单确认或纯情绪安抚，不需要业务知识即可得体回复；standard=涉及产品、订单、售后等需要业务知识的实质问题。",
+            criteria: {
+              simple: "寒暄/问候/简单确认/纯情绪安抚",
+              standard: "需要业务知识的实质问题",
+              other: "无法判断",
+            },
+          },
+          q_worth_reply: {
+            type: "noul",
+            instructions:
+              "判断该消息是否需要客服作出回应。需要回应的情形：包含问题、诉求、情绪表达或对客服上条消息的实质反馈。不需要回应的情形：纯表情、语气词（如\"哦\"\"哈哈\"）、无实义的闲聊碎片。拿不准时视为需要回应。",
+          },
+        },
+      };
       await client.query(
         `UPDATE solution.extension_settings
          SET settings_json = $1::jsonb, updated_by = 'decision-model-probe', updated_at = now()
          WHERE scope = 'weflow.customer-support' AND key = 'support-pipeline'`,
         [JSON.stringify(settings)],
       );
-      console.log("decision.shadowEnabled → true（影子模式已开，30s 内热加载）");
+      console.log("decision 配置补齐，shadowEnabled → true（影子模式，30s 内热加载）");
     } else {
       console.log(
-        `decision.shadowEnabled 现状为 ${JSON.stringify(settings.decision?.shadowEnabled)}，尊重现状不覆盖`,
+        `decision.shadowEnabled 现状为 ${JSON.stringify(current)}，尊重现状不覆盖`,
       );
     }
   }
