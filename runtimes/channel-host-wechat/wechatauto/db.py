@@ -2101,6 +2101,46 @@ class WeChatDB:
         rows.sort(key=lambda r: r.get("sort_seq") or 0, reverse=True)
         return rows[:want]
 
+    def get_image_rows(self, user: str, limit: int = 300) -> List[dict]:
+        """图片消息（``local_type=3``）的原始行，带 ``packed_info``。
+
+        图片的本地文件名取自消息内容里的 32 位 hex，而 :meth:`get_messages`
+        的通用行里没有 ``packed_info_data`` 这一列——用它去取 md5 会每行都拿不到，
+        于是「有没有原图」被误报成「不是图片」。和 :meth:`get_voice_rows` 一样开一条
+        窄查询，字段名对齐 :meth:`get_message_row` 的口径（``packed_info`` / ``content``）。
+        """
+        want = max(1, int(limit))
+        cols = ("local_id, server_id, real_sender_id, create_time, sort_seq, "
+                "packed_info_data, message_content")
+
+        def _run(tables):
+            out = []
+            for conn, table in tables:
+                try:
+                    out += [dict(r) for r in conn.execute(
+                        "SELECT %s FROM %s WHERE local_type=3 "
+                        "ORDER BY sort_seq DESC, local_id DESC LIMIT %d"
+                        % (cols, table, want))]
+                except sqlite3.Error:
+                    continue
+            return out
+
+        rows = self._run_msg_query(user, _run)
+        if not rows:
+            return []
+        rows.sort(key=lambda r: r.get("sort_seq") or 0, reverse=True)
+        out = []
+        for r in rows[:want]:
+            out.append({"local_id": r.get("local_id"),
+                        "server_id": r.get("server_id"),
+                        "sender_id": r.get("real_sender_id"),
+                        "create_time": r.get("create_time"),
+                        "sort_seq": r.get("sort_seq"),
+                        "packed_info": r.get("packed_info_data"),
+                        "content": r.get("message_content"),
+                        "type": "图片"})
+        return out
+
     def get_message_rows_for_media(self, user: str, local_id: int) -> List[dict]:
         """返回跨分片 local_id 命中的全部消息行（供媒体分发判定类型）。
 

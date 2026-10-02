@@ -1,10 +1,11 @@
 """download_image_original 可离线验证的部分：
 
-- _find_h_dat：原图 _h.dat 定位（点击「图片原始大小」后微信落地的高清文件）；
+- _image_files：三档副本定位（original = ``_h.dat``，即点击「图片原始大小」
+  后微信落地的高清文件；v1.2.4.3 同步后原 ``_find_h_dat`` 并入 tier 查询）；
 - _save_image_bytes：魔数 → 扩展名落盘、wxgf 容器 ffmpeg 转码回退、
   不可转码的 wxgf 拒绝落盘；
 - download_image_original 的前置校验分支（非图片消息/无 md5 提前返回，
-  不触碰 UI 自动化）。
+  不触碰 UI 自动化）与「本机已有原件直接解密」快速路径（_harvest）。
 
 UI 点击主流程依赖真实微信窗口，不在单测覆盖范围。
 """
@@ -24,7 +25,8 @@ class _DbStub:
         self.account_dir = account_dir
         self._row = row
 
-    def get_message_row(self, user, local_id):
+    def get_message_row(self, user, local_id, local_type=None):
+        # local_type 关键字为上游 1.2.4.3 的 download_image_original 所加
         return self._row
 
 
@@ -57,7 +59,9 @@ def _attach_dir(directory: str, user: str) -> Path:
     return Path(directory) / "msg" / "attach" / md._chat_md5(user)
 
 
-class FindHDatTest(unittest.TestCase):
+class ImageFilesTest(unittest.TestCase):
+    """_image_files：一次目录扫描给出三档副本（v1.2.4.3 tier API）。"""
+
     def test_finds_h_dat_under_attach(self):
         with tempfile.TemporaryDirectory() as directory:
             base = _attach_dir(directory, "user") / "2026-08"
@@ -66,13 +70,15 @@ class FindHDatTest(unittest.TestCase):
             target.write_bytes(b"x")
 
             md = _downloader(directory)
-            found = md._find_h_dat("user", "ab" * 16)
-            self.assertEqual(found, str(target))
+            files = md._image_files("user", "ab" * 16)
+            self.assertEqual(files.get("original"), (str(target), 1))
+            self.assertNotIn("mid", files)
+            self.assertNotIn("thumb", files)
 
     def test_missing_h_dat_returns_none(self):
         with tempfile.TemporaryDirectory() as directory:
             md = _downloader(directory)
-            self.assertIsNone(md._find_h_dat("user", "ab" * 16))
+            self.assertEqual(md._image_files("user", "ab" * 16), {})
 
 
 class SaveImageBytesTest(unittest.TestCase):
@@ -128,20 +134,23 @@ class DownloadImageOriginalGuardsTest(unittest.TestCase):
             self.assertIsNone(md.download_image_original("user", 5))
 
     def test_existing_h_dat_is_decrypted_directly_without_ui(self):
-        # 原图已存在时直接解密，不进入 UI 自动化分支
+        # 原图已存在时直接解密，不进入 UI 自动化分支（v1.2.4.3 走 _harvest：
+        # 要求 ≥ min_bytes(默认 1024，挡空壳)，且解密结果是"完整的图"——
+        # ≥16 字节并带 JPEG/PNG 收尾标记）
         with tempfile.TemporaryDirectory() as directory:
             row = _image_row(packed_info=b"ab" * 16)
             md = _downloader(directory, row)
             attach = _attach_dir(directory, "user") / "2026-08"
             attach.mkdir(parents=True)
             h_dat = attach / ("ab" * 16 + "_h.dat")
-            # 纯 XOR v0 格式：整文件 ^ key 后是 JPEG 魔数
-            h_dat.write_bytes(bytes(b ^ 0x88 for b in b"\xff\xd8\xffjpegdata"))
+            # 纯 XOR v0 格式：整文件 ^ key 后是带 FFD9 收尾的完整 JPEG（≥1024B）
+            plain = b"\xff\xd8\xff" + b"jpegdata" * 128 + b"\xff\xd9"
+            h_dat.write_bytes(bytes(b ^ 0x88 for b in plain))
 
             out = md.download_image_original("user", 5, save_dir=directory)
             self.assertIsNotNone(out)
             self.assertTrue(out.endswith("user_5.jpg"))
-            self.assertEqual(Path(out).read_bytes(), b"\xff\xd8\xffjpegdata")
+            self.assertEqual(Path(out).read_bytes(), plain)
 
 
 if __name__ == "__main__":

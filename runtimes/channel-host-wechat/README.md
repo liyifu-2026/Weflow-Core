@@ -13,7 +13,7 @@
 
 Automate the **WeChat 4.x Windows desktop client** (not the web version): read messages, listen in real time, download media, export full history, read Moments (朋友圈), and send messages — by driving the local client directly.
 
-> **Current version:** 1.2.4.1 (synced with upstream 1.2.4.1 + Weflow hardening patches preserved: bounded key scans, self-sender semantics, key re-extract self-heal, UI locks) · Windows 10/11 · Python 3.9+ (verified on 3.12) · WeChat **4.1.13+**
+> **Current version:** 1.2.4.3 (synced with upstream 1.2.4.3 + Weflow hardening patches preserved: bounded key scans, self-sender semantics, key re-extract self-heal, UI locks) · Windows 10/11 · Python 3.9+ (verified on 3.12) · WeChat **4.1.13+**
 >
 > **Why this project exists:** the classic [wxauto](https://github.com/cluic/wxauto) relies on the UI Automation tree, which WeChat 4.x broke with self-drawn rendering (no accessibility nodes). wechatauto-replica is a drop-in-style replacement: messages are read through **local database decryption** (SQLCipher 4), and sending uses a **UIA + OCR hybrid** driver that auto-falls back between engines.
 
@@ -137,6 +137,13 @@ for feed in moments.get_moments(limit=10):
 - Performance: parallel export / first-scan, incremental memory-scan cache
 
 ## 📝 Changelog
+
+### v1.2.4.3 (2026-10-02)
+- Synced upstream 1.2.4.1 → 1.2.4.3 with **all Weflow hardening patches preserved**: three-tier image system (`download_image(tier=...)`, `original_ready`, `image_status` / `list_image_status`), rewritten UI-driven original download (UIA row alignment + scroll-to-row + preview-window "Save" dialog fallback), UIA gate diagnostics (`gate_block_hint`), double-click back-to-chat-tab.
+- Self-sender detection layered: upstream's root-cause "rowid → SenderName2Id → username == own wxid" resolution is the primary path (first layer of `db.is_self_sender`); Weflow's learned-ids / peer-elimination fallbacks kept underneath.
+- Key-service surface unchanged: bounded `_scan_aes_key(deadline)`, `has/try_acquire/refresh_image_key`, `download_image(allow_key_scan=)` request path never scans memory; `download_image_thumbnail` fallback and `@uilock` on `download_image_original` retained.
+- Fixed an upstream latent bug: `_scroll_list` passed a non-existent `expect_pid` kwarg to `moment._send_scroll` (TypeError would silently disable scroll alignment); the cursor-ownership check is now done at the call site.
+- `_find_h_dat` removed with upstream (superseded by `_image_files`); `test_media_original.py` adapted to the tier API.
 
 ### v1.1.2 (2026-08-16)
 - **UIA driver thread-safety**: `WeChatUIA` now initializes COM on the current thread (`CoInitializeEx`, idempotent) — fixes crashes when instantiated from background threads / host apps (e.g. WeChatBot) with "CoInitialize not called / cannot load UIAutomationCore.dll" errors.

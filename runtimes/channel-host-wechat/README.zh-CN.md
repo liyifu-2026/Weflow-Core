@@ -12,7 +12,7 @@
 本项目复刻上游 wxauto 项目，目标是实现对当前微信 4.x Windows 客户端的自动化
 （读取消息、发送消息、媒体下载、朋友圈），非网页版，直接操作本机客户端。
 
-> 当前版本：1.2.4.1（同步上游 1.2.4.1，保留 Weflow 加固补丁：有界密钥扫描、发送者语义自适应、密钥重提取自愈、UI 锁、rhythm 按账号隔离）
+> 当前版本：1.2.4.3（同步上游 1.2.4.3，保留 Weflow 加固补丁：有界密钥扫描、发送者语义自适应、密钥重提取自愈、UI 锁、rhythm 按账号隔离）
 >
 > **兼容范围**：Windows 10/11 ｜ Python 3.9+（已在 3.12 验证）｜ 微信 **4.1.13+**
 > （数据库读取路线对微信版本不敏感；坐标+OCR 发送路线依赖自绘渲染
@@ -33,6 +33,29 @@
 ---
 
 ## 版本记录
+
+### v1.2.4.3（2026-10-02，同步上游 1.2.4.3）
+
+同步上游 1.2.4.1 → 1.2.4.3（图片三档 tier 系统：`download_image(tier=)` /
+`original_ready` 相对判定 / `image_status`·`list_image_status` 分层报告；原图
+UI 下载重写：UIA 行序列认行 + 按行差滚动 + 预览窗「保存」对话框兜底 + 窄窗
+气泡几何；uia_driver：控件树拿不到的 `gate_block_hint` 四类可操作提示、回微信
+tab 双击退出会话），并保留 Weflow 全部加固补丁：
+
+- **自发送者判定两层叠用**：`media._sent_by_self` 主路径走上游「rowid→
+  SenderName2Id→用户名==自己 wxid」根因解法（即 `db.is_self_sender` 第一层），
+  索引读不到时回退 learned-ids / 私聊对端排除 / 经典约定，语义不回退；
+- **密钥服务面不变**：`_scan_aes_key(deadline)` 有界扫描、`_current_aes_key` /
+  `has_image_key` / `try_acquire_image_key` / `refresh_image_key`、
+  `download_image(allow_key_scan=)` 请求路径禁扫描；
+- **`@uilock` 保留**：`download_image_original` 整段持有进程级 UI 锁
+  （上游重写后继续生效）；
+- **缩略图兜底保留**：`download_image_thumbnail` / `_save_image_bytes`；
+- 上游 `_scroll_list` 给 `moment._send_scroll` 传了不存在的 `expect_pid`
+  形参（TypeError 会被吞掉、滚动对齐静默失效），按其注释意图改为在调用侧
+  做滚轮落点归属校验；
+- `_find_h_dat` 随上游删除（被 `_image_files` tier 查询取代），
+  `test_media_original.py` 相应改用新 API。
 
 ### v1.2.4.1（2026-09-29，同步上游 1.2.4.1）
 
